@@ -120,16 +120,21 @@ tasks:
     cmds:
       - |
         echo "APP_NAME: {{.APP_NAME}}"
+        echo "DEVCELL_DIR: {{.DEVCELL_DIR}}"
 
       - vagrant destroy -f
 
   macos:claude:
     desc: Run Claude CLI in dev vagrant
-    silent: false
+    silent: true
+    var:
+      TMUX_PANE: ""
     cmds:
       - |
         echo "APP_NAME: {{.APP_NAME}}"
         echo "GUEST_DIR: {{.GUEST_DIR}}"
+        echo "CELL_HOME: {{.CELL_HOME}}"
+        
         # Copy Vagrantfile.local from example if it doesn't exist
         if [ ! -f "{{.DEVCELL_DIR}}/Vagrantfile.local" ]; then
           cp "{{.DEVCELL_DIR}}/Vagrantfile.local-example" "{{.DEVCELL_DIR}}/Vagrantfile.local"
@@ -140,6 +145,8 @@ tasks:
   macos:shell:
     desc: Run shell in dev vagrant
     silent: true
+    var:
+      TMUX_PANE: ""
     cmds:
       - |
         echo "APP_NAME: {{.APP_NAME}}"
@@ -149,6 +156,8 @@ tasks:
   macos:stop:
     desc: Stop dev vagrant VM
     silent: true
+    var:
+      TMUX_PANE: ""
     cmds:
       - |
         echo "APP_NAME: {{.APP_NAME}}"
@@ -161,3 +170,75 @@ tasks:
       - |
         echo "APP_NAME: {{.APP_NAME}}"
       - vagrant {{.CLI_ARGS}}
+
+  vagrant:box:export:
+    desc: "Export UTM VM as Vagrant box (usage: task vagrant:box:export -- <boxname> <vm-name>)"
+    silent: false
+    cmds:
+      - |
+        set -e
+        if [ -z "{{.CLI_ARGS}}" ]; then
+          echo "Usage: task vagrant:box:export -- <boxname> <vm-name>"
+          echo "Example: task vagrant:box:export -- devcell-macOS26 callnut-60"
+          exit 1
+        fi
+
+        BOX_NAME=$(echo "{{.CLI_ARGS}}" | awk '{print $1}')
+        VM_NAME=$(echo "{{.CLI_ARGS}}" | awk '{print $2}')
+        UTM_DIR="$HOME/Library/Containers/com.utmapp.UTM/Data/Documents"
+
+        if [ -z "$BOX_NAME" ] || [ -z "$VM_NAME" ]; then
+          echo "Error: Both boxname and vm-name are required"
+          echo "Usage: task vagrant:box:export -- <boxname> <vm-name>"
+          exit 1
+        fi
+
+        if [ ! -d "$UTM_DIR/$VM_NAME.utm" ]; then
+          echo "Error: VM not found at $UTM_DIR/$VM_NAME.utm"
+          echo "Available VMs:"
+          ls -1 "$UTM_DIR"/*.utm 2>/dev/null | xargs -I {} basename {} .utm
+          exit 1
+        fi
+
+        echo "Exporting VM '$VM_NAME' as box '$BOX_NAME'..."
+
+        # Create temp directory with correct structure
+        TEMP_DIR=$(mktemp -d)
+
+        # Create metadata.json
+        echo '{"provider":"utm"}' > "$TEMP_DIR/metadata.json"
+
+        # Create embedded Vagrantfile with box defaults
+        cat > "$TEMP_DIR/Vagrantfile" <<'VAGRANTFILE'
+        Vagrant.configure("2") do |config|
+          config.ssh.username = "vagrant"
+          config.ssh.host = "vagrant-macos.local"
+          config.ssh.port = 22
+          config.ssh.insert_key = false
+
+          config.vm.provider :utm do |utm|
+            utm.check_guest_additions = false
+            utm.skip_directory_share_mode = true
+          end
+        end
+        VAGRANTFILE
+
+        # Copy VM as box.utm (required name for vagrant_utm)
+        echo "Copying VM (this may take a while)..."
+        cp -R "$UTM_DIR/$VM_NAME.utm" "$TEMP_DIR/box.utm"
+
+        # Create box archive (no utm/ wrapper - vagrant creates the provider folder)
+        echo "Creating box archive..."
+        tar cvzf ~/$BOX_NAME.box -C "$TEMP_DIR" metadata.json Vagrantfile box.utm
+
+        # Cleanup temp dir
+        rm -rf "$TEMP_DIR"
+
+        echo "Adding box to Vagrant..."
+        vagrant box add ~/$BOX_NAME.box --name $BOX_NAME --force
+
+        echo ""
+        echo "Box exported successfully!"
+        echo "Use with: MACOS_BOX=$BOX_NAME task macos:claude"
+        echo ""
+        vagrant box list

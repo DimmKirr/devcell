@@ -6,7 +6,7 @@
 
 # Derive paths from synced folder source (BASE_DIR from Taskfile, or current dir)
 HOST_PATH = ENV["BASE_DIR"] || File.expand_path(".")
-DEVCELL_DIR = File.expand_path(".")  # Where this Vagrantfile lives
+DEVCELL_DIR = File.dirname(File.expand_path(__FILE__))  # Where this Vagrantfile lives
 FOLDER_NAME = File.basename(HOST_PATH)
 DEVCELL_FOLDER = File.basename(DEVCELL_DIR)
 
@@ -28,7 +28,7 @@ Vagrant.configure("2") do |config|
   config.vm.define VM_NAME
   config.vm.hostname = VM_NAME
 
-  config.vm.box = ENV["MACOS_BOX"] || "macOS26"
+  config.vm.box = ENV["MACOS_BOX"] || "devcell-macOS26"
   config.vm.box_url = ENV["MACOS_BOX_URL"] if ENV["MACOS_BOX_URL"]
 
   # Direct SSH to VM (no port forwarding for Apple Virtualization)
@@ -47,14 +47,13 @@ Vagrant.configure("2") do |config|
   if HOST_PATH != DEVCELL_DIR
     config.vm.synced_folder DEVCELL_DIR, "/devcell", type: :utm
   end
-  # Claude/Codex config directories (shared between host and guest)
-  config.vm.synced_folder "#{CELL_HOME}/.claude", "/Users/vagrant/.claude", type: :utm, create: true
-  config.vm.synced_folder "#{CELL_HOME}/.codex", "/Users/vagrant/.codex", type: :utm, create: true
+  # Claude/Codex config home (CELL_HOME contains .claude/, .claude.json, .codex/)
+  config.vm.synced_folder CELL_HOME, "/cell-home", type: :utm, create: true
 
   config.vm.provider :utm do |utm|
     utm.name = VM_NAME
-    utm.memory = 4096
-    utm.cpus = 2
+    utm.memory = 8192
+    utm.cpus = 4
     utm.check_guest_additions = false
     # Apple Virtualization: skip QEMU directory_share_mode (uses VirtioFS instead)
     utm.skip_directory_share_mode = true
@@ -74,9 +73,13 @@ Vagrant.configure("2") do |config|
       ln -sfn "#{DEVCELL_VIRTFS_MOUNT}" "#{DEVCELL_GUEST_PATH}"
     fi
 
-    # Claude/Codex config symlinks (VirtioFS mounts to ~/.claude and ~/.codex)
-    [ -d "/Volumes/My Shared Files/.claude" ] && ln -sfn "/Volumes/My Shared Files/.claude" ~/.claude
-    [ -d "/Volumes/My Shared Files/.codex" ] && ln -sfn "/Volumes/My Shared Files/.codex" ~/.codex
+    # Claude/Codex config symlinks from CELL_HOME mount
+    CELL_MOUNT="/Volumes/My Shared Files/#{File.basename(CELL_HOME)}"
+    if [ -d "$CELL_MOUNT" ]; then
+      [ -d "$CELL_MOUNT/.claude" ] && ln -sfn "$CELL_MOUNT/.claude" ~/.claude
+      [ -f "$CELL_MOUNT/.claude.json" ] && ln -sfn "$CELL_MOUNT/.claude.json" ~/.claude.json
+      [ -d "$CELL_MOUNT/.codex" ] && ln -sfn "$CELL_MOUNT/.codex" ~/.codex
+    fi
   SHELL
 
   # # Fix home directory permissions (in case previous provisioning created files as root)
@@ -87,8 +90,14 @@ Vagrant.configure("2") do |config|
   #   done
   # FIX_PERMS
 
+  # =============================================================================
+  # BASE PROVISIONERS (already done in devcell-macOS26 box, kept for reference)
+  # To re-run: vagrant provision --provision-with asdf
+  # To rebuild base box: MACOS_BOX=macOS26 vagrant up --provision
+  # =============================================================================
+
   # Install asdf via Homebrew (run as vagrant user, not root)
-  config.vm.provision "shell", name: "asdf", privileged: false, inline: <<~ASDF_BREW
+  config.vm.provision "shell", name: "asdf", run: "never", privileged: false, inline: <<~ASDF_BREW
     if ! command -v brew >/dev/null 2>&1; then
       echo "Homebrew not found. Installing..."
       /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" < /dev/null
@@ -108,7 +117,7 @@ Vagrant.configure("2") do |config|
   ASDF_BREW
 
   # Install asdf plugins (mirrors Dockerfile)
-  config.vm.provision "shell", name: "asdf-plugins", privileged: false, inline: <<~ASDF_PLUGINS
+  config.vm.provision "shell", name: "asdf-plugins", run: "never", privileged: false, inline: <<~ASDF_PLUGINS
     export PATH="${ASDF_DATA_DIR:-$HOME/.asdf}/shims:$(brew --prefix asdf)/libexec:$PATH"
 
     asdf plugin add nodejs https://github.com/asdf-vm/asdf-nodejs.git || true
@@ -126,10 +135,8 @@ end
 # Load secondary Vagrantfile from HOST_PATH (user's project directory) if it exists
 # This allows projects to extend the base configuration (similar to Dockerfile-local)
 # Must be outside the configure block so both configure blocks are at the same level
-user_vagrantfile = File.join(HOST_PATH, "Vagrantfile.local")
+user_vagrantfile = File.join(DEVCELL_DIR, "Vagrantfile.local")
 if File.exist?(user_vagrantfile)
   puts "Loading Vagrantfile.local from: #{user_vagrantfile}"
   load user_vagrantfile
-else
-  puts "Vagrantfile.local not found at: #{user_vagrantfile}"
 end

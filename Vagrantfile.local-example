@@ -9,23 +9,24 @@
 
 Vagrant.configure("2") do |config|
   # Install runtimes from .tool-versions via asdf
-  # Check project first, fallback to devcell
+  # Always install devcell's tools first (nodejs, uv, etc.), then project's
   config.vm.provision "shell", name: "asdf-install", privileged: false, inline: <<~ASDF_INSTALL
     export PATH="${ASDF_DATA_DIR:-$HOME/.asdf}/shims:$(brew --prefix asdf)/libexec:$PATH"
 
-    TOOL_VERSIONS=""
-    if [ -f "#{GUEST_PATH}/.tool-versions" ]; then
-      TOOL_VERSIONS="#{GUEST_PATH}/.tool-versions"
-    elif [ -f "#{DEVCELL_GUEST_PATH}/.tool-versions" ]; then
-      TOOL_VERSIONS="#{DEVCELL_GUEST_PATH}/.tool-versions"
+    # First install devcell's .tool-versions (base tooling: nodejs, uv, etc.)
+    if [ -f "#{DEVCELL_GUEST_PATH}/.tool-versions" ]; then
+      echo "Installing base tools from #{DEVCELL_GUEST_PATH}/.tool-versions"
+      cp "#{DEVCELL_GUEST_PATH}/.tool-versions" ~/.tool-versions
+      asdf install
     fi
 
-    if [ -n "$TOOL_VERSIONS" ]; then
-      echo "Using $TOOL_VERSIONS"
-      cp "$TOOL_VERSIONS" ~/.tool-versions
+    # Then install project's .tool-versions (may override or add versions)
+    if [ -f "#{GUEST_PATH}/.tool-versions" ] && [ "#{GUEST_PATH}" != "#{DEVCELL_GUEST_PATH}" ]; then
+      echo "Installing project tools from #{GUEST_PATH}/.tool-versions"
+      # Merge: project versions take precedence
+      cat "#{GUEST_PATH}/.tool-versions" >> ~/.tool-versions
+      sort -u -k1,1 ~/.tool-versions -o ~/.tool-versions
       asdf install
-    else
-      echo ".tool-versions not found; skipping asdf install."
     fi
   ASDF_INSTALL
 
