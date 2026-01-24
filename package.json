@@ -1,0 +1,11 @@
+{
+  "name": "devcell-tools",
+  "version": "1.0.0",
+  "description": "npm tools for devcell",
+  "private": true,
+  "dependencies": {
+    "@anthropic-ai/claude-code": "2.0.76",
+    "@playwright/test": "^1.57.0",
+    "@slidev/cli": "^52.11.0"
+  }
+}

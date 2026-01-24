@@ -1,0 +1,163 @@
+# DevCell Taskfile. See README.md
+version: '3'
+
+vars:
+  PORT: '{{.PORT | default "9090"}}'
+  HTTP_HOST: '{{.HTTP_HOST | default "0.0.0.0"}}'
+  DOCKER_ARGS: '{{.DOCKER_ARGS }}'
+
+  DOCKERFILE: "Dockerfile-local"
+  IMAGE_TAG: "latest-local"
+
+  APP_NAME: '{{base .USER_WORKING_DIR}}-{{env "TMUX_PANE" | replace "%" "" | default "0"}}'
+  WORKSPACE: "{{.APP_NAME}}"
+  BINARY_NAME: "{{.APP_NAME}}"
+
+  DEVCELL_DIR: '{{env "DEVCELL_DIR" | default (printf "%s/dev/dimmkirr/devcell" .HOME)}}'
+  COMPOSE: 'docker compose -f {{.DEVCELL_DIR}}/compose.yml $(test -f {{.DEVCELL_DIR}}/compose.local.yml && echo "-f {{.DEVCELL_DIR}}/compose.local.yml")'
+
+  RUN: "{{.COMPOSE}} run --service-ports --name cell-{{.APP_NAME}}-run --remove-orphans {{.DOCKER_ARGS}} -it cell"
+  CLAUDE: "{{.RUN}} claude --dangerously-skip-permissions"
+  CODEX: "{{.RUN}} codex --dangerously-bypass-approvals-and-sandbox"
+  SHELL: "{{.RUN}} bash"
+
+  CELL_HOME: '{{.HOME}}/.claude-{{ env "TMUX_SESSION_NAME" | default "sandbox"}}'
+  PORT_PREFIX: '{{env "TMUX_PANE" | replace "%" "" | default ""}}'
+  BASE_DIR: "{{ default .USER_WORKING_DIR }}"
+
+  # Guest VM paths (convert /Users/<host-user>/... to /Users/vagrant/...)
+  GUEST_DIR: '{{regexReplaceAll "^/Users/[^/]+" .USER_WORKING_DIR "/Users/vagrant"}}'
+  VAGRANT_CLAUDE: 'vagrant ssh -c "cd {{.GUEST_DIR}} && claude --dangerously-skip-permissions {{.CLI_ARGS}}"'
+  VAGRANT_SHELL: 'vagrant ssh -- -t "cd {{.GUEST_DIR}} && exec zsh -l"'
+
+env:
+  APP_NAME: "{{.APP_NAME}}"
+  BASE_DIR: "{{.BASE_DIR}}"
+  DOCKERFILE: "{{.DOCKERFILE}}"
+  IMAGE_TAG: "{{.IMAGE_TAG}}"
+
+  PORT_PREFIX: "{{.PORT_PREFIX}}"
+  EXT_VNC_PORT: "{{.PORT_PREFIX}}50"
+
+  VAGRANT_CWD: "{{.DEVCELL_DIR}}"
+
+  PORT: "{{.PORT}}"
+  BUILDKIT_PROGRESS: plain
+  CELL_HOME: "{{.CELL_HOME}}"
+
+###
+# Include this via:
+# includes:
+#   claude:
+#     taskfile: ~/dev/Taskfile.yml
+#     flatten: true
+
+tasks:
+  claude:
+    desc: Run Claude CLI in the dev container
+    silent: true
+    cmds:
+      - |
+        echo "APP_NAME: {{.APP_NAME}}"
+        echo "PORT_PREFIX: {{.PORT_PREFIX}}"
+
+        echo "CELL_HOME: {{.CELL_HOME}} / $CELL_HOME"
+        echo "DEVCELL_DIR: {{.DEVCELL_DIR}}"
+        mkdir -p "{{.CELL_HOME}}"
+      - "{{.CLAUDE}} {{.CLI_ARGS}}"
+
+  codex:
+    desc: Run Codex CLI in the dev container
+    silent: true
+    cmds:
+      - |
+        echo "APP_NAME: {{.APP_NAME}}"
+        echo "PORT_PREFIX: {{.PORT_PREFIX}}"
+
+      - "{{.CODEX}} {{.CLI_ARGS}}"
+
+  codex:resume:
+    desc: Run Codex CLI in the dev container in resume
+    silent: true
+
+    cmds:
+      - "{{.CODEX}} resume {{.CLI_ARGS}}"
+
+
+  shell:
+    desc: Run Claude CLI in the dev container
+    silent: true
+    cmds:
+      - |
+        echo "APP_NAME: {{.APP_NAME}}"
+      - "{{.SHELL}} {{.CLI_ARGS}}"
+
+  compose:
+    desc: Run docker compose commands
+    silent: true
+    cmds:
+      - |
+        echo "APP_NAME: {{.APP_NAME}}"
+      - "{{.COMPOSE}} {{.CLI_ARGS}}"
+
+  build:
+    desc: Build images (use -- --no-cache to force full rebuild)
+    silent: true
+    cmds:
+      - echo "Building base image (devcell:latest)..."
+      - DOCKERFILE=Dockerfile IMAGE_TAG=latest docker compose -f {{.DEVCELL_DIR}}/compose.yml build {{.CLI_ARGS}}
+      - |
+        if [ -f "{{.DEVCELL_DIR}}/Dockerfile-local" ]; then
+          echo "Building local image (devcell:latest-local)..."
+          DOCKERFILE=Dockerfile-local IMAGE_TAG=latest-local docker compose -f {{.DEVCELL_DIR}}/compose.yml build {{.CLI_ARGS}}
+        else
+          echo "No Dockerfile-local found, skipping local build"
+        fi
+
+  vagrant:destroy:
+    desc: Destroy
+    silent: true
+    cmds:
+      - |
+        echo "APP_NAME: {{.APP_NAME}}"
+
+      - vagrant destroy -f
+
+  macos:claude:
+    desc: Run Claude CLI in dev vagrant
+    silent: false
+    cmds:
+      - |
+        echo "APP_NAME: {{.APP_NAME}}"
+        echo "GUEST_DIR: {{.GUEST_DIR}}"
+        # Copy Vagrantfile.local from example if it doesn't exist
+        if [ ! -f "{{.DEVCELL_DIR}}/Vagrantfile.local" ]; then
+          cp "{{.DEVCELL_DIR}}/Vagrantfile.local-example" "{{.DEVCELL_DIR}}/Vagrantfile.local"
+        fi
+      - vagrant up --provider=utm --provision
+      - "{{.VAGRANT_CLAUDE}}"
+
+  macos:shell:
+    desc: Run shell in dev vagrant
+    silent: true
+    cmds:
+      - |
+        echo "APP_NAME: {{.APP_NAME}}"
+        echo "GUEST_DIR: {{.GUEST_DIR}}"
+      - "{{.VAGRANT_SHELL}}"
+
+  macos:stop:
+    desc: Stop dev vagrant VM
+    silent: true
+    cmds:
+      - |
+        echo "APP_NAME: {{.APP_NAME}}"
+      - vagrant destroy -f
+
+  vagrant:
+    desc: vagrant
+    silent: true
+    cmds:
+      - |
+        echo "APP_NAME: {{.APP_NAME}}"
+      - vagrant {{.CLI_ARGS}}

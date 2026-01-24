@@ -1,0 +1,29 @@
+---
+# Local overrides for compose.yml
+# Copy to compose.local.yml and customize (gitignored)
+
+services:
+  cell:
+    # Use local image (built from Dockerfile-local via `task build`)
+    # Uncomment if you have Dockerfile-local:
+    # image: devcell-cell:local
+
+    volumes:
+      # Add additional mounts
+      # - ${HOME}/dev/my-project:${HOME}/dev/my-project
+      # - ${HOME}/.my-config:/home/${USER}/.my-config:ro
+
+      # Terraform plugins
+      # - ${HOME}/.terraform.d/plugins:${HOME}/.terraform.d/plugins
+      # - ${HOME}/.terraform.d/plugins:/home/${USER}/.terraform.d/plugins
+      # - ${HOME}/.terraformrc:${HOME}/.terraformrc:ro
+
+      # Vagrant
+      # - ${HOME}/.vagrant.d/:${HOME}/.vagrant.d
+      # - ${HOME}/.vagrant.d/:/home/${USER}/.vagrant.d
+
+    environment:
+      # Add additional environment variables
+      # TF_CLI_CONFIG_FILE: ${HOME}/.terraformrc
+      # HF_TOKEN: ${HF_TOKEN}
+      # MY_API_KEY: ${MY_API_KEY}

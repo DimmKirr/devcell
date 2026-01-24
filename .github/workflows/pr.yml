@@ -1,0 +1,89 @@
+name: PR Checks
+
+on:
+  pull_request:
+    branches: [main]
+
+env:
+  DEVCELL_DIR: ${{ github.workspace }}
+
+jobs:
+  secrets:
+    name: Detect Secrets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build:
+    name: Build and Test (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo docker image prune -af
+          df -h
+
+      - name: Install Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+
+      - name: Copy example files
+        run: |
+          cp .tool-versions-example .tool-versions
+          cp Dockerfile-local.example Dockerfile-local
+          cp compose.local-example.yml compose.local.yml
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver: docker
+
+      - name: Build images
+        run: task build
+        env:
+          USER_NAME: runner
+          USER_UID: 1001
+          USER_GID: 127
+
+      - name: Test Claude version
+        run: |
+          # Get expected version from package.json
+          EXPECTED=$(jq -r '.dependencies["@anthropic-ai/claude-code"]' package.json)
+          echo "Expected Claude version: $EXPECTED"
+
+          # Get actual version from container (use docker directly, task claude requires TTY)
+          ACTUAL=$(docker run --rm --entrypoint "" devcell:latest-local claude --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+          echo "Actual Claude version: $ACTUAL"
+
+          if [[ -z "$ACTUAL" ]]; then
+            echo "Could not get Claude version"
+            exit 1
+          fi
+
+          if [[ "$ACTUAL" != "$EXPECTED" ]]; then
+            echo "Version mismatch: expected $EXPECTED, got $ACTUAL"
+            exit 1
+          fi
+
+          echo "Claude version verified: $ACTUAL"
