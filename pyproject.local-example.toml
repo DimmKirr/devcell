@@ -1,0 +1,8 @@
+# Local Python packages - copy to pyproject.local.toml and add your dependencies
+# Dependencies will be merged into pyproject.toml at build time
+
+[project]
+dependencies = [
+    # "esphome",
+    # "yt-dlp[default,curl_cffi]",
+]

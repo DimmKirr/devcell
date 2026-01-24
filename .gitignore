@@ -1,0 +1,14 @@
+.venv
+.env
+*.egg-info
+python-tools
+.vagrant
+.tool-versions
+compose.local.yml
+Dockerfile-local
+node_modules
+package-lock.json
+package.local.json
+pyproject.local.toml
+uv.lock
+Vagrantfile.local

@@ -1,0 +1,49 @@
+# Local Dockerfile extensions
+# Copy to Dockerfile-local and customize (gitignored)
+# Build with: task build (builds base + local automatically)
+
+FROM devcell:latest
+
+# Re-declare ARGs from base (ARGs don't persist across FROM)
+# Values are passed from compose.yml build args
+ARG USER_NAME=devuser
+ARG USER_UID=501
+ARG USER_GID=20
+
+# ASDF_DIR, ASDF_DATA_DIR, and PATH are inherited from base image
+
+USER ${USER_UID}:${USER_GID}
+
+# Copy .tool-versions and install runtimes via asdf
+COPY .tool-versions /home/${USER_NAME}/.tool-versions
+RUN cd /home/${USER_NAME}/ && asdf install
+
+# Set Go environment variables
+ENV GOPATH="/home/${USER_NAME}/go"
+ENV PATH="${GOPATH}/bin:${PATH}"
+
+# Install npm tools from manifest (includes Claude CLI)
+COPY --chown=${USER_UID}:${USER_GID} package.json package.local.json* package-lock.json* /home/${USER_NAME}/npm-tools/
+RUN cd /home/${USER_NAME}/npm-tools/ && \
+    if [ -f package.local.json ]; then \
+      jq -s '.[0] * .[1]' package.json package.local.json > merged.json && \
+      mv merged.json package.json; \
+    fi && \
+    npm install
+ENV PATH="/home/${USER_NAME}/npm-tools/node_modules/.bin:${PATH}"
+
+# Set up Python tools with uv
+# Merge pyproject.local.toml into pyproject.toml if it exists (using dasel + jq)
+COPY --chown=${USER_UID}:${USER_GID} pyproject.toml uv.lock* pyproject.local.toml* /home/${USER_NAME}/python-tools/
+SHELL ["/bin/bash", "-c"]
+RUN cd /home/${USER_NAME}/python-tools && \
+    if [ -f pyproject.local.toml ]; then \
+      jq -s '.[0].project.dependencies += .[1].project.dependencies | .[0]' \
+        <(dasel -i toml -o json < pyproject.toml) \
+        <(dasel -i toml -o json < pyproject.local.toml) | \
+        dasel -i json -o toml > merged.toml && \
+      mv merged.toml pyproject.toml && rm -f uv.lock; \
+    fi && \
+    uv sync
+SHELL ["/bin/sh", "-c"]
+ENV PATH="/home/${USER_NAME}/python-tools/.venv/bin:${PATH}"

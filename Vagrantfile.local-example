@@ -1,0 +1,101 @@
+# -*- mode: ruby -*-
+# frozen_string_literal: true
+
+# Vagrantfile.local - loaded by devcell's Vagrantfile to extend the base configuration
+# Mirrors Dockerfile-local: installs runtimes from .tool-versions, npm packages, and Python tools
+#
+# Uses GUEST_PATH and DEVCELL_GUEST_PATH defined in parent Vagrantfile
+# These mirror host paths: /Users/vagrant/dev/... -> /Volumes/My Shared Files/.../
+
+Vagrant.configure("2") do |config|
+  # Install runtimes from .tool-versions via asdf
+  # Check project first, fallback to devcell
+  config.vm.provision "shell", name: "asdf-install", privileged: false, inline: <<~ASDF_INSTALL
+    export PATH="${ASDF_DATA_DIR:-$HOME/.asdf}/shims:$(brew --prefix asdf)/libexec:$PATH"
+
+    TOOL_VERSIONS=""
+    if [ -f "#{GUEST_PATH}/.tool-versions" ]; then
+      TOOL_VERSIONS="#{GUEST_PATH}/.tool-versions"
+    elif [ -f "#{DEVCELL_GUEST_PATH}/.tool-versions" ]; then
+      TOOL_VERSIONS="#{DEVCELL_GUEST_PATH}/.tool-versions"
+    fi
+
+    if [ -n "$TOOL_VERSIONS" ]; then
+      echo "Using $TOOL_VERSIONS"
+      cp "$TOOL_VERSIONS" ~/.tool-versions
+      asdf install
+    else
+      echo ".tool-versions not found; skipping asdf install."
+    fi
+  ASDF_INSTALL
+
+  # Install npm tools from package.json (includes Claude CLI)
+  # Check project first, fallback to devcell
+  config.vm.provision "shell", name: "npm-install", privileged: false, inline: <<~NPM_INSTALL
+    export PATH="${ASDF_DATA_DIR:-$HOME/.asdf}/shims:$(brew --prefix asdf)/libexec:$PATH"
+
+    # Find source directory (prefer project, fallback to devcell)
+    SRC=""
+    if [ -f "#{GUEST_PATH}/package.json" ]; then
+      SRC="#{GUEST_PATH}"
+    elif [ -f "#{DEVCELL_GUEST_PATH}/package.json" ]; then
+      SRC="#{DEVCELL_GUEST_PATH}"
+    fi
+
+    if [ -n "$SRC" ]; then
+      echo "Using package.json from $SRC"
+      mkdir -p ~/npm-tools
+      cd ~/npm-tools
+
+      cp "$SRC/package.json" .
+      [ -f "$SRC/package.local.json" ] && cp "$SRC/package.local.json" .
+      [ -f "$SRC/package-lock.json" ] && cp "$SRC/package-lock.json" .
+
+      # Merge package.local.json if exists
+      if [ -f package.local.json ]; then
+        jq -s '.[0] * .[1]' package.json package.local.json > merged.json
+        mv merged.json package.json
+      fi
+
+      npm install
+      grep -q 'npm-tools' ~/.zshenv 2>/dev/null || echo 'export PATH="$HOME/npm-tools/node_modules/.bin:$PATH"' >> ~/.zshenv
+    else
+      echo "package.json not found; skipping npm install."
+    fi
+  NPM_INSTALL
+
+  # Install Python tools with uv
+  # Check project first, fallback to devcell
+  config.vm.provision "shell", name: "uv-sync", privileged: false, inline: <<~UV_SYNC
+    export PATH="${ASDF_DATA_DIR:-$HOME/.asdf}/shims:$(brew --prefix asdf)/libexec:$PATH"
+
+    # Find source directory (prefer project, fallback to devcell)
+    SRC=""
+    if [ -f "#{GUEST_PATH}/pyproject.toml" ]; then
+      SRC="#{GUEST_PATH}"
+    elif [ -f "#{DEVCELL_GUEST_PATH}/pyproject.toml" ]; then
+      SRC="#{DEVCELL_GUEST_PATH}"
+    fi
+
+    if [ -n "$SRC" ]; then
+      echo "Using pyproject.toml from $SRC"
+      mkdir -p ~/python-tools
+      cd ~/python-tools
+
+      cp "$SRC/pyproject.toml" .
+      [ -f "$SRC/uv.lock" ] && cp "$SRC/uv.lock" .
+      [ -f "$SRC/pyproject.local.toml" ] && cp "$SRC/pyproject.local.toml" .
+
+      # Merge pyproject.local.toml if exists (using jq + manual TOML handling)
+      if [ -f pyproject.local.toml ]; then
+        # Simple merge: append local dependencies
+        uv add $(grep -E '^\s+"[^"]+"' pyproject.local.toml | tr -d '", ' | xargs) || true
+      fi
+
+      uv sync
+      grep -q 'python-tools' ~/.zshenv 2>/dev/null || echo 'export PATH="$HOME/python-tools/.venv/bin:$PATH"' >> ~/.zshenv
+    else
+      echo "pyproject.toml not found; skipping uv sync."
+    fi
+  UV_SYNC
+end

@@ -1,0 +1,5 @@
+{
+  "description": "Local npm packages - copy to package.local.json and add your dependencies",
+  "dependencies": {
+  }
+}
