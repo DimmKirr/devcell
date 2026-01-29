@@ -36,20 +36,9 @@ services:
 #      - ${HOME:-}/.config/git/:/home/${USER}/.config/git/:ro # XDG config git dir - disabled since host'ss config is managed by nix
 
       # Mount Claude and host agents
-      - ${CELL_HOME}/.claude.json:/home/${USER}/.claude.json # claude json
-      - ${CELL_HOME}/.claude/:/home/${USER}/.claude/
+      - ${CELL_HOME}/:/home/${USER}/
       - ${HOME:-}/.claude/commands:/home/${USER}/.claude/commands:ro # Host-based commands
       - ${HOME:-}/.claude/agents:/home/${USER}/.claude/agents:ro # Host-based agents
-
-
-      # Mount Codex and host agents
-      - ${CELL_HOME}/.codex/:/home/${USER}/.codex/
-      - ${HOME}/.codex/config.toml:/home/${USER}/.codex/config.toml
-
-      # TODO: Replace with a dynamic path to a taskfile
-      - ${HOME:-}/dev/Taskfile.yml:/home/${USER}/dev/Taskfile.yml
-
-      # Additional mounts can be added via compose.local.yml
 
     environment:
       APP_NAME: ${APP_NAME:-app}

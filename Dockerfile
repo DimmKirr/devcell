@@ -117,16 +117,19 @@ RUN \
     echo "${USER_NAME} ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 
 # Create config and data directories with proper ownership
-RUN mkdir -p /config /data && \
-    chown -R ${USER_UID}:${USER_GID} /config /data
+RUN mkdir -p /config /data /opt/asdf /opt/home/.config/nix /opt/home/.local/bin && \
+    chown -R ${USER_UID}:${USER_GID} /config /data /opt/asdf /opt/home
 
 # Switch to non-root user
 USER ${USER_UID}:${USER_GID}
 
-# Configure shell for user
-RUN echo '. ${ASDF_DIR}/asdf.sh' >> /home/${USER_NAME}/.bashrc && \
-    echo '. ${ASDF_DIR}/asdf.sh' >> /home/${USER_NAME}/.profile && \
-    echo '. ${ASDF_DIR}/asdf.sh' >> /home/${USER_NAME}/.zshrc
+# Copy .tool-versions to /opt/home (copied to ~ at runtime by entrypoint)
+COPY --chown=${USER_UID}:${USER_GID} .tool-versions /opt/home/.tool-versions
+
+# Create template shell RC files in /opt/home (copied to ~ at runtime by entrypoint)
+RUN echo '. ${ASDF_DIR}/asdf.sh' >> /opt/home/.bashrc && \
+    echo '. ${ASDF_DIR}/asdf.sh' >> /opt/home/.profile && \
+    echo '. ${ASDF_DIR}/asdf.sh' >> /opt/home/.zshrc
 
 WORKDIR /home/${USER_NAME}
 
@@ -138,24 +141,24 @@ ENV CELL_HOME=/home/${USER_NAME}
 ENV HOME=/home/${USER_NAME}
 
 # Install Nix package manager with flakes support (conditional)
+# Note: Nix installs to /home/${USER_NAME}/.nix-profile, templates go to /opt/home
 RUN if [ "$DEVCELL_NIX_ENABLED" = "true" ]; then \
     curl -L https://nixos.org/nix/install | sh -s -- --no-daemon && \
-    mkdir -p /home/${USER_NAME}/.config/nix && \
-    echo "experimental-features = nix-command flakes" >> /home/${USER_NAME}/.config/nix/nix.conf && \
-    echo '. ${HOME}/.nix-profile/etc/profile.d/nix.sh' >> /home/${USER_NAME}/.bashrc && \
-    echo '. ${HOME}/.nix-profile/etc/profile.d/nix.sh' >> /home/${USER_NAME}/.profile && \
-    echo '. ${HOME}/.nix-profile/etc/profile.d/nix.sh' >> /home/${USER_NAME}/.zshrc; \
+    echo "experimental-features = nix-command flakes" >> /opt/home/.config/nix/nix.conf && \
+    echo '. ${HOME}/.nix-profile/etc/profile.d/nix.sh' >> /opt/home/.bashrc && \
+    echo '. ${HOME}/.nix-profile/etc/profile.d/nix.sh' >> /opt/home/.profile && \
+    echo '. ${HOME}/.nix-profile/etc/profile.d/nix.sh' >> /opt/home/.zshrc; \
     fi
 
 # Install asdf version manager
 ENV ASDF_VERSION=v0.14.1
-ENV ASDF_DIR=/home/${USER_NAME}/.asdf
-ENV ASDF_DATA_DIR=/home/${USER_NAME}/.asdf
+ENV ASDF_DIR=/opt/asdf
+ENV ASDF_DATA_DIR=/opt/asdf
 ENV PATH="${ASDF_DIR}/bin:${ASDF_DIR}/shims:${PATH}"
 
 # Install and configure asdf to read legacy version files (.python-version, .ruby-version, etc.)
 RUN git clone https://github.com/asdf-vm/asdf.git ${ASDF_DIR} --branch ${ASDF_VERSION} && \
-    echo "legacy_version_file = yes" > /home/${USER_NAME}/.asdfrc
+    echo "legacy_version_file = yes" > /opt/home/.asdfrc
 
 
 # Install asdf plugins

@@ -21,7 +21,7 @@ vars:
   CODEX: "{{.RUN}} codex --dangerously-bypass-approvals-and-sandbox"
   SHELL: "{{.RUN}} bash"
 
-  CELL_HOME: '{{.HOME}}/.claude-{{ env "TMUX_SESSION_NAME" | default "sandbox"}}'
+  CELL_HOME: '{{.HOME}}/.devcell/{{ env "TMUX_SESSION_NAME" | default "sandbox"}}'
   PORT_PREFIX: '{{env "TMUX_PANE" | replace "%" "" | default ""}}'
   BASE_DIR: "{{ default .USER_WORKING_DIR }}"
 
@@ -29,6 +29,7 @@ vars:
   GUEST_DIR: '{{regexReplaceAll "^/Users/[^/]+" .USER_WORKING_DIR "/Users/vagrant"}}'
   VAGRANT_CLAUDE: 'vagrant ssh -c "cd {{.GUEST_DIR}} && claude --dangerously-skip-permissions {{.CLI_ARGS}}"'
   VAGRANT_SHELL: 'vagrant ssh -- -t "cd {{.GUEST_DIR}} && exec zsh -l"'
+  # MACOS_SSH_HOST: "{{.APP_NAME}}.local"  # Use Vagrantfile default
 
 env:
   APP_NAME: "{{.APP_NAME}}"
@@ -44,6 +45,7 @@ env:
   PORT: "{{.PORT}}"
   BUILDKIT_PROGRESS: plain
   CELL_HOME: "{{.CELL_HOME}}"
+  # MACOS_SSH_HOST: "{{.MACOS_SSH_HOST}}"  # Use Vagrantfile default
 
 ###
 # Include this via:
@@ -53,17 +55,41 @@ env:
 #     flatten: true
 
 tasks:
+  devcell:claude-json:backup:
+    desc: Backup .claude.json with timestamp, keep last 5
+    internal: true
+    cmds:
+      - mkdir -p "{{.CELL_HOME}}"
+      - touch "{{.CELL_HOME}}/.claude.json"
+      - |
+        BACKUP_FILE="{{.CELL_HOME}}/.claude.json-devcell-$(date +%Y-%m-%dT%H-%M-%S)-backup"
+        cp "{{.CELL_HOME}}/.claude.json" "$BACKUP_FILE" 2>/dev/null || true
+        ls -t "{{.CELL_HOME}}"/.claude.json-devcell-*-backup 2>/dev/null | tail -n +6 | xargs rm -f 2>/dev/null || true
+
+  devcell:claude-json:restore:
+    desc: Restore .claude.json from latest backup
+    cmds:
+      - |
+        LATEST=$(ls -t "{{.CELL_HOME}}"/.claude.json-devcell-*-backup 2>/dev/null | head -1)
+        if [ -n "$LATEST" ]; then
+          cp "$LATEST" "{{.CELL_HOME}}/.claude.json"
+          echo "Restored from: $LATEST"
+        else
+          echo "No backup found in {{.CELL_HOME}}"
+          exit 1
+        fi
+
   claude:
     desc: Run Claude CLI in the dev container
     silent: true
+    deps: [devcell:claude-json:backup]
     cmds:
       - |
         echo "APP_NAME: {{.APP_NAME}}"
         echo "PORT_PREFIX: {{.PORT_PREFIX}}"
-
-        echo "CELL_HOME: {{.CELL_HOME}} / $CELL_HOME"
+        echo "CELL_HOME: {{.CELL_HOME}}"
         echo "DEVCELL_DIR: {{.DEVCELL_DIR}}"
-        mkdir -p "{{.CELL_HOME}}"
+
       - "{{.CLAUDE}} {{.CLI_ARGS}}"
 
   codex:
@@ -127,6 +153,7 @@ tasks:
   macos:claude:
     desc: Run Claude CLI in dev vagrant
     silent: true
+    deps: [devcell:claude-json:backup]
     var:
       TMUX_PANE: ""
     cmds:
@@ -134,7 +161,7 @@ tasks:
         echo "APP_NAME: {{.APP_NAME}}"
         echo "GUEST_DIR: {{.GUEST_DIR}}"
         echo "CELL_HOME: {{.CELL_HOME}}"
-        
+
         # Copy Vagrantfile.local from example if it doesn't exist
         if [ ! -f "{{.DEVCELL_DIR}}/Vagrantfile.local" ]; then
           cp "{{.DEVCELL_DIR}}/Vagrantfile.local-example" "{{.DEVCELL_DIR}}/Vagrantfile.local"
