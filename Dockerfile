@@ -98,10 +98,6 @@ ENV TINI_VERSION=v0.19.0
 ADD https://github.com/krallin/tini/releases/download/${TINI_VERSION}/tini-arm64 /tini
 RUN chmod +x /tini
 
-# Configure Playwright to use system Chromium
-ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
-ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
-ENV PLAYWRIGHT_BROWSERS_PATH=0
 
 # Create non-root user matching host user (uid 501, gid 20)
 # This ensures proper file permissions when mounting volumes from macOS

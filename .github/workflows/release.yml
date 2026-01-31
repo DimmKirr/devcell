@@ -73,10 +73,12 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
           provenance: false
+          # TODO: make GUI a separate image
           build-args: |
             USER_NAME=devuser
             USER_UID=1000
             USER_GID=1000
+            DEVCELL_GUI_ENABLED=true 
 
   manifest:
     name: Create Multi-Arch Manifest
@@ -105,10 +107,9 @@ jobs:
 
       - name: Create and push multi-arch manifest
         run: |
-          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
-
           echo '${{ steps.meta.outputs.tags }}' | while read -r TAG; do
             [ -z "$TAG" ] && continue
+            IMAGE="${TAG%:*}"
             TAG_NAME="${TAG##*:}"
 
             echo "Creating manifest for ${TAG}"
