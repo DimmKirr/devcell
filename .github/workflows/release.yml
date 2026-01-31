@@ -60,7 +60,7 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=semver,pattern={{version}},suffix=-${{ matrix.arch }}
-            type=sha,prefix=,format=short,suffix=-${{ matrix.arch }}
+            type=semver,pattern={{major}},suffix=-${{ matrix.arch }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
@@ -101,7 +101,7 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=semver,pattern={{version}}
-            type=sha,prefix=,format=short
+            type=semver,pattern={{major}}
 
       - name: Create and push multi-arch manifest
         run: |

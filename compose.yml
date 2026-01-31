@@ -6,7 +6,7 @@
 # This way it would keep unique claude json history
 services:
   cell:
-    image: devcell:${IMAGE_TAG:-latest}
+    image: ghcr.io/dimmkirr/devcell:${IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: ${DOCKERFILE:-Dockerfile}
