@@ -1,5 +1,37 @@
 #!/bin/bash
-# Entrypoint script - optionally starts VNC server and runs command
+# Entrypoint script - initializes home directory and optionally starts VNC server
+
+# ============================================================
+# Initialize home directory files (needed when ~ is mounted)
+# Copy templates from /opt/home to $HOME if they don't exist
+# ============================================================
+
+OPT_HOME="/opt/home"
+
+# Copy individual dotfiles from /opt/home if they don't exist in $HOME
+for file in .asdfrc .bashrc .profile .zshrc .tool-versions; do
+    if [ -f "$OPT_HOME/$file" ] && [ ! -f "$HOME/$file" ]; then
+        echo "Copying $file to ~/"
+        cp "$OPT_HOME/$file" "$HOME/$file"
+    fi
+done
+
+# Copy .config directory structure (nix config, etc.)
+if [ -d "$OPT_HOME/.config" ]; then
+    mkdir -p "$HOME/.config"
+    # Copy nix config if it exists and target doesn't
+    if [ -d "$OPT_HOME/.config/nix" ] && [ ! -d "$HOME/.config/nix" ]; then
+        echo "Copying .config/nix/ to ~/"
+        cp -r "$OPT_HOME/.config/nix" "$HOME/.config/"
+    fi
+fi
+
+# Create .local/bin if it doesn't exist
+mkdir -p "$HOME/.local/bin"
+
+# ============================================================
+# GUI Setup (optional)
+# ============================================================
 
 # Only start GUI if DEVCELL_GUI_ENABLED is set to "true"
 if [ "$DEVCELL_GUI_ENABLED" = "true" ]; then

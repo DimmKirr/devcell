@@ -32,6 +32,7 @@ Vagrant.configure("2") do |config|
   config.vm.box_url = ENV["MACOS_BOX_URL"] if ENV["MACOS_BOX_URL"]
 
   # Direct SSH to VM (no port forwarding for Apple Virtualization)
+  # Uses mDNS/Bonjour: base VM hostname is "vagrant-macos", accessible at vagrant-macos.local
   config.ssh.host = ENV["MACOS_SSH_HOST"] || "vagrant-macos.local"
   config.ssh.port = 22
   config.ssh.username = "vagrant"

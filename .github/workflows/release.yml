@@ -107,7 +107,8 @@ jobs:
         run: |
           IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
 
-          for TAG in ${{ steps.meta.outputs.tags }}; do
+          echo '${{ steps.meta.outputs.tags }}' | while read -r TAG; do
+            [ -z "$TAG" ] && continue
             TAG_NAME="${TAG##*:}"
 
             echo "Creating manifest for ${TAG}"
@@ -118,7 +119,8 @@ jobs:
 
       - name: Inspect manifests
         run: |
-          for TAG in ${{ steps.meta.outputs.tags }}; do
+          echo '${{ steps.meta.outputs.tags }}' | while read -r TAG; do
+            [ -z "$TAG" ] && continue
             echo "=== Inspecting ${TAG} ==="
             docker buildx imagetools inspect "${TAG}"
           done
