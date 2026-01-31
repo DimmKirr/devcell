@@ -107,11 +107,9 @@ jobs:
 
       - name: Create and push multi-arch manifest
         run: |
-          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
-          IMAGE="${IMAGE,,}"  # lowercase
-
           echo '${{ steps.meta.outputs.tags }}' | while read -r TAG; do
             [ -z "$TAG" ] && continue
+            IMAGE="${TAG%:*}"
             TAG_NAME="${TAG##*:}"
 
             echo "Creating manifest for ${TAG}"
