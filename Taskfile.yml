@@ -103,7 +103,7 @@ tasks:
         echo "APP_NAME: {{.APP_NAME}}"
       - "{{.COMPOSE}} {{.CLI_ARGS}}"
 
-  build:
+  image:build:
     desc: Build images (use -- --no-cache to force full rebuild)
     silent: true
     cmds:
