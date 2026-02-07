@@ -29,6 +29,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set lowercase image name
+        run: echo "IMAGE_NAME_LC=${IMAGE_NAME,,}" >> $GITHUB_ENV
+
       - name: Free disk space
         run: |
           sudo rm -rf /usr/share/dotnet
@@ -58,7 +61,7 @@ jobs:
         id: meta-base
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}
           tags: |
             type=semver,pattern={{version}},suffix=-${{ matrix.arch }}
             type=semver,pattern={{major}},suffix=-${{ matrix.arch }}
@@ -83,14 +86,14 @@ jobs:
 
       - name: Tag base image locally for extended build
         run: |
-          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest-${{ matrix.arch }}
-          docker tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest-${{ matrix.arch }} devcell:latest
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:latest-${{ matrix.arch }}
+          docker tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:latest-${{ matrix.arch }} devcell:latest
 
       - name: Extract metadata for extended image
         id: meta-extended
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}
           tags: |
             type=semver,pattern={{version}}-extended,suffix=-${{ matrix.arch }}
             type=semver,pattern={{major}}-extended,suffix=-${{ matrix.arch }}
@@ -123,6 +126,11 @@ jobs:
       packages: write
 
     steps:
+      - name: Set lowercase image name
+        run: echo "IMAGE_NAME_LC=${IMAGE_NAME,,}" >> $GITHUB_ENV
+        env:
+          IMAGE_NAME: ${{ github.repository }}
+
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -134,7 +142,7 @@ jobs:
         id: meta-base
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}
@@ -144,7 +152,7 @@ jobs:
         id: meta-extended
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}
           tags: |
             type=semver,pattern={{version}}-extended
             type=semver,pattern={{major}}-extended
