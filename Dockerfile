@@ -95,8 +95,8 @@ COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
 ENV TINI_VERSION=v0.19.0
-ADD https://github.com/krallin/tini/releases/download/${TINI_VERSION}/tini-arm64 /tini
-RUN chmod +x /tini
+RUN curl -fsSL https://github.com/krallin/tini/releases/download/${TINI_VERSION}/tini-$(dpkg --print-architecture) -o /tini && \
+    chmod +x /tini
 
 
 # Create non-root user matching host user (uid 501, gid 20)
@@ -155,7 +155,6 @@ ENV PATH="${ASDF_DIR}/bin:${ASDF_DIR}/shims:${PATH}"
 # Install and configure asdf to read legacy version files (.python-version, .ruby-version, etc.)
 RUN git clone https://github.com/asdf-vm/asdf.git ${ASDF_DIR} --branch ${ASDF_VERSION} && \
     echo "legacy_version_file = yes" > /opt/home/.asdfrc
-
 
 # Install asdf plugins
 RUN asdf plugin add nodejs https://github.com/asdf-vm/asdf-nodejs.git && \

@@ -5,7 +5,11 @@
   "private": true,
   "dependencies": {
     "@anthropic-ai/claude-code": "2.0.76",
+    "@openai/codex": "^0.96.0",
+    "@opentofu/opentofu-mcp-server": "^0.1.5",
+    "@playwright/mcp": "^0.0.64",
     "@playwright/test": "^1.57.0",
-    "@slidev/cli": "^52.11.0"
+    "@slidev/cli": "^52.11.0",
+    "opencode-ai": "^1.1.51"
   }
 }

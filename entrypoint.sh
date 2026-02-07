@@ -9,7 +9,7 @@
 OPT_HOME="/opt/home"
 
 # Copy individual dotfiles from /opt/home if they don't exist in $HOME
-for file in .asdfrc .bashrc .profile .zshrc .tool-versions; do
+for file in .asdfrc .bashrc .profile .zshrc .tool-versions opencode.json; do
     if [ -f "$OPT_HOME/$file" ] && [ ! -f "$HOME/$file" ]; then
         echo "Copying $file to ~/"
         cp "$OPT_HOME/$file" "$HOME/$file"

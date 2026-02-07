@@ -18,7 +18,8 @@ vars:
 
   RUN: "{{.COMPOSE}} run --service-ports --name cell-{{.APP_NAME}}-run --remove-orphans {{.DOCKER_ARGS}} -it cell"
   CLAUDE: "{{.RUN}} claude --dangerously-skip-permissions"
-  CODEX: "{{.RUN}} codex --dangerously-bypass-approvals-and-sandbox"
+  CODEX: "{{.RUN}} codex --dangerously-bypass-approvals-and-sandbox --oss -p lms"
+  OPENCODE: "{{.RUN}} opencode --dangerously-bypass-approvals-and-sandbox"
   SHELL: "{{.RUN}} bash"
 
   CELL_HOME: '{{.HOME}}/.devcell/{{ env "TMUX_SESSION_NAME" | default "sandbox"}}'
@@ -85,6 +86,23 @@ tasks:
 
     cmds:
       - "{{.CODEX}} resume {{.CLI_ARGS}}"
+
+  opencode:
+    desc: Run OpenCode CLI in the dev container
+    silent: true
+    cmds:
+      - |
+        echo "APP_NAME: {{.APP_NAME}}"
+        echo "PORT_PREFIX: {{.PORT_PREFIX}}"
+
+      - "{{.OPENCODE}} {{.CLI_ARGS}}"
+
+  opencode:resume:
+    desc: Run OpenCode CLI in the dev container in resume
+    silent: true
+
+    cmds:
+      - "{{.OPENCODE}} resume {{.CLI_ARGS}}"
 
 
   shell:

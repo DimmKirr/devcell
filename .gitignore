@@ -12,3 +12,4 @@ package.local.json
 pyproject.local.toml
 uv.lock
 Vagrantfile.local
+opencode-local.json
