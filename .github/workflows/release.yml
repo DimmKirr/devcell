@@ -84,11 +84,6 @@ jobs:
             USER_GID=1000
             DEVCELL_GUI_ENABLED=true
 
-      - name: Tag base image locally for extended build
-        run: |
-          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:latest-${{ matrix.arch }}
-          docker tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:latest-${{ matrix.arch }} devcell:latest
-
       - name: Extract metadata for extended image
         id: meta-extended
         uses: docker/metadata-action@v5
@@ -112,6 +107,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.arch }}-extended
           provenance: false
           build-args: |
+            BASE_IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:latest-${{ matrix.arch }}
             USER_NAME=devuser
             USER_UID=1000
             USER_GID=1000

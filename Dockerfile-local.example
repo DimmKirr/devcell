@@ -2,7 +2,8 @@
 # Copy to Dockerfile-local and customize (gitignored)
 # Build with: task build (builds base + local automatically)
 
-FROM devcell:latest
+ARG BASE_IMAGE=devcell:latest
+FROM ${BASE_IMAGE}
 
 # Re-declare ARGs from base (ARGs don't persist across FROM)
 # Values are passed from compose.yml build args
