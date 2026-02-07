@@ -41,6 +41,7 @@ jobs:
       - name: Copy example files
         run: |
           cp .tool-versions-example .tool-versions
+          cp Dockerfile-local.example Dockerfile-local
           cp compose.local-example.yml compose.local.yml
 
       - name: Set up Docker Buildx
@@ -53,8 +54,8 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata for Docker
-        id: meta
+      - name: Extract metadata for base image
+        id: meta-base
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
@@ -63,26 +64,58 @@ jobs:
             type=semver,pattern={{major}},suffix=-${{ matrix.arch }}
             type=raw,value=latest,suffix=-${{ matrix.arch }}
 
-      - name: Build and push Docker image
+      - name: Build and push base image
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
           platforms: ${{ matrix.platform }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+          tags: ${{ steps.meta-base.outputs.tags }}
+          labels: ${{ steps.meta-base.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.arch }}-base
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}-base
           provenance: false
-          # TODO: make GUI a separate image
           build-args: |
             USER_NAME=devuser
             USER_UID=1000
             USER_GID=1000
-            DEVCELL_GUI_ENABLED=true 
+            DEVCELL_GUI_ENABLED=true
+
+      - name: Tag base image locally for extended build
+        run: |
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest-${{ matrix.arch }}
+          docker tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest-${{ matrix.arch }} devcell:latest
+
+      - name: Extract metadata for extended image
+        id: meta-extended
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}-extended,suffix=-${{ matrix.arch }}
+            type=semver,pattern={{major}}-extended,suffix=-${{ matrix.arch }}
+            type=raw,value=latest-extended,suffix=-${{ matrix.arch }}
+
+      - name: Build and push extended image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile-local
+          push: true
+          platforms: ${{ matrix.platform }}
+          tags: ${{ steps.meta-extended.outputs.tags }}
+          labels: ${{ steps.meta-extended.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.arch }}-extended
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}-extended
+          provenance: false
+          build-args: |
+            USER_NAME=devuser
+            USER_UID=1000
+            USER_GID=1000
+            DEVCELL_KICAD_ENABLED=false
 
   manifest:
-    name: Create Multi-Arch Manifest
+    name: Create Multi-Arch Manifests
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -97,8 +130,8 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata for Docker
-        id: meta
+      - name: Extract metadata for base image
+        id: meta-base
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
@@ -107,9 +140,32 @@ jobs:
             type=semver,pattern={{major}}
             type=raw,value=latest
 
-      - name: Create and push multi-arch manifest
+      - name: Extract metadata for extended image
+        id: meta-extended
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}-extended
+            type=semver,pattern={{major}}-extended
+            type=raw,value=latest-extended
+
+      - name: Create and push base multi-arch manifest
         run: |
-          echo '${{ steps.meta.outputs.tags }}' | while read -r TAG; do
+          echo '${{ steps.meta-base.outputs.tags }}' | while read -r TAG; do
+            [ -z "$TAG" ] && continue
+            IMAGE="${TAG%:*}"
+            TAG_NAME="${TAG##*:}"
+
+            echo "Creating manifest for ${TAG}"
+            docker buildx imagetools create -t "${TAG}" \
+              "${IMAGE}:${TAG_NAME}-amd64" \
+              "${IMAGE}:${TAG_NAME}-arm64"
+          done
+
+      - name: Create and push extended multi-arch manifest
+        run: |
+          echo '${{ steps.meta-extended.outputs.tags }}' | while read -r TAG; do
             [ -z "$TAG" ] && continue
             IMAGE="${TAG%:*}"
             TAG_NAME="${TAG##*:}"
@@ -122,7 +178,15 @@ jobs:
 
       - name: Inspect manifests
         run: |
-          echo '${{ steps.meta.outputs.tags }}' | while read -r TAG; do
+          echo "=== Base Images ==="
+          echo '${{ steps.meta-base.outputs.tags }}' | while read -r TAG; do
+            [ -z "$TAG" ] && continue
+            echo "=== Inspecting ${TAG} ==="
+            docker buildx imagetools inspect "${TAG}"
+          done
+
+          echo "=== Extended Images ==="
+          echo '${{ steps.meta-extended.outputs.tags }}' | while read -r TAG; do
             [ -z "$TAG" ] && continue
             echo "=== Inspecting ${TAG} ==="
             docker buildx imagetools inspect "${TAG}"
