@@ -23,21 +23,32 @@ RUN cd /home/${USER_NAME}/ && asdf install
 ENV GOPATH="/home/${USER_NAME}/go"
 ENV PATH="${GOPATH}/bin:${PATH}"
 
-# Install npm tools from manifest (includes Claude CLI)
-COPY --chown=${USER_UID}:${USER_GID} package.json package.local.json* package-lock.json* /home/${USER_NAME}/npm-tools/
-RUN cd /home/${USER_NAME}/npm-tools/ && \
+# Install Go development tools
+RUN go install "github.com/golangci/golangci-lint/cmd/golangci-lint@latest" && \
+    go install "github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs@latest" && \
+    go install "github.com/terraform-docs/terraform-docs@latest" && \
+    go install "golang.org/x/tools/cmd/goimports@latest" && \
+    go install "github.com/hashicorp/terraform-mcp-server/cmd/terraform-mcp-server@latest" && \
+    CGO_ENABLED=1 \
+      go install -tags extended,withdeploy "github.com/gohugoio/hugo@latest" && \
+    asdf reshim golang
+
+# Install npm tools from manifest (local install, added to PATH)
+# Merge package.local.json into package.json if it exists
+COPY --chown=${USER_UID}:${USER_GID} package.json package.local.json* package-lock.json* /opt/npm-tools/
+RUN cd /opt/npm-tools/ && \
     if [ -f package.local.json ]; then \
       jq -s '.[0] * .[1]' package.json package.local.json > merged.json && \
       mv merged.json package.json; \
     fi && \
     npm install
-ENV PATH="/home/${USER_NAME}/npm-tools/node_modules/.bin:${PATH}"
+ENV PATH="/opt/npm-tools/node_modules/.bin:${PATH}"
 
 # Set up Python tools with uv
 # Merge pyproject.local.toml into pyproject.toml if it exists (using dasel + jq)
-COPY --chown=${USER_UID}:${USER_GID} pyproject.toml uv.lock* pyproject.local.toml* /home/${USER_NAME}/python-tools/
+COPY --chown=${USER_UID}:${USER_GID} pyproject.toml uv.lock* pyproject.local.toml* /opt/python-tools/
 SHELL ["/bin/bash", "-c"]
-RUN cd /home/${USER_NAME}/python-tools && \
+RUN cd /opt/python-tools && \
     if [ -f pyproject.local.toml ]; then \
       jq -s '.[0].project.dependencies += .[1].project.dependencies | .[0]' \
         <(dasel -i toml -o json < pyproject.toml) \
@@ -45,6 +56,17 @@ RUN cd /home/${USER_NAME}/python-tools && \
         dasel -i json -o toml > merged.toml && \
       mv merged.toml pyproject.toml && rm -f uv.lock; \
     fi && \
-    uv sync
+    uv sync && uv run playwright install chromium
 SHELL ["/bin/sh", "-c"]
-ENV PATH="/home/${USER_NAME}/python-tools/.venv/bin:${PATH}"
+ENV PATH="/opt/python-tools/.venv/bin:${PATH}"
+
+# Copy OpenCode config
+COPY opencode-local.json /home/${USER_NAME}/opencode.json
+RUN cd /home/${USER_NAME}/ && asdf install
+
+
+# Configure Playwright to use system Chromium
+ENV PLAYWRIGHT_MCP_BROWSER=chromium
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
+ENV PLAYWRIGHT_BROWSERS_PATH=0
