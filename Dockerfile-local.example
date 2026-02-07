@@ -2,7 +2,7 @@
 # Copy to Dockerfile-local and customize (gitignored)
 # Build with: task build (builds base + local automatically)
 
-FROM ghcr.io/dimmkirr/devcell:0
+FROM devcell:latest
 
 # Re-declare ARGs from base (ARGs don't persist across FROM)
 # Values are passed from compose.yml build args
