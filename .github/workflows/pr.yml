@@ -60,7 +60,7 @@ jobs:
           driver: docker
 
       - name: Build images
-        run: task build
+        run: task image:build
         env:
           USER_NAME: runner
           USER_UID: 1001

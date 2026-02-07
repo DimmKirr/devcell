@@ -18,6 +18,7 @@ services:
         # User Options, set in .env
         DEVCELL_GUI_ENABLED: ${DEVCELL_GUI_ENABLED:-true}
         DEVCELL_NIX_ENABLED: ${DEVCELL_NIX_ENABLED:-true}
+        DEVCELL_KICAD_ENABLED: ${DEVCELL_KICAD_ENABLED:-false}
     group_add:
       - "0"  # Docker MacOS passthrough
 
