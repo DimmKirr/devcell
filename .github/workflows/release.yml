@@ -46,6 +46,7 @@ jobs:
           cp .tool-versions-example .tool-versions
           cp Dockerfile-local.example Dockerfile-local
           cp compose.local-example.yml compose.local.yml
+          cp opencode.example.json opencode-local.json
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
