@@ -3,9 +3,13 @@ name: PR Checks
 on:
   pull_request:
     branches: [main]
+  push:
+    branches: [main]
 
 env:
   DEVCELL_DIR: ${{ github.workspace }}
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   secrets:
@@ -21,18 +25,26 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build:
-    name: Build and Test (${{ matrix.arch }})
+    name: Build (${{ matrix.arch }})
     strategy:
       fail-fast: false
       matrix:
         include:
           - runner: ubuntu-latest
             arch: amd64
+            platform: linux/amd64
           - runner: ubuntu-24.04-arm
             arch: arm64
+            platform: linux/arm64
     runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set lowercase image name
+        run: echo "IMAGE_NAME_LC=${IMAGE_NAME,,}" >> $GITHUB_ENV
 
       - name: Free disk space
         run: |
@@ -43,28 +55,56 @@ jobs:
           sudo docker image prune -af
           df -h
 
-      - name: Install Task
-        uses: arduino/setup-task@v2
-        with:
-          version: 3.x
-
       - name: Copy example files
         run: |
           cp .tool-versions-example .tool-versions
           cp Dockerfile-local.example Dockerfile-local
           cp compose.local-example.yml compose.local.yml
+          cp opencode.example.json opencode-local.json
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
-        with:
-          driver: docker
 
-      - name: Build images
-        run: task image:build
-        env:
-          USER_NAME: runner
-          USER_UID: 1001
-          USER_GID: 127
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push base image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: ${{ matrix.platform }}
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:edge-${{ matrix.arch }}
+          cache-from: type=gha,scope=${{ matrix.arch }}-base
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}-base
+          provenance: false
+          build-args: |
+            USER_NAME=devuser
+            USER_UID=1000
+            USER_GID=1000
+            DEVCELL_GUI_ENABLED=true
+
+      - name: Build and push extended image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile-local
+          push: true
+          platforms: ${{ matrix.platform }}
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:edge-extended-${{ matrix.arch }}
+          cache-from: type=gha,scope=${{ matrix.arch }}-extended
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}-extended
+          provenance: false
+          build-args: |
+            BASE_IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:edge-${{ matrix.arch }}
+            USER_NAME=devuser
+            USER_UID=1000
+            USER_GID=1000
+            DEVCELL_KICAD_ENABLED=false
 
       - name: Test Claude version
         run: |
@@ -72,8 +112,11 @@ jobs:
           EXPECTED=$(jq -r '.dependencies["@anthropic-ai/claude-code"]' package.json)
           echo "Expected Claude version: $EXPECTED"
 
-          # Get actual version from container (use docker directly, task claude requires TTY)
-          ACTUAL=$(docker run --rm --entrypoint "" devcell:latest-local claude --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+          # Pull the edge image we just built
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:edge-extended-${{ matrix.arch }}
+
+          # Get actual version from container
+          ACTUAL=$(docker run --rm --entrypoint "" ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:edge-extended-${{ matrix.arch }} claude --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
           echo "Actual Claude version: $ACTUAL"
 
           if [[ -z "$ACTUAL" ]]; then
@@ -87,3 +130,43 @@ jobs:
           fi
 
           echo "Claude version verified: $ACTUAL"
+
+  manifest:
+    name: Create Edge Manifests
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Set lowercase image name
+        run: echo "IMAGE_NAME_LC=${IMAGE_NAME,,}" >> $GITHUB_ENV
+        env:
+          IMAGE_NAME: ${{ github.repository }}
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create and push edge manifest
+        run: |
+          docker buildx imagetools create -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:edge \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:edge-amd64 \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:edge-arm64
+
+      - name: Create and push edge-extended manifest
+        run: |
+          docker buildx imagetools create -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:edge-extended \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:edge-extended-amd64 \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:edge-extended-arm64
+
+      - name: Inspect manifests
+        run: |
+          echo "=== edge manifest ==="
+          docker buildx imagetools inspect ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:edge
+          echo "=== edge-extended manifest ==="
+          docker buildx imagetools inspect ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:edge-extended
