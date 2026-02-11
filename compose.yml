@@ -46,11 +46,12 @@ services:
       IS_SANDBOX: 1
       WORKSPACE: /${APP_NAME:-app}
       DEVCELL_GUI_ENABLED: ${DEVCELL_GUI_ENABLED:-false}
-
       TERM: ${TERM}
+
       EXT_VNC_PORT: "${EXT_VNC_PORT}"
 
       HISTFILE: /home/${USER}/zsh_history_${APP_NAME}
+      TMPDIR: /home/${USER}/tmp # Needed for Claude Code skills https://github.com/anthropics/claude-code/issues/18115
 
       CODEX_OSS_BASE_URL: "${CODEX_OSS_BASE_URL:-http://host.docker.internal:1234/v1}"
 

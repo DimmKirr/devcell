@@ -46,6 +46,7 @@ env:
   PORT: "{{.PORT}}"
   BUILDKIT_PROGRESS: plain
   CELL_HOME: "{{.CELL_HOME}}"
+
   # MACOS_SSH_HOST: "{{.MACOS_SSH_HOST}}"  # Use Vagrantfile default
 
 ###
@@ -112,6 +113,19 @@ tasks:
       - |
         echo "APP_NAME: {{.APP_NAME}}"
       - "{{.SHELL}} {{.CLI_ARGS}}"
+
+  vnc:
+    desc: Open VNC connection to the running dev container
+    silent: true
+    cmds:
+      - |
+        PORT=$({{.COMPOSE}} port cell 5900 2>/dev/null | cut -d: -f2)
+        if [ -z "$PORT" ]; then
+          echo "No running container found. Start one first with 'task claude'"
+          exit 1
+        fi
+        echo "Connecting to VNC on 127.0.0.1:$PORT..."
+        open "vnc://:vnc@127.0.0.1:$PORT"
 
   compose:
     desc: Run docker compose commands
