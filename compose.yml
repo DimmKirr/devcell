@@ -40,6 +40,7 @@ services:
       - ${CELL_HOME}/:/home/${USER}/
       - ${HOME:-}/.claude/commands:/home/${USER}/.claude/commands:ro # Host-based commands
       - ${HOME:-}/.claude/agents:/home/${USER}/.claude/agents:ro # Host-based agents
+      - ${HOME:-}/.claude/skills:/home/${USER}/.claude/skills # Host-based skills
 
     environment:
       APP_NAME: ${APP_NAME:-app}

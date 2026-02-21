@@ -14,7 +14,17 @@ vars:
   BINARY_NAME: "{{.APP_NAME}}"
 
   DEVCELL_DIR: '{{env "DEVCELL_DIR" | default (printf "%s/dev/dimmkirr/devcell" .HOME)}}'
-  COMPOSE: 'docker compose -f {{.DEVCELL_DIR}}/compose.yml $(test -f {{.DEVCELL_DIR}}/compose.local.yml && echo "-f {{.DEVCELL_DIR}}/compose.local.yml")'
+  COMPOSE:
+    sh: |
+      COMPOSE_FILES="-f {{.DEVCELL_DIR}}/compose.yml"
+      if [ -f "{{.DEVCELL_DIR}}/compose.local.yml" ]; then
+        COMPOSE_FILES="$COMPOSE_FILES -f {{.DEVCELL_DIR}}/compose.local.yml"
+      fi
+      if op --version >/dev/null 2>&1; then
+        echo "op run -- docker compose $COMPOSE_FILES"
+      else
+        echo "docker compose $COMPOSE_FILES"
+      fi
 
   RUN: "{{.COMPOSE}} run --service-ports --name cell-{{.APP_NAME}}-run --remove-orphans {{.DOCKER_ARGS}} -it cell"
   CLAUDE: "{{.RUN}} claude --dangerously-skip-permissions"
