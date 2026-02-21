@@ -1,0 +1,146 @@
+version: '3'
+
+vars:
+  VM_NAME: macos-base
+  OUTPUT_NAME: devcell-macos
+  MEMORY: "8192"
+  CPUS: "4"
+  DISK_GB: "64"
+  UTM_DIR: "{{.HOME}}/Library/Containers/com.utmapp.UTM/Data/Documents"
+  VM_PATH: "{{.UTM_DIR}}/{{.VM_NAME}}.utm"
+
+tasks:
+  build:
+    desc: Build macOS Vagrant box (entry point)
+    cmds:
+      - task: create
+      - task: setup
+      - task: provision
+
+  create:
+    desc: Create VM via UTM wizard
+    status:
+      - test -d "{{.VM_PATH}}"
+    vars:
+      DISK_MB:
+        sh: echo $(({{.DISK_GB}} * 1024))
+    cmds:
+      - echo "=== Starting VM creation (debug.log for details) ==="
+      - ./scripts/create-vm.sh "{{.VM_NAME}}" "{{.MEMORY}}" "{{.CPUS}}" "{{.DISK_MB}}" 2>&1 | tee debug.log
+      - echo ""
+      - echo "=== Waiting for IPSW download to complete ==="
+      - ./scripts/wait-download.sh "{{.VM_NAME}}" 5 3600
+      - |
+        # Verify VM exists with correct name
+        echo "Verifying VM '{{.VM_NAME}}' exists..."
+        vm_found=$(osascript -e 'tell application "UTM" to get name of every virtual machine' 2>/dev/null | grep -c "{{.VM_NAME}}" || echo "0")
+        if [ "$vm_found" -eq 0 ]; then
+          echo ""
+          echo "ERROR: VM '{{.VM_NAME}}' not found!"
+          echo "Available VMs:"
+          osascript -e 'tell application "UTM" to get name of every virtual machine'
+          echo ""
+          echo "The VM may have been created with a different name."
+          echo "Please rename it manually or update VM_NAME in Taskfile.yml"
+          exit 1
+        fi
+        echo "VM '{{.VM_NAME}}' verified!"
+
+  setup:
+    desc: Start macOS installation
+    interactive: true
+    cmds:
+      - open -a UTM
+      - |
+        osascript -e 'display dialog "1. In UTM, click on macos-base\n2. Click Start to boot the VM\n3. Click OK when asked to install macOS\n\nClick OK when done." with title "Manual Step Required" buttons {"OK"} default button "OK"'
+      - |
+        echo ""
+        echo "=== Monitoring Installation ==="
+
+        # Wait for installation window to appear
+        echo "Waiting for installation to start..."
+        while true; do
+          win_titles=$(osascript -e 'tell application "System Events" to tell process "UTM" to return name of every window' 2>/dev/null || echo "")
+          if echo "$win_titles" | grep -q "Installation:"; then
+            echo "Installation started!"
+            break
+          fi
+          sleep 2
+        done
+
+        # Monitor installation progress
+        while true; do
+          win_titles=$(osascript -e 'tell application "System Events" to tell process "UTM" to return name of every window' 2>/dev/null || echo "")
+
+          # Extract percentage from "UTM – Installation: XX%"
+          pct=$(echo "$win_titles" | grep -o 'Installation: [0-9]*%' | grep -o '[0-9]*' || echo "")
+
+          if [ -n "$pct" ]; then
+            printf "\r[Installing] %3s%% complete..." "$pct"
+          else
+            # No installation window - either done or not started
+            if echo "$win_titles" | grep -q "{{.VM_NAME}}"; then
+              echo ""
+              echo "Installation complete!"
+              break
+            fi
+          fi
+          sleep 5
+        done
+
+        # Wait for VM to boot into Setup Assistant
+        echo "Waiting 20s for Setup Assistant to load..."
+        sleep 20
+
+        # Run Setup Assistant automation
+        echo "=== Running Setup Assistant Automation ==="
+        osascript ./scripts/setup-assistant.scpt
+
+        osascript -e 'display dialog "Setup Assistant automation complete.\n\nCheck the VM and click OK to continue." with title "Setup Assistant" buttons {"OK"} default button "OK"'
+      - |
+        osascript -e 'display dialog "Complete Setup Assistant in VM:\n\n  User: vagrant\n  Password: vagrant\n  Skip Apple ID\n  Enable SSH in System Settings > Sharing\n\nClick OK when Setup Assistant is complete." with title "Manual Step Required" buttons {"OK"} default button "OK"'
+
+  provision:
+    desc: Provision VM and package as Vagrant box
+    deps: [init]
+    cmds:
+      - packer build -var 'source_vm={{.VM_NAME}}' -var 'vm_name={{.OUTPUT_NAME}}' .
+      - 'echo ""'
+      - 'echo "Done! Import with:"'
+      - 'echo "  vagrant box add output/{{.OUTPUT_NAME}}.box --name devcell-macOS"'
+
+  init:
+    desc: Initialize Packer plugins
+    cmds:
+      - packer init .
+    status:
+      - test -d ~/.config/packer/plugins
+
+  clean:
+    desc: Remove build artifacts
+    cmds:
+      - rm -rf output/* packer_cache/
+
+  clean-vm:
+    desc: Remove base VM to recreate
+    cmds:
+      - |
+        echo "Deleting VM from UTM..."
+        osascript -e 'tell application "UTM" to delete virtual machine "{{.VM_NAME}}"' 2>/dev/null || echo "VM not in UTM"
+        rm -rf "{{.VM_PATH}}" 2>/dev/null || true
+        echo "Done"
+
+  status:
+    desc: Check UTM VMs and pending downloads
+    cmds:
+      - ./scripts/check-pending.sh
+
+  monitor:
+    desc: Monitor IPSW download until complete
+    cmds:
+      - ./scripts/monitor-download.sh "{{.VM_NAME}}" 5 3600
+
+  debug:
+    desc: View last debug log
+    cmds:
+      - cat debug.log 2>/dev/null || echo "No debug.log found"

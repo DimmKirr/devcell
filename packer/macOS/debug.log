@@ -1,0 +1,112 @@
+=== Opening File > New ===
+menu item New… of menu File of menu bar item File of menu bar 1 of application process UTM
+=== Screen 1: Virtualize/Emulate ===
+=== DEBUG UI DUMP (Screen 1) ===
+============================================
+UTM UI DEBUG DUMP
+============================================
+
+=== WINDOW 1 ===
+  name: UTM
+  title: UTM
+  role: AXWindow
+  subrole: AXStandardWindow
+
+=== WINDOW BUTTONS ===
+  [Button 1]
+    name: missing value
+    title: missing value
+    description: close button
+    role: AXButton
+    subrole: AXCloseButton
+    value: missing value
+    help: missing value
+    enabled: false
+    focused: false
+  [Button 2]
+    name: missing value
+    title: missing value
+    description: zoom button
+    role: AXButton
+    subrole: AXZoomButton
+    value: missing value
+    help: missing value
+    enabled: true
+    focused: false
+  [Button 3]
+    name: missing value
+    title: missing value
+    description: minimize button
+    role: AXButton
+    subrole: AXMinimizeButton
+    value: missing value
+    help: missing value
+    enabled: true
+    focused: false
+
+=== SHEET 1 ===
+  role: AXSheet
+  subrole: missing value
+
+=== SHEET GROUPS (1 total) ===
+
+  [Group 1]
+    role: AXGroup
+    subrole: AXHostingView
+    buttons: 1
+
+    [Group 1 Button 1]
+      name: missing value
+      title: missing value
+      description: button
+      role: AXButton
+      subrole: missing value
+      value: missing value
+      help: missing value
+      enabled: true
+      focused: false
+      selected: missing value
+      accessibility description: missing value
+
+    static texts: 1
+      [Text 1]: Start
+
+=== TOOLBARS ===
+  Window has 1 toolbars
+  [Toolbar 1] has 2 buttons
+    [Toolbar Button 1]
+      title: missing value
+      description: New VM
+      subrole: missing value
+    [Toolbar Button 2]
+      title: missing value
+      description: Hide Sidebar
+      subrole: missing value
+
+=== FULL SHEET CONTENTS ===
+
+============================================
+END DEBUG DUMP
+============================================
+=== END DEBUG ===
+Clicking Virtualize (row 2)
+button 1 of UI element 1 of row 2 of outline 1 of scroll area 1 of group 1 of sheet 1 of window UTM of application process UTM
+=== Screen 2: OS Selection ===
+Clicking macOS 12+ (row 2)
+button 1 of UI element 1 of row 2 of outline 1 of scroll area 1 of group 1 of sheet 1 of window UTM of application process UTM
+=== Screen 3: Hardware ===
+Hardware screen loaded
+Setting memory to 8192
+Setting CPU cores to 4
+Sheet group 1 has 3 buttons
+Clicking button 3 (Continue) of group 1 of sheet 1
+button 3 of group 1 of sheet 1 of window UTM of application process UTM
+=== Screen 4: macOS IPSW ===
+On IPSW screen, clicking Continue...
+Sheet group 1 has 3 buttons
+Clicking button 3 (Continue)
+button 3 of group 1 of sheet 1 of window UTM of application process UTM
+Waiting for IPSW URL fetch to complete (5s)...
+Proceeding to Storage screen...
+=== Screen 5: Storage ===
+Waiting for Storage screen and clicking Continue...

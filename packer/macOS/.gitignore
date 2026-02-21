@@ -1,0 +1,6 @@
+output/
+*.box
+*.zip
+*.utm/
+packer_cache/
+.packer.d/

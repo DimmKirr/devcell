@@ -1,0 +1,334 @@
+task: [create] echo "=== Starting VM creation (debug.log for details) ==="
+=== Starting VM creation (debug.log for details) ===
+task: [create] ./scripts/create-vm.sh "macos-base" "8192" "4" "65536" 2>&1 | tee debug.log
+=== Opening File > New ===
+menu item New… of menu File of menu bar item File of menu bar 1 of application process UTM
+=== Screen 1: Virtualize/Emulate ===
+=== DEBUG UI DUMP (Screen 1) ===
+============================================
+UTM UI DEBUG DUMP
+============================================
+
+=== WINDOW 1 ===
+  name: UTM
+  title: UTM
+  role: AXWindow
+  subrole: AXStandardWindow
+
+=== WINDOW BUTTONS ===
+  [Button 1]
+    name: missing value
+    title: missing value
+    description: close button
+    role: AXButton
+    subrole: AXCloseButton
+    value: missing value
+    help: missing value
+    enabled: false
+    focused: false
+  [Button 2]
+    name: missing value
+    title: missing value
+    description: zoom button
+    role: AXButton
+    subrole: AXZoomButton
+    value: missing value
+    help: missing value
+    enabled: true
+    focused: false
+  [Button 3]
+    name: missing value
+    title: missing value
+    description: minimize button
+    role: AXButton
+    subrole: AXMinimizeButton
+    value: missing value
+    help: missing value
+    enabled: true
+    focused: false
+
+=== SHEET 1 ===
+  role: AXSheet
+  subrole: missing value
+
+=== SHEET GROUPS (1 total) ===
+
+  [Group 1]
+    role: AXGroup
+    subrole: AXHostingView
+    buttons: 1
+
+    [Group 1 Button 1]
+      name: missing value
+      title: missing value
+      description: button
+      role: AXButton
+      subrole: missing value
+      value: missing value
+      help: missing value
+      enabled: true
+      focused: false
+      selected: missing value
+      accessibility description: missing value
+
+    static texts: 1
+      [Text 1]: Start
+
+=== TOOLBARS ===
+  Window has 1 toolbars
+  [Toolbar 1] has 2 buttons
+    [Toolbar Button 1]
+      title: missing value
+      description: New VM
+      subrole: missing value
+    [Toolbar Button 2]
+      title: missing value
+      description: Hide Sidebar
+      subrole: missing value
+
+=== FULL SHEET CONTENTS ===
+
+============================================
+END DEBUG DUMP
+============================================
+=== END DEBUG ===
+Clicking Virtualize (row 2)
+button 1 of UI element 1 of row 2 of outline 1 of scroll area 1 of group 1 of sheet 1 of window UTM of application process UTM
+=== Screen 2: OS Selection ===
+Clicking macOS 12+ (row 2)
+button 1 of UI element 1 of row 2 of outline 1 of scroll area 1 of group 1 of sheet 1 of window UTM of application process UTM
+=== Screen 3: Hardware ===
+Hardware screen loaded
+Setting memory to 8192
+Setting CPU cores to 4
+Sheet group 1 has 3 buttons
+Clicking button 3 (Continue) of group 1 of sheet 1
+button 3 of group 1 of sheet 1 of window UTM of application process UTM
+=== Screen 4: macOS IPSW ===
+On IPSW screen, clicking Continue...
+Sheet group 1 has 3 buttons
+Clicking button 3 (Continue)
+button 3 of group 1 of sheet 1 of window UTM of application process UTM
+Waiting for Storage screen...
+=== Screen 5: Storage ===
+Waiting for Storage screen and clicking Continue...
+Found 3 buttons in sheet group, clicking button 3
+=== Screen 6: Summary ===
+=== DEBUG UI DUMP (Summary) ===
+============================================
+UTM UI DEBUG DUMP
+============================================
+
+=== WINDOW 1 ===
+  name: UTM
+  title: UTM
+  role: AXWindow
+  subrole: AXStandardWindow
+
+=== WINDOW BUTTONS ===
+  [Button 1]
+    name: missing value
+    title: missing value
+    description: close button
+    role: AXButton
+    subrole: AXCloseButton
+    value: missing value
+    help: missing value
+    enabled: false
+    focused: false
+  [Button 2]
+    name: missing value
+    title: missing value
+    description: zoom button
+    role: AXButton
+    subrole: AXZoomButton
+    value: missing value
+    help: missing value
+    enabled: true
+    focused: false
+  [Button 3]
+    name: missing value
+    title: missing value
+    description: minimize button
+    role: AXButton
+    subrole: AXMinimizeButton
+    value: missing value
+    help: missing value
+    enabled: true
+    focused: false
+
+=== SHEET 1 ===
+  role: AXSheet
+  subrole: missing value
+
+=== SHEET GROUPS (1 total) ===
+
+  [Group 1]
+    role: AXGroup
+    subrole: AXHostingView
+    buttons: 3
+
+    [Group 1 Button 1]
+      name: missing value
+      title: missing value
+      description: button
+      role: AXButton
+      subrole: missing value
+      value: missing value
+      help: missing value
+      enabled: true
+      focused: false
+      selected: missing value
+      accessibility description: missing value
+
+    [Group 1 Button 2]
+      name: missing value
+      title: missing value
+      description: button
+      role: AXButton
+      subrole: missing value
+      value: missing value
+      help: missing value
+      enabled: true
+      focused: false
+      selected: missing value
+      accessibility description: missing value
+
+    [Group 1 Button 3]
+      name: missing value
+      title: missing value
+      description: button
+      role: AXButton
+      subrole: missing value
+      value: missing value
+      help: missing value
+      enabled: true
+      focused: false
+      selected: missing value
+      accessibility description: missing value
+
+    static texts: 1
+      [Text 1]: Summary
+
+=== TOOLBARS ===
+  Window has 1 toolbars
+  [Toolbar 1] has 2 buttons
+    [Toolbar Button 1]
+      title: missing value
+      description: New VM
+      subrole: missing value
+    [Toolbar Button 2]
+      title: missing value
+      description: Hide Sidebar
+      subrole: missing value
+
+=== FULL SHEET CONTENTS ===
+
+============================================
+END DEBUG DUMP
+============================================
+=== END DEBUG ===
+Looking for Name text field (the only enabled one)...
+Found 1 scroll areas in group 1
+Scroll area has 7 text fields
+Found enabled text field with value: macOS
+Setting VM name to 'macos-base' and saving...
+Pressing Tab to commit name...
+Pressing Return to save...
+Save triggered!
+=== Verifying VM creation ===
+ERROR: VM 'macos-base' not found after creation
+Available VMs:
+macOS26, macOS, devcell-macOS26, callnut-60
+task: [create] echo ""
+
+task: [create] echo "=== Waiting for IPSW download to complete ==="
+=== Waiting for IPSW download to complete ===
+task: [create] ./scripts/wait-download.sh "macos-base" 5 3600
+=== Waiting for IPSW Download ===
+Looking for VM: macos-base
+Poll interval: 5s, Timeout: 3600s
+
+
+[INFO] Tracking download file: CFNetworkDownload_lq7Bmf.tmp
+[  0m 00s] Downloading... 129M/~19G (0%) ETA: --                       [  0m 05s] Downloading... 513M/~19G (2%) ETA: ~2m                      [  0m 10s] Downloading... 870M/~19G (4%) ETA: ~3m                      [  0m 15s] Downloading... 1.2G/~19G (6%) ETA: ~3m                      [  0m 20s] Downloading... 1.6G/~19G (8%) ETA: ~3m                      [  0m 26s] Downloading... 1.9G/~19G (10%) ETA: ~3m                     [  0m 31s] Downloading... 2.3G/~19G (12%) ETA: ~3m                     [  0m 36s] Downloading... 2.6G/~19G (14%) ETA: ~3m                     [  0m 41s] Downloading... 3.0G/~19G (16%) ETA: ~3m                     [  0m 46s] Downloading... 3.4G/~19G (18%) ETA: ~3m                     [  0m 51s] Downloading... 3.8G/~19G (20%) ETA: ~3m                     [  0m 56s] Downloading... 4.1G/~19G (22%) ETA: ~3m                     [  1m 02s] Downloading... 4.4G/~19G (24%) ETA: ~3m                     [  1m 07s] Downloading... 4.8G/~19G (26%) ETA: ~3m                     [  1m 12s] Downloading... 5.1G/~19G (28%) ETA: ~3m                     [  1m 17s] Downloading... 5.4G/~19G (30%) ETA: ~2m                     [  1m 22s] Downloading... 5.7G/~19G (31%) ETA: ~2m                     [  1m 27s] Downloading... 6.0G/~19G (33%) ETA: ~2m                     [  1m 32s] Downloading... 6.3G/~19G (35%) ETA: ~2m                     [  1m 38s] Downloading... 6.7G/~19G (37%) ETA: ~2m                     [  1m 43s] Downloading... 7.1G/~19G (39%) ETA: ~2m                     [  1m 48s] Downloading... 7.4G/~19G (41%) ETA: ~2m                     [  1m 53s] Downloading... 7.8G/~19G (43%) ETA: ~2m                     [  1m 58s] Downloading... 8.1G/~19G (45%) ETA: ~2m                     [  2m 03s] Downloading... 8.5G/~19G (47%) ETA: ~2m                     [  2m 08s] Downloading... 8.8G/~19G (49%) ETA: ~2m                     [  2m 14s] Downloading... 9.2G/~19G (51%) ETA: ~2m                     [  2m 19s] Downloading... 9.4G/~19G (52%) ETA: ~2m                     [  2m 24s] Downloading... 9.8G/~19G (55%) ETA: ~1m                     [  2m 29s] Downloading... 11G/~19G (57%) ETA: ~1m                      [  2m 34s] Downloading... 11G/~19G (58%) ETA: ~1m                      [  2m 39s] Downloading... 11G/~19G (60%) ETA: ~1m                      [  2m 45s] Downloading... 12G/~19G (63%) ETA: ~1m                      [  2m 50s] Downloading... 12G/~19G (65%) ETA: ~1m                      [  2m 55s] Downloading... 12G/~19G (67%) ETA: ~1m                      [  3m 00s] Downloading... 13G/~19G (68%) ETA: ~1m                      [  3m 05s] Downloading... 13G/~19G (70%) ETA: ~1m                      [  3m 10s] Downloading... 13G/~19G (72%) ETA: ~1m                      [  3m 16s] Downloading... 14G/~19G (74%) ETA: ~1m                      [  3m 21s] Downloading... 14G/~19G (77%) ETA: ~0m                      [  3m 26s] Downloading... 15G/~19G (79%) ETA: ~0m                      [  3m 31s] Downloading... 15G/~19G (81%) ETA: ~0m                      [  3m 36s] Downloading... 15G/~19G (83%) ETA: ~0m                      [  3m 41s] Downloading... 16G/~19G (85%) ETA: ~0m                      [  3m 46s] Downloading... 16G/~19G (86%) ETA: ~0m                      [  3m 52s] Downloading... 16G/~19G (88%) ETA: ~0m                      [  3m 57s] Downloading... 17G/~19G (90%) ETA: ~0m                      [  4m 02s] Downloading... 17G/~19G (92%) ETA: ~0m                      [  4m 07s] Downloading... 17G/~19G (94%) ETA: ~0m                      [  4m 12s] Downloading... 18G/~19G (96%) ETA: ~0m                      
+[INFO] Download file removed - IPSW download complete
+[  4m 17s] VM 'macos-base' ready (status: stopped)                     
+
+=== Download Complete ===
+VM: macos-base (status: stopped)
+task: [create] # Verify VM exists with correct name
+echo "Verifying VM 'macos-base' exists..."
+vm_found=$(osascript -e 'tell application "UTM" to get name of every virtual machine' 2>/dev/null | grep -c "macos-base" || echo "0")
+if [ "$vm_found" -eq 0 ]; then
+  echo ""
+  echo "ERROR: VM 'macos-base' not found!"
+  echo "Available VMs:"
+  osascript -e 'tell application "UTM" to get name of every virtual machine'
+  echo ""
+  echo "The VM may have been created with a different name."
+  echo "Please rename it manually or update VM_NAME in Taskfile.yml"
+  exit 1
+fi
+echo "VM 'macos-base' verified!"
+
+Verifying VM 'macos-base' exists...
+VM 'macos-base' verified!
+task: [setup] open -a UTM
+task: [setup] sleep 2
+task: [setup] # Start VM and wait for install confirmation dialog, then click OK
+echo "=== Starting VM and confirming macOS installation ==="
+osascript << 'EOF'
+tell application "UTM"
+    start virtual machine "macos-base"
+end tell
+
+tell application "System Events"
+    tell process "UTM"
+        set frontmost to true
+
+        -- Wait up to 30 seconds for OK button to appear
+        repeat 60 times
+            try
+                if exists button "OK" of sheet 1 of window 1 then
+                    click button "OK" of sheet 1 of window 1
+                    log "Clicked OK - macOS installation starting"
+                    exit repeat
+                end if
+            end try
+            delay 0.5
+        end repeat
+    end tell
+end tell
+EOF
+echo "macOS installation started"
+
+=== Starting VM and confirming macOS installation ===
+Clicked OK - macOS installation starting
+macOS installation started
+task: [setup] echo ""
+echo "==========================================="
+echo "macOS is installing. This takes ~10-15 minutes."
+echo "The VM will reboot and show Setup Assistant."
+echo ""
+echo "Complete Setup Assistant in VM:"
+echo "  User=vagrant, Password=vagrant"
+echo "  Skip Apple ID"
+echo "  Enable SSH in System Settings > Sharing"
+echo ""
+echo "Press Enter when ready..."
+echo "==========================================="
+read
+
+
+===========================================
+macOS is installing. This takes ~10-15 minutes.
+The VM will reboot and show Setup Assistant.
+
+Complete Setup Assistant in VM:
+  User=vagrant, Password=vagrant
+  Skip Apple ID
+  Enable SSH in System Settings > Sharing
+
+Press Enter when ready...
+===========================================
