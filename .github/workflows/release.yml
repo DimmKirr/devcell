@@ -63,6 +63,8 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}
+          flavor: |
+            latest=false
           tags: |
             type=semver,pattern={{version}},suffix=-${{ matrix.arch }}
             type=semver,pattern={{major}},suffix=-${{ matrix.arch }}
@@ -80,7 +82,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.arch }}-base
           provenance: false
           build-args: |
-            USER_NAME=devuser
+            USER_NAME=devcell
             USER_UID=1000
             USER_GID=1000
             DEVCELL_GUI_ENABLED=true
@@ -90,6 +92,8 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}
+          flavor: |
+            latest=false
           tags: |
             type=semver,pattern={{version}}-extended,suffix=-${{ matrix.arch }}
             type=semver,pattern={{major}}-extended,suffix=-${{ matrix.arch }}
@@ -109,7 +113,7 @@ jobs:
           provenance: false
           build-args: |
             BASE_IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:latest-${{ matrix.arch }}
-            USER_NAME=devuser
+            USER_NAME=devcell
             USER_UID=1000
             USER_GID=1000
             DEVCELL_KICAD_ENABLED=false
@@ -140,6 +144,8 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}
+          flavor: |
+            latest=false
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}
@@ -150,6 +156,8 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}
+          flavor: |
+            latest=false
           tags: |
             type=semver,pattern={{version}}-extended
             type=semver,pattern={{major}}-extended

@@ -1,3 +1,5 @@
+.workspaces
+nixhome/user.nix
 .venv
 .env
 *.egg-info
@@ -13,3 +15,6 @@ pyproject.local.toml
 uv.lock
 Vagrantfile.local
 opencode-local.json
+web/node_modules
+web/dist
+web/.astro

@@ -1,173 +1,278 @@
-FROM public.ecr.aws/docker/library/debian:trixie
+# syntax=docker/dockerfile:1
 
+###############################################################################
+# Stage: apt-repo-setup
+# Adds Docker's APT repo. Isolated for layer caching.
+###############################################################################
+FROM public.ecr.aws/docker/library/debian:trixie AS apt-repo-setup
 
 RUN apt-get update && apt-get install -y \
       gpg \
       curl && \
     curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg && \
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian trixie stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null &&\
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian trixie stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null && \
     rm -rf /var/lib/apt/lists/*
 
-ARG DEVCELL_GUI_ENABLED
-ARG DEVCELL_NIX_ENABLED
+###############################################################################
+# Stage: nix
+# Minimal apt + user creation + nix install + home-manager.
+# Replaces: base-core, base-nix, nix-setup, base-gui, base-gui-nix.
+###############################################################################
+FROM apt-repo-setup AS nix
+
 RUN apt-get update && apt-get install -y \
-    $([ "$DEVCELL_GUI_ENABLED" = "true" ] && echo "fluxbox libcairo2 libcairo2-dev libegl1-mesa-dev libfontconfig1-dev libfreetype6-dev libgl1-mesa-dev libglew2.2 libglu1-mesa libglu1-mesa-dev libtiff5-dev libwxgtk3.2-1 libwxgtk-webview3.2-1 libx11-6 libxcursor-dev libxkbfile-dev libxrandr-dev python3-wxgtk4.0 x11-apps x11vnc xvfb") \
-    apt-transport-https \
-    avahi-daemon \
-    binutils-gold \
-    bison \
-    build-essential \
     ca-certificates \
-    chromium \
-    chromium-driver \
-    clang \
-    cmake \
+    curl \
     docker-ce-cli \
     docker-compose-plugin \
-    expect \
-    flex \
+    fontconfig \
+    fonts-dejavu-core \
+    fonts-liberation \
+    fonts-noto-core \
     git \
-    git-lfs \
-    gnupg \
-    htop \
-    imagemagick \
-    jq \
-    libavcodec-dev \
-    libavformat-dev \
-    libbsd-dev \
-    libbz2-1.0 \
-    libcap2-bin \
-    libc6-dev \
-    libclang-dev \
-    libcurl4 \
-    libdbus-1-dev \
-    libfuse-dev \
-    libgif-dev \
-    libgit2-1.9 \
-    libnng1 \
-    libnss-mdns \
-    libplist-utils \
-    libpoppler-glib8t64 \
-    libprotobuf32 \
-    libpulse-dev \
-    libpython3.13 \
-    libsecret-1-0 \
-    libssl-dev \
-    libswresample-dev \
-    libudev-dev \
-    libxml2-dev \
-    libxslt1-dev \
-    libzstd1 \
-    llvm-dev \
-    lsb-release \
-    mc \
-    pkg-config \
-    postgresql-client \
+    gosu \
     procps \
-    ripgrep \
-    shared-mime-info \
-    sqlite3 \
     sudo \
-    tree \
-    unixodbc \
-    unzip \
-    vim \
-    wget \
     xz-utils \
-    zlib1g \
     zsh \
     && rm -rf /var/lib/apt/lists/*
 
+ARG USER_NAME=devcell
+ARG USER_UID=1000
+ARG USER_GID=1000
 
-# Install Task (Taskfile)
-RUN sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b /usr/local/bin
-
-# Install yq (TOML/YAML/JSON processor)
-RUN curl -fsSL https://github.com/mikefarah/yq/releases/latest/download/yq_linux_$(dpkg --print-architecture) -o /usr/local/bin/yq && \
-    chmod +x /usr/local/bin/yq
-
-# Install dasel (JSON/TOML/YAML/XML processor with TOML output support)
-RUN curl -fsSL https://github.com/TomWright/dasel/releases/latest/download/dasel_linux_$(dpkg --print-architecture) -o /usr/local/bin/dasel && \
-    chmod +x /usr/local/bin/dasel
-
-# Entrypoint script
-COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
-
-ENV TINI_VERSION=v0.19.0
-RUN curl -fsSL https://github.com/krallin/tini/releases/download/${TINI_VERSION}/tini-$(dpkg --print-architecture) -o /tini && \
-    chmod +x /tini
-
-
-# Create non-root user matching host user (uid 501, gid 20)
-# This ensures proper file permissions when mounting volumes from macOS
-# Pass USER_NAME, USER_UID, and USER_GID as build args to match host user
-ARG USER_NAME=devuser
-ARG USER_UID=501
-ARG USER_GID=20
 RUN \
     groupadd -g ${USER_GID} usergroup 2>/dev/null || true && \
-    useradd -u ${USER_UID} -g ${USER_GID} -m -s /bin/zsh ${USER_NAME} && \
-    mkdir -p /home/${USER_NAME}/.local/bin && \
-    chown -R ${USER_UID}:${USER_GID} /home/${USER_NAME} && \
+    useradd -u ${USER_UID} -g ${USER_GID} --home-dir /opt/devcell -m -s /bin/zsh ${USER_NAME} && \
+    chmod 755 /opt/devcell && \
+    mkdir -p /opt/devcell/.local/bin && \
+    chown -R ${USER_UID}:${USER_GID} /opt/devcell && \
     echo "${USER_NAME} ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 
-# Create config and data directories with proper ownership
-RUN mkdir -p /config /data /opt/asdf /opt/home/.config/nix /opt/home/.local/bin && \
-    chown -R ${USER_UID}:${USER_GID} /config /data /opt/asdf /opt/home
+RUN mkdir -p /config /data /opt/asdf /opt/npm-tools /opt/python-tools && \
+    chown -R ${USER_UID}:${USER_GID} /config /data /opt/asdf /opt/npm-tools /opt/python-tools
 
-# Switch to non-root user
+# System-level nix.conf (read by any nix binary regardless of user).
+# sandbox=false + filter-syscalls=false: Docker Desktop's Linux VM kernel rejects
+# nix's seccomp BPF program with EINVAL (kernel compatibility issue).
+# Docker's own isolation is sufficient for build containers.
+RUN mkdir -p /etc/nix && \
+    printf 'sandbox = false\nfilter-syscalls = false\nsandbox-fallback = true\nexperimental-features = nix-command flakes\n' \
+        > /etc/nix/nix.conf
+
 USER ${USER_UID}:${USER_GID}
 
-# Copy .tool-versions to /opt/home (copied to ~ at runtime by entrypoint)
-COPY --chown=${USER_UID}:${USER_GID} .tool-versions /opt/home/.tool-versions
+WORKDIR /opt/devcell
 
-# Create template shell RC files in /opt/home (copied to ~ at runtime by entrypoint)
-RUN echo '. ${ASDF_DIR}/asdf.sh' >> /opt/home/.bashrc && \
-    echo '. ${ASDF_DIR}/asdf.sh' >> /opt/home/.profile && \
-    echo '. ${ASDF_DIR}/asdf.sh' >> /opt/home/.zshrc
+ENV PATH="/opt/devcell/.local/bin:${PATH}"
+ENV HOME=/opt/devcell
+# USER env var is required by nix.sh and nix profile management to locate per-user profiles.
+ENV USER=${USER_NAME}
 
-WORKDIR /home/${USER_NAME}
-
-# Update PATH to include local-installed binaries
-ENV PATH="/home/${USER_NAME}/.local/bin:${PATH}"
-ENV CELL_HOME=/home/${USER_NAME}
-
-# Set HOME so asdf global .tool-versions lookup works during build
-ENV HOME=/home/${USER_NAME}
-
-# Install Nix package manager with flakes support (conditional)
-# Note: Nix installs to /home/${USER_NAME}/.nix-profile, templates go to /opt/home
-RUN if [ "$DEVCELL_NIX_ENABLED" = "true" ]; then \
+# Install nix.
+# NIX_CONFIG is exported inline via printf so it contains a real newline
+# (Dockerfile ENV \n is a literal backslash-n, not a newline character).
+# sandbox=false: Docker's seccomp profile blocks the BPF syscalls nix's sandbox
+# needs; Docker's own isolation provides sufficient security for build containers.
+RUN export NIX_CONFIG="$(printf 'experimental-features = nix-command flakes\nsandbox = false\nfilter-syscalls = false\nsandbox-fallback = true')" && \
     curl -L https://nixos.org/nix/install | sh -s -- --no-daemon && \
-    echo "experimental-features = nix-command flakes" >> /opt/home/.config/nix/nix.conf && \
-    echo '. ${HOME}/.nix-profile/etc/profile.d/nix.sh' >> /opt/home/.bashrc && \
-    echo '. ${HOME}/.nix-profile/etc/profile.d/nix.sh' >> /opt/home/.profile && \
-    echo '. ${HOME}/.nix-profile/etc/profile.d/nix.sh' >> /opt/home/.zshrc; \
-    fi
+    mkdir -p "${HOME}/.config/nix" && \
+    printf 'experimental-features = nix-command flakes\nsandbox = false\nfilter-syscalls = false\nsandbox-fallback = true\n' \
+        > "${HOME}/.config/nix/nix.conf"
 
-# Install asdf version manager
-ENV ASDF_VERSION=v0.14.1
-ENV ASDF_DIR=/opt/asdf
+# Nix 2.15+ uses XDG paths. Add nix-profile to PATH for subsequent RUN commands.
+ENV PATH="${HOME}/.nix-profile/bin:${PATH}"
+
+# Copy home-manager flake and install home-manager once (shared by all profiles).
+COPY --chown=${USER_UID}:${USER_GID} nixhome/ /opt/nixhome/
+RUN nix profile install "nixpkgs/nixos-25.11#home-manager" && \
+    mkdir -p /nix/var/nix/profiles/per-user/devcell && \
+    ln -sfT "$(readlink -f $HOME/.nix-profile)" \
+            /nix/var/nix/profiles/per-user/devcell/profile
+
+# Stable runtime PATH using the compat link (in /nix/, outside $HOME).
+# asdf data dir lives outside $HOME so it survives CELL_HOME bind mounts.
 ENV ASDF_DATA_DIR=/opt/asdf
-ENV PATH="${ASDF_DIR}/bin:${ASDF_DIR}/shims:${PATH}"
+ENV PATH="/opt/asdf/shims:/nix/var/nix/profiles/per-user/devcell/profile/bin:${PATH}"
 
-# Install and configure asdf to read legacy version files (.python-version, .ruby-version, etc.)
-RUN git clone https://github.com/asdf-vm/asdf.git ${ASDF_DIR} --branch ${ASDF_VERSION} && \
-    echo "legacy_version_file = yes" > /opt/home/.asdfrc
+# Apply devcell-base profile
+RUN ARCH=$(uname -m) && \
+    [ "$ARCH" = "aarch64" ] && ARCH_SUFFIX="-aarch64" || ARCH_SUFFIX="" && \
+    home-manager switch --flake "/opt/nixhome#devcell-base${ARCH_SUFFIX}" && \
+    ln -sfT "$(readlink -f $HOME/.nix-profile)" \
+            /nix/var/nix/profiles/per-user/devcell/profile
 
-# Install asdf plugins
-RUN asdf plugin add nodejs https://github.com/asdf-vm/asdf-nodejs.git && \
-    asdf plugin add golang https://github.com/asdf-community/asdf-golang.git && \
-    asdf plugin add python https://github.com/asdf-community/asdf-python.git && \
-    asdf plugin add ruby https://github.com/asdf-vm/asdf-ruby.git && \
-    asdf plugin add terraform https://github.com/asdf-community/asdf-hashicorp.git && \
-    asdf plugin add opentofu https://github.com/virtualroot/asdf-opentofu.git && \
-    asdf plugin add vagrant https://github.com/asdf-community/asdf-hashicorp.git && \
-    asdf plugin add packer https://github.com/asdf-community/asdf-hashicorp.git && \
-    asdf plugin add uv https://github.com/asdf-community/asdf-uv.git
+ENV DEVCELL_PROFILE=devcell-base
+
+# Entrypoint last — changes here don't bust the nix build cache above
+COPY --chmod=755 entrypoint.sh /usr/local/bin/entrypoint.sh
 
 WORKDIR /
 
-ENTRYPOINT ["/tini", "--", "/usr/local/bin/entrypoint.sh"]
+ENTRYPOINT ["tini", "--", "/usr/local/bin/entrypoint.sh"]
 CMD ["tail", "-f", "/dev/null"]
+
+###############################################################################
+# Stage: go
+# devcell-go profile: Go toolchain + language-specific tools only.
+###############################################################################
+FROM nix AS go
+
+ARG USER_NAME=devcell
+ARG USER_UID=1000
+ARG USER_GID=1000
+RUN ARCH=$(uname -m) && \
+    [ "$ARCH" = "aarch64" ] && ARCH_SUFFIX="-aarch64" || ARCH_SUFFIX="" && \
+    home-manager switch --flake "/opt/nixhome#devcell-go${ARCH_SUFFIX}" && \
+    ln -sfT "$(readlink -f $HOME/.nix-profile)" \
+            /nix/var/nix/profiles/per-user/devcell/profile
+
+ENV DEVCELL_PROFILE=devcell-go
+
+# tfplugindocs v0.24.0 — not in nixpkgs; install from GitHub release binary
+USER root
+RUN ARCH=$(uname -m) && \
+    [ "$ARCH" = "aarch64" ] && LARCH="arm64" || LARCH="amd64" && \
+    curl -sSfL "https://github.com/hashicorp/terraform-plugin-docs/releases/download/v0.24.0/tfplugindocs_0.24.0_linux_${LARCH}.zip" \
+         -o /tmp/tfplugindocs.zip && \
+    mkdir -p /tmp/tfplugindocs-extract && \
+    unzip -o /tmp/tfplugindocs.zip -d /tmp/tfplugindocs-extract && \
+    find /tmp/tfplugindocs-extract -name tfplugindocs -type f -exec mv {} /usr/local/bin/ \; && \
+    chmod +x /usr/local/bin/tfplugindocs && \
+    rm -rf /tmp/tfplugindocs.zip /tmp/tfplugindocs-extract
+USER ${USER_UID}:${USER_GID}
+
+###############################################################################
+# Stage: node
+# devcell-node profile: Node.js + npm project tools only.
+###############################################################################
+FROM nix AS node
+
+ARG USER_NAME=devcell
+ARG USER_UID=1000
+ARG USER_GID=1000
+RUN ARCH=$(uname -m) && \
+    [ "$ARCH" = "aarch64" ] && ARCH_SUFFIX="-aarch64" || ARCH_SUFFIX="" && \
+    home-manager switch --flake "/opt/nixhome#devcell-node${ARCH_SUFFIX}" && \
+    ln -sfT "$(readlink -f $HOME/.nix-profile)" \
+            /nix/var/nix/profiles/per-user/devcell/profile && \
+    $HOME/.nix-profile/bin/asdf install nodejs && \
+    $HOME/.nix-profile/bin/asdf reshim
+
+ENV DEVCELL_PROFILE=devcell-node
+COPY --chown=${USER_UID}:${USER_GID} package.json package-lock.json* /opt/npm-tools/
+RUN cd /opt/npm-tools/ && npm install
+ENV PATH="/opt/npm-tools/node_modules/.bin:${PATH}"
+
+###############################################################################
+# Stage: python
+# devcell-python profile: Python3 + uv + Playwright chromium.
+###############################################################################
+FROM nix AS python
+
+ARG USER_UID=1000
+ARG USER_GID=1000
+RUN ARCH=$(uname -m) && \
+    [ "$ARCH" = "aarch64" ] && ARCH_SUFFIX="-aarch64" || ARCH_SUFFIX="" && \
+    home-manager switch --flake "/opt/nixhome#devcell-python${ARCH_SUFFIX}" && \
+    ln -sfT "$(readlink -f $HOME/.nix-profile)" \
+            /nix/var/nix/profiles/per-user/devcell/profile
+
+ENV DEVCELL_PROFILE=devcell-python
+
+COPY --chown=${USER_UID}:${USER_GID} pyproject.toml uv.lock* /opt/python-tools/
+SHELL ["/bin/bash", "-c"]
+RUN cd /opt/python-tools && uv sync
+SHELL ["/bin/sh", "-c"]
+ENV PATH="/opt/python-tools/.venv/bin:${PATH}"
+
+ENV PLAYWRIGHT_MCP_BROWSER=chromium
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+ENV PLAYWRIGHT_BROWSERS_PATH=0
+ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH="/nix/var/nix/profiles/per-user/devcell/profile/bin/chromium"
+
+###############################################################################
+# Stage: electronics
+# devcell-electronics profile: Build tools + KiCad, ngspice, libspnav, poppler.
+###############################################################################
+FROM nix AS electronics
+
+ARG USER_UID=1000
+ARG USER_GID=1000
+RUN ARCH=$(uname -m) && \
+    [ "$ARCH" = "aarch64" ] && ARCH_SUFFIX="-aarch64" || ARCH_SUFFIX="" && \
+    home-manager switch --flake "/opt/nixhome#devcell-electronics${ARCH_SUFFIX}" && \
+    ln -sfT "$(readlink -f $HOME/.nix-profile)" \
+            /nix/var/nix/profiles/per-user/devcell/profile
+
+ENV DEVCELL_PROFILE=devcell-electronics
+
+###############################################################################
+# Stage: fullstack
+# devcell-fullstack profile: All language tools (Go, Node, Python, web).
+###############################################################################
+FROM nix AS fullstack
+
+ARG USER_NAME=devcell
+ARG USER_UID=1000
+ARG USER_GID=1000
+RUN ARCH=$(uname -m) && \
+    [ "$ARCH" = "aarch64" ] && ARCH_SUFFIX="-aarch64" || ARCH_SUFFIX="" && \
+    home-manager switch --flake "/opt/nixhome#devcell-fullstack${ARCH_SUFFIX}" && \
+    ln -sfT "$(readlink -f $HOME/.nix-profile)" \
+            /nix/var/nix/profiles/per-user/devcell/profile && \
+    $HOME/.nix-profile/bin/asdf install nodejs && \
+    $HOME/.nix-profile/bin/asdf reshim
+
+ENV DEVCELL_PROFILE=devcell-fullstack
+
+# tfplugindocs v0.24.0 — not in nixpkgs; install from GitHub release binary
+USER root
+RUN ARCH=$(uname -m) && \
+    [ "$ARCH" = "aarch64" ] && LARCH="arm64" || LARCH="amd64" && \
+    curl -sSfL "https://github.com/hashicorp/terraform-plugin-docs/releases/download/v0.24.0/tfplugindocs_0.24.0_linux_${LARCH}.zip" \
+         -o /tmp/tfplugindocs.zip && \
+    mkdir -p /tmp/tfplugindocs-extract && \
+    unzip -o /tmp/tfplugindocs.zip -d /tmp/tfplugindocs-extract && \
+    find /tmp/tfplugindocs-extract -name tfplugindocs -type f -exec mv {} /usr/local/bin/ \; && \
+    chmod +x /usr/local/bin/tfplugindocs && \
+    rm -rf /tmp/tfplugindocs.zip /tmp/tfplugindocs-extract
+USER ${USER_UID}:${USER_GID}
+
+# npm tools (project-specific, not in nixpkgs)
+COPY --chown=${USER_UID}:${USER_GID} package.json package-lock.json* /opt/npm-tools/
+RUN cd /opt/npm-tools/ && npm install
+ENV PATH="/opt/npm-tools/node_modules/.bin:${PATH}"
+
+# Python tools (project-specific, not in nixpkgs)
+COPY --chown=${USER_UID}:${USER_GID} pyproject.toml uv.lock* /opt/python-tools/
+SHELL ["/bin/bash", "-c"]
+RUN cd /opt/python-tools && uv sync
+SHELL ["/bin/sh", "-c"]
+ENV PATH="/opt/python-tools/.venv/bin:${PATH}"
+
+# OpenCode config
+COPY opencode-local.json /opt/devcell/opencode.json
+
+# Playwright runtime env
+ENV PLAYWRIGHT_MCP_BROWSER=chromium
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+ENV PLAYWRIGHT_BROWSERS_PATH=0
+ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH="/nix/var/nix/profiles/per-user/devcell/profile/bin/chromium"
+
+###############################################################################
+# Stage: ultimate
+# devcell-ultimate: fullstack + desktop + KiCad, ngspice, libspnav, poppler.
+###############################################################################
+FROM fullstack AS ultimate
+
+ARG USER_UID=1000
+ARG USER_GID=1000
+RUN ARCH=$(uname -m) && \
+    [ "$ARCH" = "aarch64" ] && ARCH_SUFFIX="-aarch64" || ARCH_SUFFIX="" && \
+    home-manager switch --flake "/opt/nixhome#devcell-ultimate${ARCH_SUFFIX}" && \
+    ln -sfT "$(readlink -f $HOME/.nix-profile)" \
+            /nix/var/nix/profiles/per-user/devcell/profile
+
+ENV DEVCELL_PROFILE=devcell-ultimate
+ENV DEVCELL_GUI_ENABLED=true

@@ -6,15 +6,30 @@ vars:
   HTTP_HOST: '{{.HTTP_HOST | default "0.0.0.0"}}'
   DOCKER_ARGS: '{{.DOCKER_ARGS }}'
 
-  DOCKERFILE: "Dockerfile-local"
-  IMAGE_TAG: "latest-local"
+  DOCKERFILE: "Dockerfile"
+  IMAGE_TAG: "latest-ultimate"
 
-  APP_NAME: '{{base .USER_WORKING_DIR}}-{{env "TMUX_PANE" | replace "%" "" | default "0"}}'
+
+  APP_NAME: '{{base .USER_WORKING_DIR}}-{{env "CELL_ID" | default (env "TMUX_PANE" | replace "%" "" | default "0")}}'
   WORKSPACE: "{{.APP_NAME}}"
   BINARY_NAME: "{{.APP_NAME}}"
 
   DEVCELL_DIR: '{{env "DEVCELL_DIR" | default (printf "%s/dev/dimmkirr/devcell" .HOME)}}'
-  COMPOSE: 'docker compose -f {{.DEVCELL_DIR}}/compose.yml $(test -f {{.DEVCELL_DIR}}/compose.local.yml && echo "-f {{.DEVCELL_DIR}}/compose.local.yml")'
+  COMPOSE:
+    sh: |
+      COMPOSE_FILES="-f {{.DEVCELL_DIR}}/compose.yml"
+      if [ -f "{{.DEVCELL_DIR}}/compose.local.yml" ]; then
+        COMPOSE_FILES="$COMPOSE_FILES -f {{.DEVCELL_DIR}}/compose.local.yml"
+      fi
+      ENV_FILE=""
+      if [ -f "{{.USER_WORKING_DIR}}/.env" ]; then
+        ENV_FILE="--env-file {{.USER_WORKING_DIR}}/.env"
+      fi
+      if op --version >/dev/null 2>&1; then
+        echo "op run -- docker compose $COMPOSE_FILES $ENV_FILE"
+      else
+        echo "docker compose $COMPOSE_FILES $ENV_FILE"
+      fi
 
   RUN: "{{.COMPOSE}} run --service-ports --name cell-{{.APP_NAME}}-run --remove-orphans {{.DOCKER_ARGS}} -it cell"
   CLAUDE: "{{.RUN}} claude --dangerously-skip-permissions"
@@ -23,7 +38,7 @@ vars:
   SHELL: "{{.RUN}} bash"
 
   CELL_HOME: '{{.HOME}}/.devcell/{{ env "TMUX_SESSION_NAME" | default "sandbox"}}'
-  PORT_PREFIX: '{{env "TMUX_PANE" | replace "%" "" | default ""}}'
+  PORT_PREFIX: '{{env "SESSION_PORT_PREFIX" | default ""}}{{env "CELL_ID" | default (env "TMUX_PANE" | replace "%" "" | default "")}}'
   BASE_DIR: "{{ default .USER_WORKING_DIR }}"
 
   # Guest VM paths (convert /Users/<host-user>/... to /Users/vagrant/...)
@@ -35,6 +50,7 @@ vars:
 env:
   APP_NAME: "{{.APP_NAME}}"
   BASE_DIR: "{{.BASE_DIR}}"
+  USER_WORKING_DIR: "{{.USER_WORKING_DIR}}"
   DOCKERFILE: "{{.DOCKERFILE}}"
   IMAGE_TAG: "{{.IMAGE_TAG}}"
 
@@ -46,6 +62,7 @@ env:
   PORT: "{{.PORT}}"
   BUILDKIT_PROGRESS: plain
   CELL_HOME: "{{.CELL_HOME}}"
+
   # MACOS_SSH_HOST: "{{.MACOS_SSH_HOST}}"  # Use Vagrantfile default
 
 ###
@@ -63,9 +80,10 @@ tasks:
     deps: [devcell:claude-json:backup]
     cmds:
       - |
-        echo "APP_NAME: {{.APP_NAME}}"
+        echo "APP_NAME:    {{.APP_NAME}}"
         echo "PORT_PREFIX: {{.PORT_PREFIX}}"
-        echo "CELL_HOME: {{.CELL_HOME}}"
+        echo "CELL_ID:     ${CELL_ID:-<unset>}"
+        echo "CELL_HOME:   {{.CELL_HOME}}"
         echo "DEVCELL_DIR: {{.DEVCELL_DIR}}"
 
       - "{{.CLAUDE}} {{.CLI_ARGS}}"
@@ -113,6 +131,116 @@ tasks:
         echo "APP_NAME: {{.APP_NAME}}"
       - "{{.SHELL}} {{.CLI_ARGS}}"
 
+  vnc:
+    desc: Open VNC connection to the running dev container
+    silent: true
+    cmds:
+      - |
+        PORT=$({{.COMPOSE}} port cell 5900 2>/dev/null | cut -d: -f2)
+        if [ -z "$PORT" ]; then
+          echo "No running container found. Start one first with 'task claude'"
+          exit 1
+        fi
+        echo "Connecting to VNC on 127.0.0.1:$PORT..."
+        open "vnc://:vnc@127.0.0.1:$PORT"
+
+  chrome:
+    desc: Open Chromium with project-scoped profile (saves cookies/passwords to .chrome/)
+    silent: true
+    cmds:
+      - |
+        echo "Opening Chromium with profile: {{.CELL_HOME}}/.chrome"
+        open -na "Chromium" --args --user-data-dir="{{.CELL_HOME}}/.chrome" {{.CLI_ARGS}}
+
+  chrome:export-cookies:
+    desc: Export decrypted cookies from macOS Chromium profile to ~/.chrome-cookies.json (run on macOS)
+    silent: true
+    cmds:
+      - |
+        uv run --with pycryptodome python3 << 'PYEOF'
+        import subprocess, sqlite3, json, shutil, os, sys, hashlib
+        from Crypto.Cipher import AES
+
+        cookies_db = os.path.expanduser("{{.CELL_HOME}}/.chrome/Default/Cookies")
+        output     = os.path.expanduser("{{.CELL_HOME}}/.chrome-cookies.json")
+
+        # Get encryption key from macOS Keychain (try Chromium then Chrome)
+        key = None
+        for service, account in [("Chromium Safe Storage", "Chromium"), ("Chrome Safe Storage", "Chrome")]:
+            try:
+                passwd = subprocess.check_output(
+                    ["security", "find-generic-password", "-w", "-s", service, "-a", account],
+                    stderr=subprocess.DEVNULL).strip()
+                key = hashlib.pbkdf2_hmac("sha1", passwd, b"saltysalt", 1003, dklen=16)
+                break
+            except Exception:
+                continue
+        if not key:
+            print("ERROR: Could not find Chromium key in macOS Keychain"); sys.exit(1)
+
+        def decrypt(enc, key):
+            if not enc: return ""
+            if enc[:3] != b"v10": return enc.decode("utf-8", errors="replace")
+            cipher = AES.new(key, AES.MODE_CBC, IV=b" " * 16)
+            dec = cipher.decrypt(enc[3:])
+            return dec[:-dec[-1]].decode("utf-8", errors="replace")
+
+        tmp = cookies_db + ".tmp"
+        shutil.copy2(cookies_db, tmp)
+        try:
+            conn = sqlite3.connect(tmp)
+            rows = conn.execute(
+                "SELECT host_key, name, value, encrypted_value, path, expires_utc, "
+                "is_secure, is_httponly, samesite FROM cookies").fetchall()
+            conn.close()
+        finally:
+            os.unlink(tmp)
+
+        cookies = [{"host": r[0], "name": r[1],
+                    "value": decrypt(r[3], key) if r[3] else r[2],
+                    "path": r[4], "expires": r[5],
+                    "secure": bool(r[6]), "httponly": bool(r[7]), "samesite": r[8]}
+                   for r in rows]
+        with open(output, "w") as f: json.dump(cookies, f, indent=2)
+        print(f"Exported {len(cookies)} cookies → {output}")
+        PYEOF
+
+  chrome:import-cookies:
+    desc: Import cookies from ~/.chrome-cookies.json into container Chromium profile (run in container)
+    silent: true
+    cmds:
+      - |
+        docker exec -i "cell-{{.APP_NAME}}-run" python3 << 'PYEOF'
+        import sqlite3, json, os, sys
+
+        src = os.path.expanduser("~/.chrome-cookies.json")
+        db  = os.path.expanduser("~/.chrome/Default/Cookies")
+
+        if not os.path.exists(src):
+            print(f"Not found: {src} — run 'task chrome:export-cookies' on macOS first"); sys.exit(1)
+
+        with open(src) as f: cookies = json.load(f)
+
+        conn = sqlite3.connect(db)
+        # Get actual column names to stay schema-version safe
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(cookies)")}
+
+        for c in cookies:
+            conn.execute("DELETE FROM cookies WHERE host_key=? AND name=? AND path=?",
+                         (c["host"], c["name"], c["path"]))
+            row = {"host_key": c["host"], "name": c["name"], "value": c["value"],
+                   "encrypted_value": b"", "path": c["path"], "expires_utc": c["expires"],
+                   "is_secure": int(c["secure"]), "is_httponly": int(c["httponly"]),
+                   "samesite": c["samesite"], "last_access_utc": 0, "creation_utc": 0,
+                   "has_expires": 1, "is_persistent": 1, "priority": 1, "source_scheme": 2}
+            row = {k: v for k, v in row.items() if k in cols}
+            placeholders = ", ".join("?" * len(row))
+            conn.execute(f"INSERT INTO cookies ({', '.join(row)}) VALUES ({placeholders})",
+                         list(row.values()))
+        conn.commit(); conn.close()
+        print(f"Imported {len(cookies)} cookies into {db}")
+        PYEOF
+
   compose:
     desc: Run docker compose commands
     silent: true
@@ -121,19 +249,64 @@ tasks:
         echo "APP_NAME: {{.APP_NAME}}"
       - "{{.COMPOSE}} {{.CLI_ARGS}}"
 
-  image:build:
-    desc: Build images (use -- --no-cache to force full rebuild)
+  devcell:nix:validate:
+    desc: Validate all nixhome profiles — syntax check then attr check (no build, no activation)
+    dir: "{{.TASKFILE_DIR}}"
+    cmds:
+      - |
+        set -e
+        NIX_BIN=/nix/var/nix/profiles/per-user/devcell/profile/bin
+        FLAKE="{{.TASKFILE_DIR}}/nixhome"
+
+        echo "=== 1/2 Syntax check (nix-instantiate --parse) ==="
+        FAIL=0
+        for f in $(find nixhome -name '*.nix'); do
+          if sudo "$NIX_BIN/nix-instantiate" --parse "$f" >/dev/null 2>&1; then
+            echo "  OK   $f"
+          else
+            echo "  FAIL $f"
+            sudo "$NIX_BIN/nix-instantiate" --parse "$f" 2>&1 | grep 'error:' >&2
+            FAIL=1
+          fi
+        done
+        [ "$FAIL" -eq 0 ] || exit 1
+
+        echo ""
+        echo "=== 2/2 Attr check (nix eval, no build) ==="
+        ARCH=$(uname -m)
+        [ "$ARCH" = "aarch64" ] && SUFFIX="-aarch64" || SUFFIX=""
+        for profile in base go node python fullstack electronics ultimate; do
+          CFG="devcell-${profile}${SUFFIX}"
+          printf "  %-40s" "$CFG"
+          COUNT=$(sudo "$NIX_BIN/nix" eval \
+            "${FLAKE}#homeConfigurations.${CFG}.config.home.packages" \
+            --apply 'builtins.length' --json 2>/dev/null) \
+            && echo "OK ($COUNT packages)" \
+            || { echo "FAIL"; sudo "$NIX_BIN/nix" eval \
+              "${FLAKE}#homeConfigurations.${CFG}.config.home.packages" \
+              --apply 'builtins.length' --json 2>&1 | grep 'error:' >&2; exit 1; }
+        done
+        echo ""
+        echo "All profiles valid."
+
+  devcell:image:build:
+    desc: Build images into local Docker daemon (host platform only)
     silent: true
     cmds:
-      - echo "Building base image (devcell:latest)..."
-      - DOCKERFILE=Dockerfile IMAGE_TAG=latest docker compose -f {{.DEVCELL_DIR}}/compose.yml build {{.CLI_ARGS}}
-      - |
-        if [ -f "{{.DEVCELL_DIR}}/Dockerfile-local" ]; then
-          echo "Building local image (devcell:latest-local)..."
-          DOCKERFILE=Dockerfile-local IMAGE_TAG=latest-local docker compose -f {{.DEVCELL_DIR}}/compose.yml build {{.CLI_ARGS}}
-        else
-          echo "No Dockerfile-local found, skipping local build"
-        fi
+      - echo "Building local group (base-gui + ultimate) for host platform..."
+      - USER_UID=$(id -u) USER_GID=$(id -g) PLATFORMS="" docker buildx bake --file {{.DEVCELL_DIR}}/docker-bake.hcl --load local {{.CLI_ARGS}}
+
+  bake:local:
+    desc: Build local group into local Docker daemon (host platform only, no push)
+    silent: true
+    cmds:
+      - USER_UID=$(id -u) USER_GID=$(id -g) PLATFORMS="" docker buildx bake --file {{.DEVCELL_DIR}}/docker-bake.hcl --load local {{.CLI_ARGS}}
+
+  bake:ci:
+    desc: Build ci group and push to registry (multi-arch)
+    silent: true
+    cmds:
+      - docker buildx bake --file {{.DEVCELL_DIR}}/docker-bake.hcl --push ci {{.CLI_ARGS}}
 
   vagrant:destroy:
     desc: Destroy
@@ -265,6 +438,21 @@ tasks:
         echo ""
         vagrant box list
   
+
+  devcell:web:start:
+    desc: Start Astro dev server for the DevCell landing page
+    silent: true
+    dir: "{{.DEVCELL_DIR}}/web"
+    cmds:
+      - npm install
+      - npm run dev
+
+  devcell:test:
+    desc: Run the full container integration test suite
+    silent: true
+    dir: "{{.DEVCELL_DIR}}/test"
+    cmds:
+      - go test -v -timeout 120s ./... {{.CLI_ARGS}}
 
   ########################################################################################################################
   devcell:claude-json:backup:

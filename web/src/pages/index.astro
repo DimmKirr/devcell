@@ -1,0 +1,684 @@
+---
+const features = [
+  {
+    category: "AI Agents",
+    items: [
+      { name: "Claude Code", desc: "--dangerously-skip-permissions mode in an isolated container" },
+      { name: "GitHub Codex", desc: "OpenAI Codex CLI with correct environment and terminal support" },
+      { name: "OpenCode", desc: "Open-source coding agent with MCP server integration" },
+    ],
+  },
+  {
+    category: "Languages & Runtimes",
+    items: [
+      { name: "asdf", desc: "Node.js, Python 3.13, Go, Ruby — versions pinned via .tool-versions" },
+      { name: "Swift / Clang / LLVM", desc: "Full Apple toolchain available on Linux" },
+      { name: "Nix home-manager", desc: "Declarative environment profiles via nixhome/" },
+    ],
+  },
+  {
+    category: "Infrastructure",
+    items: [
+      { name: "Terraform / OpenTofu", desc: "IaC toolchain with OpenTofu MCP server" },
+      { name: "Docker & Compose", desc: "Docker CLI with Compose plugin" },
+      { name: "Vagrant / Packer", desc: "VM provisioning and image building" },
+    ],
+  },
+  {
+    category: "Electronics & IoT",
+    items: [
+      { name: "ESPHome", desc: "ESP microcontroller firmware configuration" },
+      { name: "Wokwi CLI", desc: "Circuit simulation without hardware" },
+      { name: "ngspice", desc: "SPICE circuit simulator" },
+    ],
+  },
+  {
+    category: "Desktop & GUI",
+    items: [
+      { name: "VNC", desc: "Full desktop environment accessible via VNC" },
+      { name: "X11 forwarding", desc: "GUI apps rendered on your host screen" },
+      { name: "Playwright MCP", desc: "Browser automation with secrets injection" },
+    ],
+  },
+  {
+    category: "Media & Docs",
+    items: [
+      { name: "ffmpeg / ImageMagick", desc: "Media processing" },
+      { name: "Slidev", desc: "Markdown-based presentations" },
+      { name: "yt-dlp", desc: "Video downloader" },
+    ],
+  },
+];
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="icon" type="image/svg+xml" href="/devcell/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="generator" content={Astro.generator} />
+    <meta name="description" content="DevCell — Containerized environment for running Claude Code and other AI agents with full toolchain support." />
+    <title>DevCell</title>
+    <style>
+      :root {
+        --black: #111111;
+        --white: #ffffff;
+        --bg: #ffffff;
+        --bg-muted: #F5F5F2;
+        --accent: #C8FF00;
+        --border: 2.5px solid #111111;
+        --shadow: 4px 4px 0 #111111;
+        --shadow-lg: 6px 6px 0 #111111;
+        --font-mono: 'Courier New', Courier, monospace;
+        --font-sans: 'Arial Black', 'Arial Bold', Arial, sans-serif;
+      }
+
+      *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+      html { scroll-behavior: smooth; }
+
+      body {
+        font-family: var(--font-sans);
+        background: var(--bg);
+        color: var(--black);
+        line-height: 1.4;
+        overflow-x: hidden;
+      }
+
+      /* HEADER */
+      header {
+        background: var(--white);
+        border-bottom: var(--border);
+        padding: 1rem 2rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        position: sticky;
+        top: 0;
+        z-index: 100;
+      }
+
+      .logo {
+        font-family: var(--font-mono);
+        font-size: 1.3rem;
+        font-weight: 900;
+        letter-spacing: -1px;
+        color: var(--black);
+      }
+
+      .logo-accent { background: var(--accent); padding: 0 3px; }
+
+      nav a {
+        color: var(--black);
+        text-decoration: none;
+        font-size: 0.78rem;
+        font-weight: 900;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        margin-left: 1.75rem;
+        border-bottom: 2px solid transparent;
+        padding-bottom: 2px;
+        transition: border-color 0.1s;
+      }
+
+      nav a:hover { border-bottom-color: var(--black); }
+
+      /* HERO */
+      .hero-wrap { border-bottom: var(--border); }
+
+      .hero {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 4rem 2rem 3rem;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 4rem;
+        align-items: center;
+      }
+
+      @media (max-width: 768px) {
+        .hero { grid-template-columns: 1fr; padding: 3rem 1.5rem; gap: 2.5rem; }
+      }
+
+      .hero-eyebrow {
+        font-family: var(--font-mono);
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 2px;
+        color: #888;
+        margin-bottom: 1.25rem;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+      }
+
+      .hero-eyebrow::before {
+        content: '';
+        display: inline-block;
+        width: 1.5rem;
+        height: 2px;
+        background: #888;
+      }
+
+      h1 {
+        font-size: clamp(2.8rem, 6vw, 5rem);
+        font-weight: 900;
+        line-height: 1.05;
+        letter-spacing: -2px;
+        text-transform: uppercase;
+        margin-bottom: 1.5rem;
+      }
+
+      h1 .hl { background: var(--accent); padding: 0 0.1em; }
+
+      .hero-desc {
+        font-family: var(--font-mono);
+        font-size: 0.95rem;
+        line-height: 1.75;
+        color: #444;
+        margin-bottom: 2rem;
+        max-width: 460px;
+      }
+
+      .hero-actions { display: flex; gap: 0.75rem; flex-wrap: wrap; }
+
+      .btn {
+        display: inline-block;
+        padding: 0.75rem 1.5rem;
+        font-size: 0.78rem;
+        font-weight: 900;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        text-decoration: none;
+        border: var(--border);
+        box-shadow: var(--shadow);
+        transition: transform 0.1s, box-shadow 0.1s;
+      }
+
+      .btn:hover { transform: translate(-2px, -2px); box-shadow: 6px 6px 0 #111; }
+      .btn:active { transform: translate(2px, 2px); box-shadow: 2px 2px 0 #111; }
+      .btn-primary { background: var(--black); color: var(--white); }
+      .btn-secondary { background: var(--white); color: var(--black); }
+
+      /* TERMINAL */
+      .terminal {
+        background: #0D0D0D;
+        font-family: var(--font-mono);
+        font-size: 0.82rem;
+        padding: 1.25rem 1.5rem;
+        border: var(--border);
+        box-shadow: var(--shadow-lg);
+        line-height: 1.9;
+      }
+
+      .terminal-bar {
+        display: flex;
+        gap: 6px;
+        margin-bottom: 1rem;
+        padding-bottom: 0.75rem;
+        border-bottom: 1px solid #222;
+      }
+
+      .dot { width: 11px; height: 11px; border-radius: 50%; }
+      .dot-r { background: #FF5F57; }
+      .dot-y { background: #FFBD2E; }
+      .dot-g { background: #28CA41; }
+
+      .t-path { color: #5F8AFF; }
+      .t-branch { color: #C678DD; }
+      .t-cmd { color: #E5E5E5; }
+      .t-ok { color: #98C379; }
+      .t-dim { color: #555; }
+      .t-cursor { color: var(--accent); animation: blink 1s step-end infinite; }
+      @keyframes blink { 50% { opacity: 0; } }
+
+      /* SECTION */
+      section { max-width: 1200px; margin: 0 auto; padding: 3rem 2rem; }
+
+      .section-label {
+        font-family: var(--font-mono);
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        letter-spacing: 2px;
+        color: #888;
+        margin-bottom: 0.6rem;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+      }
+
+      .section-label::before {
+        content: '';
+        display: inline-block;
+        width: 1rem;
+        height: 2px;
+        background: #888;
+      }
+
+      h2 {
+        font-size: clamp(1.6rem, 3.5vw, 2.4rem);
+        font-weight: 900;
+        text-transform: uppercase;
+        letter-spacing: -1px;
+        margin-bottom: 2.5rem;
+        border-bottom: var(--border);
+        padding-bottom: 0.75rem;
+      }
+
+      /* WHAT IT DOES */
+      .does-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        border: var(--border);
+        box-shadow: var(--shadow-lg);
+      }
+
+      @media (max-width: 900px) { .does-grid { grid-template-columns: 1fr; } }
+
+      .does-card {
+        padding: 1.75rem;
+        border-right: var(--border);
+        border-bottom: var(--border);
+        background: var(--white);
+        transition: background 0.12s;
+      }
+
+      .does-card:nth-child(3n) { border-right: none; }
+      .does-card:nth-last-child(-n+3) { border-bottom: none; }
+      .does-card:hover { background: var(--accent); }
+
+      .does-card h3 {
+        font-size: 0.85rem;
+        font-weight: 900;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-bottom: 0.6rem;
+      }
+
+      .does-card p {
+        font-family: var(--font-mono);
+        font-size: 0.8rem;
+        color: #444;
+        line-height: 1.65;
+      }
+
+      .does-card p code {
+        background: #EFEFEF;
+        border: 1.5px solid var(--black);
+        padding: 0.1em 0.3em;
+        font-size: 0.9em;
+      }
+
+      /* FEATURES */
+      .features-wrap {
+        background: var(--bg-muted);
+        border-top: var(--border);
+        border-bottom: var(--border);
+      }
+
+      .features-grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 1.25rem;
+      }
+
+      @media (max-width: 768px) { .features-grid { grid-template-columns: 1fr; } }
+
+      .feat-group {
+        background: var(--white);
+        border: var(--border);
+        box-shadow: var(--shadow);
+        overflow: hidden;
+        transition: transform 0.1s, box-shadow 0.1s;
+      }
+
+      .feat-group:hover { transform: translate(-2px, -2px); box-shadow: var(--shadow-lg); }
+
+      .feat-header {
+        background: var(--black);
+        color: var(--white);
+        padding: 0.65rem 1.1rem;
+        font-size: 0.72rem;
+        font-weight: 900;
+        text-transform: uppercase;
+        letter-spacing: 1.5px;
+      }
+
+      .feat-items { list-style: none; }
+
+      .feat-item {
+        padding: 0.85rem 1.1rem;
+        border-bottom: 1px solid #CCCCCC;
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 0.75rem;
+        align-items: start;
+      }
+
+      .feat-item:last-child { border-bottom: none; }
+
+      .feat-bullet {
+        width: 6px;
+        height: 6px;
+        background: var(--black);
+        margin-top: 6px;
+        flex-shrink: 0;
+      }
+
+      .feat-name { font-size: 0.83rem; font-weight: 900; margin-bottom: 0.15rem; }
+
+      .feat-desc {
+        font-family: var(--font-mono);
+        font-size: 0.74rem;
+        color: #666;
+        line-height: 1.5;
+      }
+
+      /* QUICKSTART */
+      .qs-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 2.5rem;
+        align-items: start;
+      }
+
+      @media (max-width: 768px) { .qs-grid { grid-template-columns: 1fr; } }
+
+      .steps { list-style: none; }
+
+      .step {
+        display: flex;
+        gap: 1.1rem;
+        margin-bottom: 1.5rem;
+        align-items: start;
+      }
+
+      .step-num {
+        background: var(--accent);
+        border: var(--border);
+        box-shadow: 3px 3px 0 #111;
+        width: 2.2rem;
+        height: 2.2rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 900;
+        font-size: 0.88rem;
+        font-family: var(--font-mono);
+        flex-shrink: 0;
+      }
+
+      .step h4 {
+        font-size: 0.82rem;
+        font-weight: 900;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-bottom: 0.3rem;
+      }
+
+      .step p {
+        font-family: var(--font-mono);
+        font-size: 0.78rem;
+        color: #555;
+        line-height: 1.6;
+      }
+
+      .step p code {
+        background: #EFEFEF;
+        border: 1.5px solid var(--black);
+        padding: 0.1em 0.3em;
+        font-size: 0.9em;
+      }
+
+      /* CODE BLOCK */
+      .code-block {
+        background: #0D0D0D;
+        color: var(--accent);
+        font-family: var(--font-mono);
+        font-size: 0.8rem;
+        padding: 1.4rem 1.5rem;
+        border: var(--border);
+        box-shadow: var(--shadow);
+        line-height: 1.9;
+        overflow-x: auto;
+        margin-bottom: 1.25rem;
+      }
+
+      .code-block .line { display: block; }
+      .code-block .gap { display: block; height: 0.35rem; }
+      .code-block .cmt { color: #444; }
+      .code-block .cmd { color: #E5E5E5; }
+      .code-block .arg { color: var(--accent); }
+
+      /* NOTE */
+      .note {
+        border: var(--border);
+        background: var(--bg-muted);
+        box-shadow: var(--shadow);
+        padding: 1.1rem 1.25rem;
+        font-family: var(--font-mono);
+        font-size: 0.78rem;
+        line-height: 1.65;
+        color: #444;
+      }
+
+      .note strong {
+        font-family: var(--font-sans);
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        display: block;
+        margin-bottom: 0.35rem;
+        color: var(--black);
+      }
+
+      .note code {
+        background: #E8E8E8;
+        border: 1.5px solid var(--black);
+        padding: 0.1em 0.3em;
+        font-size: 0.9em;
+      }
+
+      /* FOOTER */
+      footer {
+        background: var(--black);
+        color: #AAAAAA;
+        border-top: var(--border);
+        padding: 1.5rem 2rem;
+        font-family: var(--font-mono);
+        font-size: 0.76rem;
+      }
+
+      .footer-inner {
+        max-width: 1200px;
+        margin: 0 auto;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 1rem;
+        flex-wrap: wrap;
+      }
+
+      footer a { color: var(--accent); text-decoration: none; }
+      footer a:hover { text-decoration: underline; }
+    </style>
+  </head>
+  <body>
+
+    <header>
+      <div class="logo">dev<span class="logo-accent">cell</span></div>
+      <nav>
+        <a href="#what">What it does</a>
+        <a href="#features">Features</a>
+        <a href="#quickstart">Quickstart</a>
+        <a href="https://github.com/DimmKirr/devcell">GitHub</a>
+      </nav>
+    </header>
+
+    <div class="hero-wrap">
+      <div class="hero">
+        <div>
+          <p class="hero-eyebrow">MIT License · Open Source</p>
+          <h1>Container<br/>for AI<br/><span class="hl">agents</span></h1>
+          <p class="hero-desc">
+            Run Claude Code, Codex, and similar tools with full permissions
+            inside an isolated Debian container. Your host filesystem is mounted;
+            nothing else is exposed.
+          </p>
+          <div class="hero-actions">
+            <a href="https://github.com/DimmKirr/devcell" class="btn btn-primary">View on GitHub →</a>
+            <a href="#quickstart" class="btn btn-secondary">Quickstart</a>
+          </div>
+        </div>
+
+        <div class="terminal">
+          <div class="terminal-bar">
+            <span class="dot dot-r"></span>
+            <span class="dot dot-y"></span>
+            <span class="dot dot-g"></span>
+          </div>
+          <div><span class="t-path">~/myproject</span> <span class="t-dim">on</span> <span class="t-branch">main</span></div>
+          <div><span class="t-cmd">$ task claude</span></div>
+          <div class="t-dim">starting container...</div>
+          <div><span class="t-ok">✔</span> <span class="t-dim">home-manager switch done</span></div>
+          <div><span class="t-ok">✔</span> <span class="t-dim">go node python loaded</span></div>
+          <div class="t-dim">──────────────────────────</div>
+          <div><span class="t-cmd">$ claude --dangerously-skip-permissions</span></div>
+          <div><span class="t-ok">Claude Code</span> <span class="t-dim">ready in /workspace</span></div>
+          <div><span class="t-cursor">▌</span></div>
+        </div>
+      </div>
+    </div>
+
+    <section id="what">
+      <p class="section-label">Overview</p>
+      <h2>What it does</h2>
+      <div class="does-grid">
+        <div class="does-card">
+          <h3>Isolated execution</h3>
+          <p>Runs AI agents with <code>--dangerously-skip-permissions</code> inside Docker. The agent can modify files freely; your host is not affected.</p>
+        </div>
+        <div class="does-card">
+          <h3>Full toolchain</h3>
+          <p>Debian Trixie base with Go, Node, Python, asdf, Docker CLI, Terraform, and more pre-installed. No extra setup to start.</p>
+        </div>
+        <div class="does-card">
+          <h3>Reproducible via Nix</h3>
+          <p>Home-manager profiles in <code>nixhome/</code> define the exact environment. Switch profiles at build time.</p>
+        </div>
+        <div class="does-card">
+          <h3>GUI & desktop</h3>
+          <p>VNC and X11 forwarding for running browsers and GUI tools inside the container — useful for Playwright and visual debugging.</p>
+        </div>
+        <div class="does-card">
+          <h3>macOS support</h3>
+          <p>Vagrant-based macOS VM for Xcode and Apple toolchain. Managed through the same Taskfile interface.</p>
+        </div>
+        <div class="does-card">
+          <h3>Local overrides</h3>
+          <p><code>Dockerfile-local</code>, <code>compose.local.yml</code>, and similar files let you extend without modifying shared config.</p>
+        </div>
+      </div>
+    </section>
+
+    <div class="features-wrap" id="features">
+      <section>
+        <p class="section-label">Included packages</p>
+        <h2>Feature set</h2>
+        <div class="features-grid">
+          {features.map((group) => (
+            <div class="feat-group">
+              <div class="feat-header">{group.category}</div>
+              <ul class="feat-items">
+                {group.items.map((item) => (
+                  <li class="feat-item">
+                    <span class="feat-bullet"></span>
+                    <div>
+                      <div class="feat-name">{item.name}</div>
+                      <div class="feat-desc">{item.desc}</div>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+      </section>
+    </div>
+
+    <section id="quickstart">
+      <p class="section-label">Getting started</p>
+      <h2>Quickstart</h2>
+      <div class="qs-grid">
+        <ol class="steps">
+          <li class="step">
+            <span class="step-num">1</span>
+            <div>
+              <h4>Prerequisites</h4>
+              <p><code>docker</code>, <code>task</code> (Taskfile), and an API key for the agent you want to run.</p>
+            </div>
+          </li>
+          <li class="step">
+            <span class="step-num">2</span>
+            <div>
+              <h4>Clone & configure</h4>
+              <p>Copy the example files and edit <code>.env</code> with your keys. See README for all options.</p>
+            </div>
+          </li>
+          <li class="step">
+            <span class="step-num">3</span>
+            <div>
+              <h4>Build the image</h4>
+              <p>Run <code>task image:build</code>. Profiles: <code>base</code>, <code>extended</code>, <code>ultimate</code>.</p>
+            </div>
+          </li>
+          <li class="step">
+            <span class="step-num">4</span>
+            <div>
+              <h4>Run in any repo</h4>
+              <p>Navigate to a project and run <code>task claude</code> or <code>task codex</code>. Working directory is mounted automatically.</p>
+            </div>
+          </li>
+        </ol>
+
+        <div>
+          <div class="code-block">
+            <span class="line"><span class="cmt"># clone</span></span>
+            <span class="line"><span class="cmd">git clone</span> <span class="arg">github.com/DimmKirr/devcell</span> ~/dev/devcell</span>
+            <span class="gap"></span>
+            <span class="line"><span class="cmt"># configure</span></span>
+            <span class="line"><span class="cmd">cd</span> ~/dev/devcell</span>
+            <span class="line"><span class="cmd">cp</span> .env-example .env</span>
+            <span class="line"><span class="cmd">cp</span> compose.local-example.yml compose.local.yml</span>
+            <span class="gap"></span>
+            <span class="line"><span class="cmt"># build</span></span>
+            <span class="line"><span class="cmd">task</span> <span class="arg">image:build</span></span>
+            <span class="gap"></span>
+            <span class="line"><span class="cmt"># run from any project</span></span>
+            <span class="line"><span class="cmd">cd</span> ~/dev/my-project</span>
+            <span class="line"><span class="cmd">task</span> <span class="arg">-t ~/dev/devcell/Taskfile.yml claude</span></span>
+          </div>
+
+          <div class="note">
+            <strong>Tip</strong>
+            Set <code>DEVCELL_DIR=~/dev/devcell</code> in your shell profile and symlink the Taskfile one level above your repos — then it's just <code>task claude</code> from anywhere.
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <footer>
+      <div class="footer-inner">
+        <span>devcell — MIT License</span>
+        <span>
+          <a href="https://github.com/DimmKirr/devcell">GitHub</a>
+          &nbsp;·&nbsp;
+          <a href="https://github.com/DimmKirr/devcell/issues">Issues</a>
+          &nbsp;·&nbsp;
+          <a href="https://github.com/DimmKirr/devcell/releases">Releases</a>
+        </span>
+      </div>
+    </footer>
+
+  </body>
+</html>

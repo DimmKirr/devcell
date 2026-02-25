@@ -6,24 +6,20 @@
 # This way it would keep unique claude json history
 services:
   cell:
-    image: ghcr.io/dimmkirr/devcell:${IMAGE_TAG:-latest}
+    image: ghcr.io/dimmkirr/devcell:${IMAGE_TAG:-latest-ultimate}
     build:
       context: .
       dockerfile: ${DOCKERFILE:-Dockerfile}
       args:
-        USER_NAME: ${USER}
         USER_UID: 501
         USER_GID: 20
-
-        # User Options, set in .env
-        DEVCELL_GUI_ENABLED: ${DEVCELL_GUI_ENABLED:-true}
-        DEVCELL_NIX_ENABLED: ${DEVCELL_NIX_ENABLED:-true}
-        DEVCELL_KICAD_ENABLED: ${DEVCELL_KICAD_ENABLED:-false}
+    user: "0"  # Start as root; entrypoint creates HOST_USER then drops via gosu
     group_add:
       - "0"  # Docker MacOS passthrough
 
     working_dir: /${APP_NAME:-app}
     container_name: devcell-${APP_NAME:-app}
+    hostname: cell-${APP_NAME:-app}
     volumes:
       # Mount BASE_DIR under the same path
       - ${BASE_DIR}:/${BASE_DIR}
@@ -40,17 +36,24 @@ services:
       - ${CELL_HOME}/:/home/${USER}/
       - ${HOME:-}/.claude/commands:/home/${USER}/.claude/commands:ro # Host-based commands
       - ${HOME:-}/.claude/agents:/home/${USER}/.claude/agents:ro # Host-based agents
+      - ${HOME:-}/.claude/skills:/home/${USER}/.claude/skills # Host-based skills
+
+    env_file:
+      - path: ${USER_WORKING_DIR}/.env
+        required: false
 
     environment:
       APP_NAME: ${APP_NAME:-app}
+      HOST_USER: ${USER:-devcell}
+      HOME: /home/${USER:-devcell}
       IS_SANDBOX: 1
       WORKSPACE: /${APP_NAME:-app}
-      DEVCELL_GUI_ENABLED: ${DEVCELL_GUI_ENABLED:-false}
-
       TERM: ${TERM}
+
       EXT_VNC_PORT: "${EXT_VNC_PORT}"
 
-      HISTFILE: /home/${USER}/zsh_history_${APP_NAME}
+      HISTFILE: /home/${USER:-devcell}/zsh_history_${APP_NAME}
+      TMPDIR: /home/${USER:-devcell}/tmp # Needed for Claude Code skills https://github.com/anthropics/claude-code/issues/18115
 
       CODEX_OSS_BASE_URL: "${CODEX_OSS_BASE_URL:-http://host.docker.internal:1234/v1}"
 
