@@ -4,7 +4,7 @@
   "description": "npm tools for devcell",
   "private": true,
   "dependencies": {
-    "@anthropic-ai/claude-code": "2.0.76",
+    "@anthropic-ai/claude-code": "2.1.49",
     "@openai/codex": "^0.96.0",
     "@opentofu/opentofu-mcp-server": "^0.1.5",
     "@playwright/mcp": "^0.0.64",

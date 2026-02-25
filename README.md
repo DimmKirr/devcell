@@ -155,6 +155,47 @@ dependencies = [
 ]
 ```
 
-Both files are merged with their base files during `task build` using `jq` (JSON) and `yq` (TOML).
+Both files are merged with their base files during `task image:build` using `jq` (JSON) and `yq` (TOML).
 
-After modifying, rebuild the container with `task build`.
+After modifying, rebuild the container with `task image:build`.
+
+## Testing
+
+### Container integration tests (testcontainers-go)
+
+Tests start a real container and verify behavior from outside. Requires Docker.
+
+```bash
+# Run against the prebuilt image (default: ghcr.io/dimmkirr/devcell:latest-ultimate)
+task devcell:test
+
+# Run against a locally built image
+DEVCELL_IMAGE=ghcr.io/dimmkirr/devcell:edge task devcell:test
+```
+
+Tests are organised by concern — environment, toolchain, and MCP servers — one file per area.
+
+### In-container MCP protocol test
+
+Tests playwright-mcp's `--secrets` substitution mechanism end-to-end.
+Run inside a running devcell container:
+
+```bash
+MCP_SECRET_TEST_PASSWORD=hello123 node .context/test-secrets.js
+```
+
+## Building Locally
+
+To build the image for your local Docker daemon (host platform only):
+
+```bash
+# From the devcell repo directory:
+task image:build
+
+# Or if running from a different directory:
+DEVCELL_DIR=~/dev/devcell task image:build
+```
+
+This builds only the `ultimate` target (the default for local use) for the current host platform and loads it into the local Docker daemon. The `PLATFORMS` variable is intentionally left empty so Docker uses the host platform automatically — no multi-platform builder required.
+
+For CI/release builds targeting multiple platforms, use `task image:push` or invoke `docker buildx bake` directly with the appropriate `PLATFORMS` override.
