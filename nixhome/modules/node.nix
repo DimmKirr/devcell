@@ -4,6 +4,7 @@
 {pkgs, ...}: {
   programs.asdf = {
     enable = true;
+    autoInstall = true;
     nodejs = {
       enable = true;
       defaultVersion = "24.13.1";

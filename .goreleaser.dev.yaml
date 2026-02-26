@@ -1,0 +1,72 @@
+version: 2
+
+project_name: cell
+
+builds:
+  - id: cell
+    main: ./cmd
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+        -X 'github.com/DimmKirr/devcell/internal/version.Version={{.Version}}'
+        -X 'github.com/DimmKirr/devcell/internal/version.GitCommit={{.Env.SHORT_SHA}}'
+
+archives:
+  - id: release_archive
+    name_template: "{{ .ProjectName }}-{{ .Os }}-{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+
+release:
+  github:
+    owner: DimmKirr
+    name: devcell
+  draft: true
+  replace_existing_draft: true
+  make_latest: false
+
+checksum:
+  name_template: "{{ .ProjectName }}-checksums.txt"
+
+homebrew_casks:
+  - name: cell-dev
+    repository:
+      owner: DimmKirr
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Casks
+    url:
+      template: "https://github.com/DimmKirr/devcell/releases/download/{{ .Tag }}/{{ .ArtifactName }}"
+    commit_author:
+      name: Dmitry Kireev
+      email: dmitry@atd.sh
+    homepage: "https://github.com/DimmKirr/devcell"
+    description: "Run AI coding agents in a consistent Docker dev environment (dev build)"
+    conflicts:
+      - cask: cell
+    binaries: ["cell"]
+
+  - name: "cell-dev@{{ .Version }}"
+    repository:
+      owner: DimmKirr
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Casks
+    url:
+      template: "https://github.com/DimmKirr/devcell/releases/download/{{ .Tag }}/{{ .ArtifactName }}"
+    commit_author:
+      name: Dmitry Kireev
+      email: dmitry@atd.sh
+    homepage: "https://github.com/DimmKirr/devcell"
+    description: "Run AI coding agents in a consistent Docker dev environment (dev build)"
+    conflicts:
+      - cask: cell
+    binaries: ["cell"]

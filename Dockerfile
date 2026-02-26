@@ -4,7 +4,7 @@
 # Stage: apt-repo-setup
 # Adds Docker's APT repo. Isolated for layer caching.
 ###############################################################################
-FROM public.ecr.aws/docker/library/debian:trixie AS apt-repo-setup
+FROM public.ecr.aws/docker/library/debian:trixie-slim AS apt-repo-setup
 
 RUN apt-get update && apt-get install -y \
       gpg \
@@ -129,19 +129,6 @@ RUN ARCH=$(uname -m) && \
 
 ENV DEVCELL_PROFILE=devcell-go
 
-# tfplugindocs v0.24.0 — not in nixpkgs; install from GitHub release binary
-USER root
-RUN ARCH=$(uname -m) && \
-    [ "$ARCH" = "aarch64" ] && LARCH="arm64" || LARCH="amd64" && \
-    curl -sSfL "https://github.com/hashicorp/terraform-plugin-docs/releases/download/v0.24.0/tfplugindocs_0.24.0_linux_${LARCH}.zip" \
-         -o /tmp/tfplugindocs.zip && \
-    mkdir -p /tmp/tfplugindocs-extract && \
-    unzip -o /tmp/tfplugindocs.zip -d /tmp/tfplugindocs-extract && \
-    find /tmp/tfplugindocs-extract -name tfplugindocs -type f -exec mv {} /usr/local/bin/ \; && \
-    chmod +x /usr/local/bin/tfplugindocs && \
-    rm -rf /tmp/tfplugindocs.zip /tmp/tfplugindocs-extract
-USER ${USER_UID}:${USER_GID}
-
 ###############################################################################
 # Stage: node
 # devcell-node profile: Node.js + npm project tools only.
@@ -160,9 +147,6 @@ RUN ARCH=$(uname -m) && \
     $HOME/.nix-profile/bin/asdf reshim
 
 ENV DEVCELL_PROFILE=devcell-node
-COPY --chown=${USER_UID}:${USER_GID} package.json package-lock.json* /opt/npm-tools/
-RUN cd /opt/npm-tools/ && npm install
-ENV PATH="/opt/npm-tools/node_modules/.bin:${PATH}"
 
 ###############################################################################
 # Stage: python
@@ -226,20 +210,7 @@ RUN ARCH=$(uname -m) && \
 
 ENV DEVCELL_PROFILE=devcell-fullstack
 
-# tfplugindocs v0.24.0 — not in nixpkgs; install from GitHub release binary
-USER root
-RUN ARCH=$(uname -m) && \
-    [ "$ARCH" = "aarch64" ] && LARCH="arm64" || LARCH="amd64" && \
-    curl -sSfL "https://github.com/hashicorp/terraform-plugin-docs/releases/download/v0.24.0/tfplugindocs_0.24.0_linux_${LARCH}.zip" \
-         -o /tmp/tfplugindocs.zip && \
-    mkdir -p /tmp/tfplugindocs-extract && \
-    unzip -o /tmp/tfplugindocs.zip -d /tmp/tfplugindocs-extract && \
-    find /tmp/tfplugindocs-extract -name tfplugindocs -type f -exec mv {} /usr/local/bin/ \; && \
-    chmod +x /usr/local/bin/tfplugindocs && \
-    rm -rf /tmp/tfplugindocs.zip /tmp/tfplugindocs-extract
-USER ${USER_UID}:${USER_GID}
-
-# npm tools (project-specific, not in nixpkgs)
+# Agent CLI tools (npm) — requires Node.js from asdf above
 COPY --chown=${USER_UID}:${USER_GID} package.json package-lock.json* /opt/npm-tools/
 RUN cd /opt/npm-tools/ && npm install
 ENV PATH="/opt/npm-tools/node_modules/.bin:${PATH}"
@@ -250,9 +221,6 @@ SHELL ["/bin/bash", "-c"]
 RUN cd /opt/python-tools && uv sync
 SHELL ["/bin/sh", "-c"]
 ENV PATH="/opt/python-tools/.venv/bin:${PATH}"
-
-# OpenCode config
-COPY opencode-local.json /opt/devcell/opencode.json
 
 # Playwright runtime env
 ENV PLAYWRIGHT_MCP_BROWSER=chromium

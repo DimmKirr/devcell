@@ -61,7 +61,6 @@ target "nix" {
   tags = [
     "${REGISTRY}:${VERSION}-nix",
     "${REGISTRY}:${VERSION}",
-    "${REGISTRY}:latest",
   ]
   cache-from = ["type=gha,scope=nix"]
   cache-to   = ["type=gha,mode=max,scope=nix"]
@@ -120,7 +119,6 @@ target "fullstack" {
   platforms  = split(",", PLATFORMS)
   tags = [
     "${REGISTRY}:${VERSION}-fullstack",
-    "${REGISTRY}:latest-fullstack",
   ]
   cache-from = ["type=gha,scope=fullstack"]
   cache-to   = ["type=gha,mode=max,scope=fullstack"]
@@ -135,7 +133,6 @@ target "ultimate" {
   platforms  = split(",", PLATFORMS)
   tags = [
     "${REGISTRY}:${VERSION}-ultimate",
-    "${REGISTRY}:latest-ultimate",
   ]
   cache-from = ["type=gha,scope=ultimate"]
   cache-to   = ["type=gha,mode=max,scope=ultimate"]
@@ -145,23 +142,17 @@ target "ultimate" {
 
 # default: what `docker buildx bake` builds with no arguments
 group "default" {
-  targets = ["nix", "fullstack"]
+  targets = ["nix"]
 }
 
 # ci: PR and push-to-main builds
 group "ci" {
-  targets = ["nix", "fullstack"]
+  targets = ["nix", "ultimate"]
 }
 
 # release: all published variants for a tagged release
 group "release" {
-  targets = [
-    "nix",
-    "go", "node", "python",
-    "electronics",
-    "fullstack",
-    "ultimate",
-  ]
+  targets = ["nix"]
 }
 
 # local: load into local Docker daemon (no push, no multi-arch)

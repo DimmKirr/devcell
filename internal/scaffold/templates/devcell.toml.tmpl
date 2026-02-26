@@ -1,0 +1,31 @@
+# ~/.config/devcell/devcell.toml
+# Global DevCell configuration. Project-level overrides go in <project>/.devcell.toml
+
+[cell]
+# Override the default image tag (default: latest-ultimate)
+# image_tag = "latest-go"
+# Enable GUI (Xvfb + VNC + browser). Injects DEVCELL_GUI_ENABLED=true.
+gui = true
+
+[env]
+# Extra environment variables forwarded into the container.
+# ANTHROPIC_BASE_URL = "http://host.docker.internal:8080"
+# MY_TOKEN = "abc123"
+
+# [[volumes]]
+# Extra volume mounts appended to docker run.
+# mount = "~/work/secrets:/run/secrets:ro"
+
+[packages.npm]
+# npm packages installed in the container. Edit and run 'cell build'.
+"@anthropic-ai/claude-code" = "2.1.49"
+"@openai/codex" = "^0.96.0"
+"@opentofu/opentofu-mcp-server" = "^0.1.5"
+"@playwright/mcp" = "^0.0.64"
+"@playwright/test" = "^1.57.0"
+"@slidev/cli" = "^52.11.0"
+"opencode-ai" = "^1.1.51"
+
+[packages.python]
+# Python packages installed in the container. Edit and run 'cell build'.
+"pre-commit" = "*"

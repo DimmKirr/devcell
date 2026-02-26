@@ -1,0 +1,11 @@
+{
+  description = "DevCell user profile — customise and run 'cell build'";
+
+  inputs.devcell.url = "github:DimmKirr/devcell/{{VERSION}}?dir=nixhome";
+
+  outputs = { self, devcell, ... }: {
+    # Re-export upstream home-manager configurations.
+    # To add your own packages, override or extend a configuration here.
+    homeConfigurations = devcell.homeConfigurations;
+  };
+}

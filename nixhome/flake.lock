@@ -15,11 +15,11 @@
         "plugin-skaffold": "plugin-skaffold"
       },
       "locked": {
-        "lastModified": 1771924992,
-        "narHash": "sha256-x0oeclvsJkTTttRE2iwTT6HWva4fuK7ia739Bs3KpcI=",
+        "lastModified": 1772122060,
+        "narHash": "sha256-hEe7Dr1T5LcgS2r8K12y8xiqUdv55Zp8/6lKPLJjfYU=",
         "owner": "DimmKirr",
         "repo": "nix-asdf",
-        "rev": "ef45cfe2c56236d4a040e6011cbb3239abba61c1",
+        "rev": "9a01b9d0f00c7c8a3f8d005cf10879701b1a1da8",
         "type": "github"
       },
       "original": {
