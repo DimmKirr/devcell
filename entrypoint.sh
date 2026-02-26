@@ -10,9 +10,17 @@ HOST_USER="${HOST_USER:-devcell}"
 export USER="$HOST_USER"
 export HOME="/home/$HOST_USER"
 
+# ── Verbose logging — only active when DEVCELL_DEBUG=true ─────────────────────
+# Default is silent so containers launched without the flag stay quiet.
+if [ "${DEVCELL_DEBUG:-false}" = "true" ]; then
+    log() { echo "$@"; }
+else
+    log() { :; }
+fi
+
 # ── Create session user if needed ─────────────────────────────────────────────
 if ! id "$HOST_USER" &>/dev/null; then
-    useradd -m -s /bin/zsh "$HOST_USER"
+    useradd -m -s /bin/zsh "$HOST_USER" 2>/dev/null
     echo "$HOST_USER ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 fi
 
@@ -40,7 +48,7 @@ for file in .bashrc .zshrc .profile; do
     fi
 done
 
-for file in opencode.json .asdfrc .tool-versions; do
+for file in .asdfrc .tool-versions; do
     [ -e "$DEVCELL_HOME/$file" ] && [ ! -e "$HOME/$file" ] \
         && cp -r "$DEVCELL_HOME/$file" "$HOME/$file" && chown -R "$HOST_USER" "$HOME/$file"
 done
@@ -57,15 +65,15 @@ merge_claude_settings() {
     [ -f "$template_file" ] || return 1
     mkdir -p "$(dirname "$target_file")"
     if [ ! -f "$target_file" ]; then
-        echo "Creating Claude settings from template"
+        log "Creating Claude settings from template"
         cp "$template_file" "$target_file"
         return 0
     fi
     local backup_file="${target_file}.backup-$(date +%Y%m%d-%H%M%S)"
     cp "$target_file" "$backup_file"
-    echo "✓ Created backup: $(basename "$backup_file")"
+    log "✓ Created backup: $(basename "$backup_file")"
     ls -t "${target_file}.backup-"* 2>/dev/null | tail -n +6 | xargs rm -f 2>/dev/null || true
-    echo "Merging Claude settings (preserving existing configuration)"
+    log "Merging Claude settings (preserving existing configuration)"
     local temp_file=$(mktemp)
     jq -s '
       if .[0].hooks.PermissionRequest then .[0]
@@ -75,12 +83,26 @@ merge_claude_settings() {
     if [ $? -eq 0 ] && [ -s "$temp_file" ] && jq empty "$temp_file" 2>/dev/null; then
         mv "$temp_file" "$target_file"
         grep -q "PermissionRequest" "$target_file" \
-            && echo "✓ Claude settings updated (PermissionRequest hook configured)" \
-            || echo "✓ Claude settings preserved (custom PermissionRequest hook detected)"
+            && log "✓ Claude settings updated (PermissionRequest hook configured)" \
+            || log "✓ Claude settings preserved (custom PermissionRequest hook detected)"
     else
         echo "⚠ Failed to merge Claude settings, restoring from backup"
         cp "$backup_file" "$target_file"
         rm -f "$temp_file"
+    fi
+}
+
+merge_claude_nix() {
+    local nix_hooks_dir="/etc/claude-code/hooks"
+    local nix_settings="/etc/claude-code/nix-settings.json"
+    if [ -d "$nix_hooks_dir" ] && [ -n "$(ls -A "$nix_hooks_dir" 2>/dev/null)" ]; then
+        mkdir -p "$HOME/.claude/hooks"
+        cp -r "$nix_hooks_dir/"* "$HOME/.claude/hooks/" 2>/dev/null || true
+        find "$HOME/.claude/hooks" -type f -name "*.sh" -exec chmod +x {} \; 2>/dev/null || true
+        log "✓ Claude hooks installed from nix"
+    fi
+    if [ -f "$nix_settings" ]; then
+        merge_claude_settings "$nix_settings" "$HOME/.claude/settings.json"
     fi
 }
 
@@ -104,13 +126,13 @@ merge_claude_mcp() {
 
     # Fresh start — no existing ~/.claude.json.
     if [ ! -f "$target_file" ]; then
-        echo "Creating ~/.claude.json with nix MCP servers"
+        log "Creating ~/.claude.json with nix MCP servers"
         local temp_file
         temp_file=$(mktemp)
         jq '{mcpServers: (.mcpServers // {})}' "$nix_file" > "$temp_file"
         if [ -s "$temp_file" ] && jq empty "$temp_file" 2>/dev/null; then
             mv "$temp_file" "$target_file"
-            echo "✓ ~/.claude.json created ($(jq '.mcpServers | length' "$target_file") server(s))"
+            log "✓ ~/.claude.json created ($(jq '.mcpServers | length' "$target_file") server(s))"
         else
             rm -f "$temp_file"
             echo "⚠ Failed to create ~/.claude.json from nix MCP servers"
@@ -123,13 +145,13 @@ merge_claude_mcp() {
     if ! jq empty "$target_file" 2>/dev/null; then
         local corrupt_bak="${target_file}.corrupt-$(date +%Y%m%d-%H%M%S)"
         cp "$target_file" "$corrupt_bak"
-        echo "⚠ ~/.claude.json was corrupt — saved to $(basename "$corrupt_bak"), recreating"
+        log "⚠ ~/.claude.json was corrupt — saved to $(basename "$corrupt_bak"), recreating"
         local temp_file
         temp_file=$(mktemp)
         jq '{mcpServers: (.mcpServers // {})}' "$nix_file" > "$temp_file"
         if [ -s "$temp_file" ] && jq empty "$temp_file" 2>/dev/null; then
             mv "$temp_file" "$target_file"
-            echo "✓ ~/.claude.json recreated"
+            log "✓ ~/.claude.json recreated"
         else
             rm -f "$temp_file"
             echo "⚠ Failed to recreate ~/.claude.json"
@@ -143,7 +165,7 @@ merge_claude_mcp() {
     if [ "$backup_before_merge" = "true" ]; then
         backup_file="${target_file}.backup-$(date +%Y%m%d-%H%M%S)"
         cp "$target_file" "$backup_file"
-        echo "✓ Created backup: $(basename "$backup_file")"
+        log "✓ Created backup: $(basename "$backup_file")"
         # Keep only 5 most recent backups.
         ls -t "${target_file}.backup-"* 2>/dev/null | tail -n +6 | xargs rm -f 2>/dev/null || true
     fi
@@ -159,7 +181,7 @@ merge_claude_mcp() {
     ' "$target_file" "$nix_file" > "$temp_file" 2>/dev/null
     if [ $? -eq 0 ] && [ -s "$temp_file" ] && jq empty "$temp_file" 2>/dev/null; then
         mv "$temp_file" "$target_file"
-        echo "✓ MCP servers merged into ~/.claude.json ($(jq '.mcpServers | length' "$target_file") total)"
+        log "✓ MCP servers merged into ~/.claude.json ($(jq '.mcpServers | length' "$target_file") total)"
     else
         rm -f "$temp_file"
         echo "⚠ Failed to merge MCP servers — keeping original"
@@ -171,30 +193,70 @@ merge_claude_mcp() {
     fi
 }
 
+merge_claude_nix
+
 if [ -d "$REPO_HOMEDIR" ]; then
-    echo "Found repo homedir at $REPO_HOMEDIR"
-    if [ -d "$REPO_HOMEDIR/.claude" ]; then
-        echo "Setting up Claude configuration..."
-        if [ -d "$REPO_HOMEDIR/.claude/hooks" ]; then
-            mkdir -p "$HOME/.claude/hooks"
-            echo "Copying Claude hooks..."
-            cp -r "$REPO_HOMEDIR/.claude/hooks/"* "$HOME/.claude/hooks/" 2>/dev/null || true
-            find "$HOME/.claude/hooks" -type f -name "*.sh" -exec chmod +x {} \; 2>/dev/null || true
-        fi
-        if [ -f "$REPO_HOMEDIR/.claude/settings.json" ]; then
-            merge_claude_settings "$REPO_HOMEDIR/.claude/settings.json" "$HOME/.claude/settings.json"
-        fi
-    fi
+    log "Found repo homedir at $REPO_HOMEDIR"
     find "$REPO_HOMEDIR" -mindepth 1 -maxdepth 1 | while read -r item; do
         basename_item=$(basename "$item")
         [ "$basename_item" = ".claude" ] && continue
         dest="$HOME/$basename_item"
         if [ ! -e "$dest" ]; then
-            echo "Copying $basename_item from repo to ~/"
+            log "Copying $basename_item from repo to ~/"
             cp -r "$item" "$dest"
         fi
     done
 fi
+
+merge_opencode_providers() {
+    local target_file="$1"
+    local nix_file="/etc/opencode/nix-providers.json"
+
+    [ -f "$nix_file" ] || return 0
+
+    if ! jq empty "$nix_file" 2>/dev/null; then
+        echo "⚠ nix-providers.json (OpenCode) is invalid JSON — skipping provider merge"
+        return 1
+    fi
+
+    mkdir -p "$(dirname "$target_file")"
+
+    if [ ! -f "$target_file" ]; then
+        # No user config yet — seed it from nix providers
+        local temp_file
+        temp_file=$(mktemp)
+        jq '{"$schema":"https://opencode.ai/config.json","provider": .provider}' "$nix_file" > "$temp_file"
+        if [ -s "$temp_file" ] && jq empty "$temp_file" 2>/dev/null; then
+            mv "$temp_file" "$target_file"
+            log "✓ ~/opencode.json created with $(jq '.provider | length' "$target_file") nix provider(s)"
+        else
+            rm -f "$temp_file"
+            echo "⚠ Failed to create ~/opencode.json"
+        fi
+        return 0
+    fi
+
+    if ! jq empty "$target_file" 2>/dev/null; then
+        echo "⚠ ~/opencode.json is invalid JSON — skipping provider merge"
+        return 1
+    fi
+
+    # Merge: inject nix providers only where the key is absent in user config
+    local temp_file
+    temp_file=$(mktemp)
+    jq -s '
+      .[0] as $existing |
+      .[1].provider as $nix |
+      $existing | .provider = (($nix // {}) + ($existing.provider // {}))
+    ' "$target_file" "$nix_file" > "$temp_file" 2>/dev/null
+    if [ $? -eq 0 ] && [ -s "$temp_file" ] && jq empty "$temp_file" 2>/dev/null; then
+        mv "$temp_file" "$target_file"
+        log "✓ OpenCode providers merged into ~/opencode.json"
+    else
+        rm -f "$temp_file"
+        echo "⚠ Failed to merge OpenCode providers — keeping original"
+    fi
+}
 
 merge_opencode_mcp() {
     local target_file="$1"
@@ -213,13 +275,13 @@ merge_opencode_mcp() {
     mkdir -p "$(dirname "$target_file")"
 
     if [ ! -f "$target_file" ]; then
-        echo "Creating ~/.opencode.json with nix MCP servers"
+        log "Creating ~/.opencode.json with nix MCP servers"
         local temp_file
         temp_file=$(mktemp)
         jq '{mcp: (.mcp // {})}' "$nix_file" > "$temp_file"
         if [ -s "$temp_file" ] && jq empty "$temp_file" 2>/dev/null; then
             mv "$temp_file" "$target_file"
-            echo "✓ ~/.opencode.json created ($(jq '.mcp | length' "$target_file") server(s))"
+            log "✓ ~/.opencode.json created ($(jq '.mcp | length' "$target_file") server(s))"
         else
             rm -f "$temp_file"
             echo "⚠ Failed to create ~/.opencode.json"
@@ -231,7 +293,7 @@ merge_opencode_mcp() {
     if ! jq empty "$target_file" 2>/dev/null; then
         local corrupt_bak="${target_file}.corrupt-$(date +%Y%m%d-%H%M%S)"
         cp "$target_file" "$corrupt_bak"
-        echo "⚠ ~/.opencode.json was corrupt — saved to $(basename "$corrupt_bak"), recreating"
+        log "⚠ ~/.opencode.json was corrupt — saved to $(basename "$corrupt_bak"), recreating"
         local temp_file
         temp_file=$(mktemp)
         jq '{mcp: (.mcp // {})}' "$nix_file" > "$temp_file"
@@ -248,7 +310,7 @@ merge_opencode_mcp() {
     if [ "$backup_before_merge" = "true" ]; then
         backup_file="${target_file}.backup-$(date +%Y%m%d-%H%M%S)"
         cp "$target_file" "$backup_file"
-        echo "✓ Created backup: $(basename "$backup_file")"
+        log "✓ Created backup: $(basename "$backup_file")"
         ls -t "${target_file}.backup-"* 2>/dev/null | tail -n +6 | xargs rm -f 2>/dev/null || true
     fi
 
@@ -261,7 +323,7 @@ merge_opencode_mcp() {
     ' "$target_file" "$nix_file" > "$temp_file" 2>/dev/null
     if [ $? -eq 0 ] && [ -s "$temp_file" ] && jq empty "$temp_file" 2>/dev/null; then
         mv "$temp_file" "$target_file"
-        echo "✓ MCP servers merged into ~/.opencode.json ($(jq '.mcp | length' "$target_file") total)"
+        log "✓ MCP servers merged into ~/.opencode.json ($(jq '.mcp | length' "$target_file") total)"
     else
         rm -f "$temp_file"
         echo "⚠ Failed to merge MCP servers into ~/.opencode.json — keeping original"
@@ -302,7 +364,7 @@ print('true' if d.get('backupBeforeMerge', True) else 'false')
     if [ -f "$target_file" ] && ! python3 -c "import tomllib; tomllib.load(open('$target_file','rb'))" 2>/dev/null; then
         local corrupt_bak="${target_file}.corrupt-$(date +%Y%m%d-%H%M%S)"
         cp "$target_file" "$corrupt_bak"
-        echo "⚠ ~/.codex/config.toml was corrupt — saved to $(basename "$corrupt_bak"), recreating"
+        log "⚠ ~/.codex/config.toml was corrupt — saved to $(basename "$corrupt_bak"), recreating"
         rm -f "$target_file"
     fi
 
@@ -310,14 +372,14 @@ print('true' if d.get('backupBeforeMerge', True) else 'false')
     if [ -f "$target_file" ] && [ "$backup_before_merge" = "true" ]; then
         backup_file="${target_file}.backup-$(date +%Y%m%d-%H%M%S)"
         cp "$target_file" "$backup_file"
-        echo "✓ Created backup: $(basename "$backup_file")"
+        log "✓ Created backup: $(basename "$backup_file")"
         ls -t "${target_file}.backup-"* 2>/dev/null | tail -n +6 | xargs rm -f 2>/dev/null || true
     fi
 
     local temp_file
     temp_file=$(mktemp --suffix=.toml)
 
-    python3 - "$nix_file" "$target_file" "$temp_file" << 'PYEOF'
+    python3 - "$nix_file" "$target_file" "$temp_file" 2>/dev/null << 'PYEOF'
 import sys, tomllib, os
 
 nix_path, target_path, temp_path = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -376,7 +438,7 @@ PYEOF
 
     if [ $? -eq 0 ] && [ -s "$temp_file" ] && python3 -c "import tomllib; tomllib.load(open('$temp_file','rb'))" 2>/dev/null; then
         mv "$temp_file" "$target_file"
-        echo "✓ MCP servers merged into ~/.codex/config.toml"
+        log "✓ MCP servers merged into ~/.codex/config.toml"
     else
         rm -f "$temp_file"
         echo "⚠ Failed to merge MCP servers into ~/.codex/config.toml — keeping original"
@@ -392,6 +454,9 @@ PYEOF
 merge_claude_mcp "$HOME/.claude.json"
 [ -f "$HOME/.claude.json" ] && chown "$HOST_USER" "$HOME/.claude.json"
 
+merge_opencode_providers "$HOME/opencode.json"
+[ -f "$HOME/opencode.json" ] && chown "$HOST_USER" "$HOME/opencode.json"
+
 merge_opencode_mcp "$HOME/.opencode.json"
 [ -f "$HOME/.opencode.json" ] && chown "$HOST_USER" "$HOME/.opencode.json"
 
@@ -406,7 +471,7 @@ if [ "$DEVCELL_GUI_ENABLED" = "true" ]; then
     mkdir -p /tmp/.X11-unix
     chmod 1777 /tmp/.X11-unix
 
-    echo "Starting Xvfb on display :${DISPLAY_NUM}..."
+    log "Starting Xvfb on display :${DISPLAY_NUM}..."
     gosu "$USER" Xvfb :${DISPLAY_NUM} -screen 0 ${RESOLUTION} 2>/dev/null &
     sleep 1
 
@@ -427,7 +492,7 @@ if [ "$DEVCELL_GUI_ENABLED" = "true" ]; then
     else
         echo "session.screen0.workspaceNames: ${WORKSPACE_NAME}" >> "$FLUXBOX_RC"
     fi
-    echo "Starting fluxbox (workspace: ${WORKSPACE_NAME})..."
+    log "Starting fluxbox (workspace: ${WORKSPACE_NAME})..."
     gosu "$USER" fluxbox -rc "$FLUXBOX_RC" &>/dev/null &
     sleep 1
 
@@ -452,14 +517,12 @@ if [ "$DEVCELL_GUI_ENABLED" = "true" ]; then
         done
     ) &
 
-    echo "Starting x11vnc on port 5900..."
+    log "Starting x11vnc on port 5900..."
     gosu "$USER" x11vnc -display :${DISPLAY_NUM} -forever -shared -passwd vnc -rfbport 5900 \
         -desktop "${APP_NAME:-cell}" &>/dev/null &
 
-    echo "VNC server ready - connect to localhost:${EXT_VNC_PORT:-5900}"
-    echo "DISPLAY=:${DISPLAY_NUM}"
-else
-    echo "GUI disabled (DEVCELL_GUI_ENABLED != true)"
+    log "VNC server ready - connect to localhost:${EXT_VNC_PORT:-5900}"
+    log "DISPLAY=:${DISPLAY_NUM}"
 fi
 
 export CHROMIUM_PROFILE_PATH="${HOME}/.chrome-${APP_NAME:-cell}"

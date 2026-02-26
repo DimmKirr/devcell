@@ -29,6 +29,22 @@ import (
 //
 // Note: ss/netstat/nc are absent in this image — use /proc/net or
 // wait.ForListeningPort (probes from outside via the published host port).
+// skipIfNoGUI skips VNC tests when the image lacks GUI binaries (e.g. nix-only image).
+func skipIfNoGUI(t *testing.T, c testcontainers.Container) {
+	t.Helper()
+	_, code := exec(t, c, []string{"sh", "-c", "command -v x11vnc"})
+	if code != 0 {
+		t.Skip("skipping: image lacks x11vnc (nix-only image without GUI support)")
+	}
+}
+
+// probeGUI starts a lightweight container to check for GUI support, then skips if absent.
+func probeGUI(t *testing.T) {
+	t.Helper()
+	c := startEnvContainer(t)
+	skipIfNoGUI(t, c)
+}
+
 func startVncContainer(t *testing.T) testcontainers.Container {
 	t.Helper()
 	ctx := context.Background()
@@ -42,10 +58,13 @@ func startVncContainer(t *testing.T) testcontainers.Container {
 		},
 		User: "0",
 		Cmd:  []string{"tail", "-f", "/dev/null"},
-		// ForListeningPort probes the published host port from outside — no ss/nc needed.
-		// entrypoint: Xvfb (sleep 1) → fluxbox (sleep 1) → x11vnc → allow 45s.
-		WaitingFor: wait.ForListeningPort("5900/tcp").
-			WithStartupTimeout(45 * time.Second),
+		// Check /proc/net/tcp for port 5900 (0x170C) in LISTEN state (0A).
+		// ForListeningPort requires host→container TCP which is unreliable in CI;
+		// /proc/net is always available without ss/nc.
+		// entrypoint: Xvfb (sleep 1) → fluxbox (sleep 1) → x11vnc → allow 60s.
+		WaitingFor: wait.ForExec([]string{"sh", "-c",
+			"grep -qi 170C /proc/net/tcp6 /proc/net/tcp 2>/dev/null && grep -qi ' 0A ' /proc/net/tcp6 /proc/net/tcp 2>/dev/null"}).
+			WithStartupTimeout(60 * time.Second),
 	}
 	c, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: req,
@@ -62,6 +81,7 @@ func startVncContainer(t *testing.T) testcontainers.Container {
 // Does not require DEVCELL_GUI_ENABLED; validates the package is installed in the image.
 func TestVncX11vncOnPath(t *testing.T) {
 	c := startEnvContainer(t)
+	skipIfNoGUI(t, c)
 	out, code := asUser(t, c, "command -v x11vnc")
 	if code != 0 {
 		t.Fatalf("FAIL: x11vnc not on PATH for session user (exit %d)", code)
@@ -75,6 +95,7 @@ func TestVncX11vncOnPath(t *testing.T) {
 // ss/netstat/nc are absent in this image; uses /proc/net/tcp6 and /proc/net/tcp directly.
 // Port 5900 = 0x170C; LISTEN state = 0A.
 func TestVncListensOn5900(t *testing.T) {
+	probeGUI(t)
 	c := startVncContainer(t) // already waited for port to be reachable
 	// Verify x11vnc process is alive
 	_, code := exec(t, c, []string{"pgrep", "x11vnc"})
@@ -95,6 +116,7 @@ func TestVncListensOn5900(t *testing.T) {
 // Analogous to `${EXT_VNC_PORT}:5900` in compose.yml; reproduces Bug 2 if the mapping
 // fails (Docker refuses to bind privileged ports without root).
 func TestVncPortPublishedToHost(t *testing.T) {
+	probeGUI(t)
 	c := startVncContainer(t)
 	ctx := context.Background()
 	mapped, err := c.MappedPort(ctx, "5900/tcp")
@@ -118,6 +140,7 @@ func TestVncPortPublishedToHost(t *testing.T) {
 // Runs `docker port` from the test host (same Docker socket testcontainers uses) and
 // cross-checks the result against testcontainers' own MappedPort.
 func TestVncDockerPortByName(t *testing.T) {
+	probeGUI(t)
 	c := startVncContainer(t)
 	ctx := context.Background()
 

@@ -1,0 +1,110 @@
+package main_test
+
+import (
+	"os"
+	"strings"
+	"testing"
+
+	"github.com/DimmKirr/devcell/internal/cfg"
+	"github.com/DimmKirr/devcell/internal/config"
+	"github.com/DimmKirr/devcell/internal/runner"
+)
+
+func buildBehaviourArgv(cwd string, envPairs []string, binary string, defaultFlags, userArgs []string, cellCfg cfg.CellConfig) []string {
+	e := makeEnv(envPairs...)
+	c := config.Load(cwd, e)
+	spec := runner.RunSpec{
+		Config:       c,
+		CellCfg:      cellCfg,
+		Binary:       binary,
+		DefaultFlags: defaultFlags,
+		UserArgs:     userArgs,
+	}
+	return runner.BuildArgv(spec,
+		runner.FSFunc(func(string) error { return os.ErrNotExist }),
+		func(string) (string, error) { return "", os.ErrNotExist },
+	)
+}
+
+// Scenario A: cwd=/tmp/myproject, TMUX_PANE=%3
+func TestScenarioA_ContainerNameAndVNC(t *testing.T) {
+	argv := buildBehaviourArgv("/tmp/myproject", []string{"TMUX_PANE", "%3"},
+		"claude", []string{"--dangerously-skip-permissions"}, nil, cfg.CellConfig{})
+
+	if !hasConsecutive(argv, "--name", "cell-myproject-3-run") {
+		t.Errorf("expected --name cell-myproject-3-run: %v", argv)
+	}
+	if !hasConsecutive(argv, "-p", "350:5900") {
+		t.Errorf("expected -p 350:5900: %v", argv)
+	}
+}
+
+// Scenario B: two panes — names and VNC ports differ
+func TestScenarioB_TwoPanesNamesAndPortsDiffer(t *testing.T) {
+	argv3 := buildBehaviourArgv("/tmp/myproject", []string{"TMUX_PANE", "%3"},
+		"claude", nil, nil, cfg.CellConfig{})
+	argv4 := buildBehaviourArgv("/tmp/myproject", []string{"TMUX_PANE", "%4"},
+		"claude", nil, nil, cfg.CellConfig{})
+
+	name3 := findFlagVal(argv3, "--name")
+	name4 := findFlagVal(argv4, "--name")
+	if name3 == name4 {
+		t.Errorf("container names should differ: %q == %q", name3, name4)
+	}
+
+	port3 := extractPort(argv3)
+	port4 := extractPort(argv4)
+	if port3 == port4 {
+		t.Errorf("VNC ports should differ: %q == %q", port3, port4)
+	}
+}
+
+// Scenario C: no tmux env vars → AppName=myproject-0
+func TestScenarioC_NoTmux(t *testing.T) {
+	argv := buildBehaviourArgv("/tmp/myproject", nil,
+		"claude", nil, nil, cfg.CellConfig{})
+	name := findFlagVal(argv, "--name")
+	if name != "cell-myproject-0-run" {
+		t.Errorf("want cell-myproject-0-run, got %q", name)
+	}
+}
+
+// Scenario D: CELL_ID=99 overrides TMUX_PANE
+func TestScenarioD_ExplicitCellID(t *testing.T) {
+	argv := buildBehaviourArgv("/tmp/myproject", []string{"CELL_ID", "99", "TMUX_PANE", "%3"},
+		"claude", nil, nil, cfg.CellConfig{})
+	name := findFlagVal(argv, "--name")
+	if !strings.Contains(name, "99") {
+		t.Errorf("expected CellID=99 in container name, got %q", name)
+	}
+}
+
+// Scenario E: .devcell.toml [env] MY_TOKEN appears as -e MY_TOKEN=abc
+func TestScenarioE_CfgEnvInArgv(t *testing.T) {
+	ccfg := cfg.CellConfig{
+		Env: map[string]string{"MY_TOKEN": "abc"},
+	}
+	argv := buildBehaviourArgv("/tmp/myproject", nil,
+		"claude", nil, nil, ccfg)
+	if !hasArg(argv, "MY_TOKEN=abc") {
+		t.Errorf("expected MY_TOKEN=abc in argv: %v", argv)
+	}
+}
+
+func hasConsecutive(argv []string, a, b string) bool {
+	for i := 0; i+1 < len(argv); i++ {
+		if argv[i] == a && argv[i+1] == b {
+			return true
+		}
+	}
+	return false
+}
+
+func findFlagVal(argv []string, flag string) string {
+	for i, a := range argv {
+		if a == flag && i+1 < len(argv) {
+			return argv[i+1]
+		}
+	}
+	return ""
+}

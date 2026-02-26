@@ -19,6 +19,7 @@
   home.packages = with pkgs; [
     packer
     terraform-docs
+    terraform-plugin-docs  # generates/validates Terraform provider docs (use: tfplugindocs)
   ];
 
   devcell.managedMcp.servers.opentofu = {
