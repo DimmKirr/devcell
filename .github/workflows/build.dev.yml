@@ -217,7 +217,7 @@ jobs:
           go-version-file: go.mod
 
       - name: Generate CLI docs
-        run: go run $(ls cmd/*.go | grep -Ev '(_test|main)\.go' | tr '\n' ' ') cmd/gendoc.go web/src/content/cell
+        run: go run $(ls cmd/*.go | grep -Ev '(_test|gendoc|main)\.go' | tr '\n' ' ') cmd/gendoc.go web/src/content/cell
 
       - name: Setup Node
         uses: actions/setup-node@v4
