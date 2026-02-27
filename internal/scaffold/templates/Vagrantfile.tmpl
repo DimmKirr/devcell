@@ -1,0 +1,119 @@
+# -*- mode: ruby -*-
+# frozen_string_literal: true
+
+# Apple Virtualization macOS VMs use shared networking (bridged-like)
+# No NAT port forwarding - SSH directly to mDNS hostname
+
+# Derive paths from synced folder source (BASE_DIR from Taskfile, or current dir)
+HOST_PATH = ENV["BASE_DIR"] || File.expand_path(".")
+DEVCELL_DIR = File.dirname(File.expand_path(__FILE__))  # Where this Vagrantfile lives
+FOLDER_NAME = File.basename(HOST_PATH)
+DEVCELL_FOLDER = File.basename(DEVCELL_DIR)
+
+# VM name from Taskfile APP_NAME or default to folder name
+VM_NAME = ENV["APP_NAME"] || FOLDER_NAME
+
+# Claude/Codex config directories (CELL_HOME from Taskfile)
+CELL_HOME = ENV["CELL_HOME"] || File.join(ENV["HOME"], ".devcell", "main")
+
+# Path to devcell nixhome flake (provides darwinConfigurations.macOS)
+NIXHOME_PATH = ENV["NIXHOME_PATH"] || "{{NIXHOME_PATH}}"
+
+# Guest paths mirror host structure under /Users/vagrant/
+GUEST_PATH = HOST_PATH.sub(%r{^/Users/[^/]+}, "/Users/vagrant")
+DEVCELL_GUEST_PATH = DEVCELL_DIR.sub(%r{^/Users/[^/]+}, "/Users/vagrant")
+
+# VirtioFS mounts
+VIRTFS_MOUNT = "/Volumes/My Shared Files/#{FOLDER_NAME}"
+DEVCELL_VIRTFS_MOUNT = "/Volumes/My Shared Files/#{DEVCELL_FOLDER}"
+
+Vagrant.configure("2") do |config|
+  config.vm.define VM_NAME
+  config.vm.hostname = VM_NAME
+
+  config.vm.box = ENV["MACOS_BOX"] || "{{VAGRANT_BOX}}"
+  config.vm.box_url = ENV["MACOS_BOX_URL"] if ENV["MACOS_BOX_URL"]
+
+  # Direct SSH to VM (no port forwarding for Apple Virtualization)
+  # Uses mDNS/Bonjour: base VM hostname is "vagrant-macos", accessible at vagrant-macos.local
+  config.ssh.host = ENV["MACOS_SSH_HOST"] || "vagrant-macos.local"
+  config.ssh.port = 22
+  config.ssh.username = "vagrant"
+  config.ssh.insert_key = false
+
+  # Disable default SSH port forwarding
+  config.vm.network "forwarded_port", id: "ssh", guest: 22, host: 2222, disabled: true
+
+  # Synced folders via VirtioFS (Apple Virtualization)
+  # Project directory
+  config.vm.synced_folder HOST_PATH, "/vagrant", type: :utm
+  # Devcell tooling (if running from a different directory)
+  if HOST_PATH != DEVCELL_DIR
+    config.vm.synced_folder DEVCELL_DIR, "/devcell", type: :utm
+  end
+  # Claude/Codex config home (CELL_HOME contains .claude/, .claude.json, .codex/)
+  config.vm.synced_folder CELL_HOME, "/cell-home", type: :utm, create: true
+  # devcell nixhome flake — provides darwinConfigurations.macOS for nix-darwin
+  config.vm.synced_folder NIXHOME_PATH, "/nixhome", type: :utm
+
+  config.vm.provider :utm do |utm|
+    utm.name = VM_NAME
+    utm.memory = 8192
+    utm.cpus = 4
+    utm.check_guest_additions = false
+    # Apple Virtualization: skip QEMU directory_share_mode (uses VirtioFS instead)
+    utm.skip_directory_share_mode = true
+  end
+
+  # Create symlinks for shared folder access
+  # VirtioFS mounts at /Volumes/My Shared Files/<folder>/
+  # We create symlinks to mirror host path structure: /Users/vagrant/dev/...
+  config.vm.provision "shell", name: "symlinks", privileged: false, inline: <<~SHELL
+    # Project directory symlink
+    mkdir -p "#{File.dirname(GUEST_PATH)}"
+    ln -sfn "#{VIRTFS_MOUNT}" "#{GUEST_PATH}"
+
+    # Devcell directory symlink (if running from different directory)
+    if [ "#{GUEST_PATH}" != "#{DEVCELL_GUEST_PATH}" ] && [ -d "#{DEVCELL_VIRTFS_MOUNT}" ]; then
+      mkdir -p "#{File.dirname(DEVCELL_GUEST_PATH)}"
+      ln -sfn "#{DEVCELL_VIRTFS_MOUNT}" "#{DEVCELL_GUEST_PATH}"
+    fi
+
+    # Claude/Codex config symlinks from CELL_HOME mount
+    CELL_MOUNT="/Volumes/My Shared Files/#{File.basename(CELL_HOME)}"
+    if [ -d "$CELL_MOUNT" ]; then
+      [ -d "$CELL_MOUNT/.claude" ] && ln -sfn "$CELL_MOUNT/.claude" ~/.claude
+      [ -f "$CELL_MOUNT/.claude.json" ] && ln -sfn "$CELL_MOUNT/.claude.json" ~/.claude.json
+      [ -d "$CELL_MOUNT/.codex" ] && ln -sfn "$CELL_MOUNT/.codex" ~/.codex
+    fi
+  SHELL
+
+  # Install Nix via Determinate Systems installer (non-interactive, supports macOS)
+  config.vm.provision "shell", name: "nix-install", run: "never", privileged: false, inline: <<~NIX_INSTALL
+    if ! command -v nix >/dev/null 2>&1; then
+      curl --proto '=https' --tlsv1.2 -sSf -L https://install.determinate.systems/nix | \
+        sh -s -- install --no-confirm
+    fi
+    . /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh
+    echo "Nix $(nix --version) ready."
+  NIX_INSTALL
+
+  # Apply nix-darwin configuration from the devcell nixhome flake
+  config.vm.provision "shell", name: "nix-darwin", run: "never", privileged: false, inline: <<~NIX_DARWIN
+    . /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh
+    if ! command -v darwin-rebuild >/dev/null 2>&1; then
+      nix run github:nix-community/nix-darwin/nix-darwin-25.11 -- switch --flake /nixhome#macOS
+    else
+      darwin-rebuild switch --flake /nixhome#macOS
+    fi
+  NIX_DARWIN
+end
+
+# Load secondary Vagrantfile from HOST_PATH (user's project directory) if it exists
+# This allows projects to extend the base configuration (similar to Dockerfile-local)
+# Must be outside the configure block so both configure blocks are at the same level
+user_vagrantfile = File.join(DEVCELL_DIR, "Vagrantfile.local")
+if File.exist?(user_vagrantfile)
+  puts "Loading Vagrantfile.local from: #{user_vagrantfile}"
+  load user_vagrantfile
+end
