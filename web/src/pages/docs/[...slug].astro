@@ -1,0 +1,187 @@
+---
+import { getCollection, render } from 'astro:content';
+import Base from '../../layouts/Base.astro';
+
+export async function getStaticPaths() {
+  const docs = await getCollection('cell');
+  return docs.map((entry) => ({
+    params: { slug: entry.id },
+    props: { entry },
+  }));
+}
+
+const { entry } = Astro.props;
+const { Content } = await render(entry);
+
+const allDocs = await getCollection('cell');
+
+// Top-level subcommands only (one underscore, e.g. cell_claude not cell_codex_resume)
+const topCommands = allDocs
+  .filter((d) => d.id.startsWith('cell_') && d.id.split('_').length === 2)
+  .sort((a, b) => a.id.localeCompare(b.id));
+
+const currentId = entry.id;
+---
+
+<style is:global>
+    .layout {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 3rem 2rem;
+      display: grid;
+      grid-template-columns: 200px 1fr;
+      gap: 3rem;
+      align-items: start;
+    }
+
+    @media (max-width: 768px) {
+      .layout { grid-template-columns: 1fr; }
+      .sidebar { display: none; }
+    }
+
+    .sidebar {
+      position: sticky;
+      top: 5rem;
+    }
+
+    .sidebar-label {
+      font-family: var(--font-mono);
+      font-size: 0.65rem;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      color: #888;
+      margin-bottom: 0.5rem;
+    }
+
+    .sidebar a {
+      display: block;
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+      color: #555;
+      text-decoration: none;
+      padding: 0.25rem 0.5rem;
+      border-left: 2px solid transparent;
+      margin-bottom: 0.15rem;
+      transition: border-color 0.1s, color 0.1s;
+    }
+
+    .sidebar a:hover { color: var(--black); border-left-color: var(--black); }
+    .sidebar a.active { color: var(--black); border-left-color: var(--accent); font-weight: 900; }
+
+    /* PROSE */
+    .prose {
+      min-width: 0;
+      max-width: 720px;
+    }
+
+    .prose h1 {
+      font-size: clamp(1.6rem, 4vw, 2.5rem);
+      font-weight: 900;
+      text-transform: uppercase;
+      letter-spacing: -1px;
+      margin-bottom: 1.5rem;
+      padding-bottom: 0.6rem;
+      border-bottom: var(--border);
+    }
+
+    .prose h2 {
+      font-size: 1rem;
+      font-weight: 900;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin: 2rem 0 0.75rem;
+      padding-bottom: 0.4rem;
+      border-bottom: 1px solid #CCC;
+    }
+
+    .prose h3 {
+      font-size: 0.85rem;
+      font-weight: 900;
+      text-transform: uppercase;
+      margin: 1.5rem 0 0.5rem;
+    }
+
+    .prose p {
+      font-family: var(--font-mono);
+      font-size: 0.85rem;
+      color: #444;
+      line-height: 1.75;
+      margin-bottom: 1rem;
+    }
+
+    .prose pre {
+      background: #0D0D0D;
+      color: #C8FF00;
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+      padding: 1.1rem 1.25rem;
+      border: var(--border);
+      box-shadow: var(--shadow);
+      overflow-x: auto;
+      margin-bottom: 1.25rem;
+      line-height: 1.8;
+    }
+
+    .prose pre code {
+      background: none;
+      border: none;
+      padding: 0;
+      color: inherit;
+      font-size: inherit;
+    }
+
+    .prose a {
+      color: var(--black);
+      font-weight: 900;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+
+    .prose a:hover { background: var(--accent); text-decoration: none; }
+
+    .prose ul {
+      list-style: none;
+      margin-bottom: 1rem;
+      padding-left: 0;
+    }
+
+    .prose ul li {
+      font-family: var(--font-mono);
+      font-size: 0.83rem;
+      color: #444;
+      line-height: 1.7;
+      padding-left: 1.1rem;
+      position: relative;
+    }
+
+    .prose ul li::before {
+      content: '▸';
+      position: absolute;
+      left: 0;
+      color: #888;
+      font-size: 0.7em;
+      top: 0.25em;
+    }
+</style>
+
+<Base title={`DevCell · ${entry.data.title}`} description={entry.data.description} activeNav="docs">
+  <div class="layout">
+    <aside class="sidebar">
+      <p class="sidebar-label">CLI reference</p>
+      <a href="/docs/cell" class:list={[{ active: currentId === 'cell' }]}>cell (root)</a>
+      <p class="sidebar-label" style="margin-top:1rem">Commands</p>
+      {topCommands.map((doc) => (
+        <a
+          href={`/docs/${doc.id}`}
+          class:list={[{ active: doc.id === currentId }]}
+        >
+          {doc.id.replace('cell_', '')}
+        </a>
+      ))}
+    </aside>
+
+    <article class="prose">
+      <Content />
+    </article>
+  </div>
+</Base>
