@@ -1,0 +1,169 @@
+---
+interface Props {
+  title: string;
+  description?: string;
+  activeNav?: 'docs';
+}
+
+const {
+  title,
+  description = 'DevCell — Run AI coding agents in an isolated container.',
+  activeNav,
+} = Astro.props;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content={description} />
+    <slot name="head" />
+    <title>{title}</title>
+  </head>
+  <body>
+    <header>
+      <a href="/" class="logo">dev<span class="logo-accent">cell</span></a>
+      <nav>
+        <a href="/#what">What it does</a>
+        <a href="/#features">Features</a>
+        <a href="/#quickstart">Quickstart</a>
+        <a href="/docs/cell" class:list={[{ active: activeNav === 'docs' }]}>Docs</a>
+        <a href="https://github.com/DimmKirr/devcell">GitHub</a>
+      </nav>
+    </header>
+
+    <slot />
+
+    <footer>
+      <div class="footer-inner">
+        <span>devcell — MIT License</span>
+        <span>
+          <a href="https://github.com/DimmKirr/devcell">GitHub</a>
+          &nbsp;·&nbsp;
+          <a href="https://github.com/DimmKirr/devcell/issues">Issues</a>
+          &nbsp;·&nbsp;
+          <a href="https://github.com/DimmKirr/devcell/releases">Releases</a>
+        </span>
+      </div>
+    </footer>
+  </body>
+</html>
+
+<style is:global>
+  :root {
+    --black: #111111;
+    --white: #ffffff;
+    --bg: #ffffff;
+    --bg-muted: #F5F5F2;
+    --accent: #C8FF00;
+    --border: 2.5px solid #111111;
+    --shadow: 4px 4px 0 #111111;
+    --shadow-lg: 6px 6px 0 #111111;
+    --font-mono: 'Courier New', Courier, monospace;
+    --font-sans: 'Arial Black', 'Arial Bold', Arial, sans-serif;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+
+  body {
+    font-family: var(--font-sans);
+    background: var(--bg);
+    color: var(--black);
+    line-height: 1.4;
+    overflow-x: hidden;
+  }
+
+  /* HEADER */
+  header {
+    background: var(--white);
+    border-bottom: var(--border);
+    padding: 1rem 2rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+
+  .logo {
+    font-family: var(--font-mono);
+    font-size: 1.3rem;
+    font-weight: 900;
+    letter-spacing: -1px;
+    color: var(--black);
+    text-decoration: none;
+  }
+
+  .logo-accent { background: var(--accent); padding: 0 3px; }
+
+  nav a {
+    color: var(--black);
+    text-decoration: none;
+    font-size: 0.78rem;
+    font-weight: 900;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-left: 1.75rem;
+    border-bottom: 2px solid transparent;
+    padding-bottom: 2px;
+    transition: border-color 0.1s;
+  }
+
+  nav a:hover { border-bottom-color: var(--black); }
+  nav a.active { border-bottom-color: var(--accent); }
+
+  /* SHARED INLINE CODE */
+  :not(pre) > code {
+    background: #EFEFEF;
+    border: 1.5px solid var(--black);
+    padding: 0.1em 0.3em;
+    font-family: var(--font-mono);
+    font-size: 0.85em;
+  }
+
+  /* SHARED BUTTON */
+  .btn {
+    display: inline-block;
+    padding: 0.75rem 1.5rem;
+    font-size: 0.78rem;
+    font-weight: 900;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    text-decoration: none;
+    border: var(--border);
+    box-shadow: var(--shadow);
+    transition: transform 0.1s, box-shadow 0.1s;
+  }
+
+  .btn:hover { transform: translate(-2px, -2px); box-shadow: 6px 6px 0 #111; }
+  .btn:active { transform: translate(2px, 2px); box-shadow: 2px 2px 0 #111; }
+  .btn-primary { background: var(--black); color: var(--white); }
+  .btn-secondary { background: var(--white); color: var(--black); }
+
+  /* FOOTER */
+  footer {
+    background: var(--black);
+    color: #AAAAAA;
+    border-top: var(--border);
+    padding: 1.5rem 2rem;
+    font-family: var(--font-mono);
+    font-size: 0.76rem;
+  }
+
+  .footer-inner {
+    max-width: 1200px;
+    margin: 0 auto;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+
+  footer a { color: var(--accent); text-decoration: none; }
+  footer a:hover { text-decoration: underline; }
+</style>

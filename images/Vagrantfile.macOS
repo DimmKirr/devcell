@@ -1,0 +1,55 @@
+# -*- mode: ruby -*-
+# frozen_string_literal: true
+#
+# images/Vagrantfile.macOS — base box builder for devcell macOS Vagrant boxes
+#
+# PURPOSE: Install Nix into a manually-created UTM macOS VM before packaging
+# it as a reusable Vagrant box. Used by `cell init --macos` Phase 4.
+#
+# USAGE (via cell init --macos — do not run manually):
+#   vagrant provision --provision-with nix-install
+#
+# The VM must already be running and accessible via SSH at the configured
+# hostname. It is NOT started via `vagrant up`.
+
+VM_SSH_HOST = ENV["MACOS_SSH_HOST"] || "vagrant-macos.local"
+
+Vagrant.configure("2") do |config|
+  # Box placeholder — VM is pre-existing and running; vagrant up is never called.
+  config.vm.box = "dummy"
+
+  # SSH directly to the running macOS VM via mDNS hostname
+  config.ssh.host     = VM_SSH_HOST
+  config.ssh.port     = 22
+  config.ssh.username = "vagrant"
+  config.ssh.insert_key = false
+  config.ssh.private_key_path = [
+    File.join(ENV["HOME"], ".vagrant.d", "insecure_private_keys", "vagrant.key.ed25519"),
+    File.join(ENV["HOME"], ".vagrant.d", "insecure_private_keys", "vagrant.key.rsa"),
+  ]
+
+  # Disable all synced folders — box builder only needs SSH access
+  config.vm.synced_folder ".", "/vagrant", disabled: true
+
+  # Disable default SSH port forwarding (unsupported by Apple Virtualization)
+  config.vm.network "forwarded_port", id: "ssh", guest: 22, host: 2222, disabled: true
+
+  config.vm.provider :utm do |utm|
+    utm.check_guest_additions = false
+    utm.skip_directory_share_mode = true
+  end
+
+  # Install Nix via Determinate Systems installer (non-interactive, macOS-compatible)
+  config.vm.provision "shell", name: "nix-install", privileged: false, inline: <<~NIX_INSTALL
+    set -euo pipefail
+    if command -v nix >/dev/null 2>&1; then
+      echo "Nix already installed: $(nix --version)"
+      exit 0
+    fi
+    echo "Installing Nix via Determinate Systems..."
+    curl --proto '=https' --tlsv1.2 -sSf -L https://install.determinate.systems/nix | \
+      sh -s -- install --no-confirm
+    . /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh
+    echo "Nix $(nix --version) installed successfully."
+  NIX_INSTALL
+end
