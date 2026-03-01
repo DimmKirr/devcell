@@ -101,7 +101,7 @@ const profiles = [
     .terminal {
       background: #0D0D0D;
       font-family: var(--font-mono);
-      font-size: 0.82rem;
+      font-size: 1rem;
       padding: 1.25rem 1.5rem;
       border: var(--border);
       box-shadow: var(--shadow-lg);
@@ -127,18 +127,37 @@ const profiles = [
     .t-ok     { color: #98C379; }
     .t-dim    { color: #555; }
     .t-hr     { color: #333; line-height: 1.2; }
-    .t-logo   { color: #E8834E; font-family: ui-monospace, 'SF Mono', Menlo, 'Courier New', monospace; letter-spacing: 0; }
+    .t-dot    { color: #AAAAAA; }
     .t-title  { color: #E5E5E5; font-weight: 700; }
     .t-ver    { color: #555; }
     .t-safe   { color: #98C379; }
     .t-safe .fa-solid { font-size: 0.85em; vertical-align: baseline; }
     .t-prompt { color: var(--accent); }
     .t-splash {
+      display: flex;
+      align-items: flex-start;
+      margin: 0.1rem 0;
       font-family: var(--font-mono);
       font-size: inherit;
-      line-height: 1.55;
-      margin: 0.1rem 0;
+      letter-spacing: 0;
+    }
+    .t-splash-logo {
+      display: grid;
+      grid-template-columns: repeat(5, 1.6ch);
+      grid-template-rows: repeat(3, 1.55em);
+      margin-right: 1ch;
+      align-self: center;
+    }
+    .t-splash-logo .b  { background: #E85D26; }
+    .t-splash-logo .bd { background: #E85D26; clip-path: polygon(0 0, 45% 0, 100% 100%, 55% 100%); }
+    .t-splash-logo .fd { background: #E85D26; clip-path: polygon(55% 0, 100% 0, 45% 100%, 0 100%); }
+    .t-splash-logo .bv { background: #E85D26; clip-path: polygon(25% 0, 75% 0, 75% 100%, 25% 100%); }
+    .t-splash-logo .bh { background: #E85D26; clip-path: polygon(0 25%, 100% 25%, 100% 75%, 0 75%); }
+    .t-splash-info {
+      font-family: var(--font-mono);
       white-space: pre;
+      line-height: 1.55;
+      margin: 0;
       letter-spacing: 0;
     }
 
@@ -412,10 +431,20 @@ const profiles = [
         <div class="t-dim">starting sandbox…</div>
         <div><span class="t-ok">✔</span> <span class="t-dim">mounted /home/alex/myproject</span></div>
         <div class="t-hr">───────────────────────────────────────</div>
-        <pre class="t-splash"><span class="t-logo"> ▐▛███▜▌</span>  <span class="t-title">Claude Code</span> <span class="t-ver">v2.1.49</span>
-<span class="t-logo">▝▜█████▛▘</span>  <span class="t-dim">Sonnet 4.6 · Claude Max</span>
-<span class="t-logo">  ▘▘ ▝▝ </span>  <span class="t-path">/myproject</span>
-<span class="t-logo">        </span>  <span class="t-path">⏵⏵ auto-approve · </span><span class="t-safe"><span style="color:#fff">[</span><span style="color:#E85D26">*</span><span style="color:#AAAAAA">.</span><span style="color:#fff">]</span> Cell Active</span></pre>
+        <div class="t-splash">
+          <div class="t-splash-logo"><!--
+            row 1: \  ·  |  ·  /
+            --><span class="bd"></span><span></span><span class="bv"></span><span></span><span class="fd"></span><!--
+            row 2: ·  —  █  —  ·
+            --><span></span><span class="bh"></span><span class="b"></span><span class="bh"></span><span></span><!--
+            row 3: /  ·  |  ·  \
+            --><span class="fd"></span><span></span><span class="bv"></span><span></span><span class="bd"></span>
+          </div>
+          <pre class="t-splash-info">  <span class="t-title">Claude Code</span> <span class="t-ver">v2.1.49</span>
+<span class="t-dot">·</span> <span class="t-dim">Sonnet 4.6 · Claude Max</span>
+  <span class="t-path">/myproject</span>
+  <span class="t-safe">⏵⏵ auto-approve · <span style="color:#fff">[</span><span style="color:#E85D26">*</span><span style="color:#AAAAAA">.</span><span style="color:#fff">]</span> Cell Active</span></pre>
+        </div>
         <div class="t-hr">───────────────────────────────────────</div>
         <div><span class="t-prompt">❯</span><span class="t-cmd"> implement login form</span></div>
         <div class="t-hr">───────────────────────────────────────</div>
