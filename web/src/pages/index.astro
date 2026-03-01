@@ -3,7 +3,7 @@ import Base from '../layouts/Base.astro';
 
 const profiles = [
   { category: "AI Agents",            tools: ["Claude Code", "OpenAI Codex", "OpenCode"] },
-  { category: "Languages & Runtimes", tools: ["Node.js", "Python 3.13", "Go", "Ruby", "Swift / Clang / LLVM"] },
+  { category: "Languages & Runtimes", tools: ["Node.js", "Python", "Go", "Ruby", "Swift / Clang / LLVM"] },
   { category: "Infrastructure",       tools: ["Terraform", "OpenTofu", "Docker", "Compose", "Packer"] },
 ];
 ---
@@ -123,7 +123,7 @@ const profiles = [
 
     .t-path   { color: #5F8AFF; }
     .t-branch { color: #C678DD; }
-    .t-cmd    { color: #E5E5E5; }
+    .t-cmd    { color: #888; }
     .t-ok     { color: #98C379; }
     .t-dim    { color: #555; }
     .t-hr     { color: #333; line-height: 1.2; }
@@ -132,7 +132,7 @@ const profiles = [
     .t-ver    { color: #555; }
     .t-safe   { color: #98C379; }
     .t-safe .fa-solid { font-size: 0.85em; vertical-align: baseline; }
-    .t-prompt { color: var(--accent); }
+    .t-prompt { color: #fff; }
     .t-splash {
       display: flex;
       align-items: flex-start;
@@ -143,16 +143,15 @@ const profiles = [
     }
     .t-splash-logo {
       display: grid;
-      grid-template-columns: repeat(5, 1.6ch);
-      grid-template-rows: repeat(3, 1.55em);
+      grid-template-columns: repeat(7, 1fr);
+      grid-template-rows: repeat(7, 1fr);
+      width: 8ch;
+      height: 4.65em;
       margin-right: 1ch;
       align-self: center;
+      flex-shrink: 0;
     }
-    .t-splash-logo .b  { background: #E85D26; }
-    .t-splash-logo .bd { background: #E85D26; clip-path: polygon(0 0, 45% 0, 100% 100%, 55% 100%); }
-    .t-splash-logo .fd { background: #E85D26; clip-path: polygon(55% 0, 100% 0, 45% 100%, 0 100%); }
-    .t-splash-logo .bv { background: #E85D26; clip-path: polygon(25% 0, 75% 0, 75% 100%, 25% 100%); }
-    .t-splash-logo .bh { background: #E85D26; clip-path: polygon(0 25%, 100% 25%, 100% 75%, 0 75%); }
+    .t-splash-logo .b { background: #E85D26; }
     .t-splash-info {
       font-family: var(--font-mono);
       white-space: pre;
@@ -369,6 +368,14 @@ const profiles = [
       margin-bottom: 1.25rem;
     }
 
+    .code-bar {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 1rem;
+      padding-bottom: 0.75rem;
+      border-bottom: 1px solid #222;
+    }
+
     .code-block .line { display: block; }
     .code-block .gap { display: block; height: 0.35rem; }
     .code-block .cmt { color: #444; }
@@ -398,14 +405,14 @@ const profiles = [
     }
 </style>
 
-<Base title="devcell — Claude Code, without the blast radius" description="An AI agent sandbox. Run Claude Code, Codex, or OpenCode with auto-approve — SSH keys, other repos, and your host filesystem stay completely out of reach.">
+<Base title="devcell — Agentic coding, without the blast radius" description="An AI agent sandbox. Run Claude Code, Codex, or OpenCode with auto-approve — SSH keys, other repos, and your host filesystem stay completely out of reach.">
   <div class="hero-wrap">
     <div class="hero">
       <div>
         <p class="hero-eyebrow">AI Agent Sandbox · Apache 2.0 · <a href="https://github.com/DimmKirr/devcell" class="eyebrow-stars">★ Star on GitHub</a></p>
-        <h1>Claude Code,<br/>Without the<br/><span class="hl">Blast Radius.</span></h1>
+        <h1>Agentic Coding,<br/>Without the<br/><span class="hl">Blast Radius.</span></h1>
         <p class="hero-desc">
-          You want Claude to just do things — no approval prompts, full dev cycle.
+          You want your AI agent to just do things — no approval prompts, full dev cycle.
           But locally, auto-approve means the agent has your SSH keys, other repos,
           and every credential on the machine.<br/><br/>
           devcell is an AI agent sandbox: your project directory is mounted inside,
@@ -429,25 +436,28 @@ const profiles = [
         </div>
         <div><span class="t-path">~/myproject</span> <span class="t-dim">$</span> <span class="t-cmd"> cell claude</span></div>
         <div class="t-dim">starting sandbox…</div>
-        <div><span class="t-ok">✔</span> <span class="t-dim">mounted /home/alex/myproject</span></div>
+        <div><span class="t-ok">✔</span><span class="t-dim"> mounted /home/alex/myproject</span></div>
         <div class="t-hr">───────────────────────────────────────</div>
         <div class="t-splash">
           <div class="t-splash-logo"><!--
-            row 1: \  ·  |  ·  /
-            --><span class="bd"></span><span></span><span class="bv"></span><span></span><span class="fd"></span><!--
-            row 2: ·  —  █  —  ·
-            --><span></span><span class="bh"></span><span class="b"></span><span class="bh"></span><span></span><!--
-            row 3: /  ·  |  ·  \
-            --><span class="fd"></span><span></span><span class="bv"></span><span></span><span class="bd"></span>
+  7x7 sextant-style asterisk
+  row0--><span></span><span></span><span></span><span class="b"></span><span></span><span></span><span></span><!--
+  row1--><span class="b"></span><span></span><span></span><span class="b"></span><span></span><span></span><span class="b"></span><!--
+  row2--><span></span><span class="b"></span><span></span><span class="b"></span><span></span><span class="b"></span><span></span><!--
+  row3--><span></span><span></span><span class="b"></span><span class="b"></span><span class="b"></span><span></span><span></span><!--
+  row4--><span></span><span class="b"></span><span></span><span class="b"></span><span></span><span class="b"></span><span></span><!--
+  row5--><span class="b"></span><span></span><span></span><span class="b"></span><span></span><span></span><span class="b"></span><!--
+  row6--><span></span><span></span><span></span><span class="b"></span><span></span><span></span><span></span>
           </div>
           <pre class="t-splash-info">  <span class="t-title">Claude Code</span> <span class="t-ver">v2.1.49</span>
 <span class="t-dot">·</span> <span class="t-dim">Sonnet 4.6 · Claude Max</span>
   <span class="t-path">/myproject</span>
-  <span class="t-safe">⏵⏵ auto-approve · <span style="color:#fff">[</span><span style="color:#E85D26">*</span><span style="color:#AAAAAA">.</span><span style="color:#fff">]</span> Cell Active</span></pre>
+  <span class="t-path">&nbsp;</span></pre>
         </div>
         <div class="t-hr">───────────────────────────────────────</div>
         <div><span class="t-prompt">❯</span><span class="t-cmd"> implement login form</span></div>
         <div class="t-hr">───────────────────────────────────────</div>
+        <div><span class="t-safe">⏵⏵ auto-approve · <span style="color:#fff">[</span><span style="color:#E85D26">*</span><span style="color:#AAAAAA">.</span><span style="color:#fff">]</span> Cell Active</span></div>
       </div>
     </div>
   </div>
@@ -466,7 +476,19 @@ const profiles = [
       </div>
       <div class="does-card">
         <h3>Toolchain that won't break</h3>
-        <p>Go, Node.js, Python, asdf, Terraform and more, pre-installed and community-vetted. No download URLs to die. No version drift between machines.</p>
+        <p>Go, Node.js, Python, Ruby, Swift, Terraform and more, pre-installed and community-vetted. No download URLs to die. No version drift between machines.</p>
+      </div>
+      <div class="does-card">
+        <h3>Secrets never touch your repo</h3>
+        <p>Inject credentials at runtime via 1Password — API keys, tokens, and secrets stay in your vault, never written to the project directory.</p>
+      </div>
+      <div class="does-card">
+        <h3>Local MCPs, zero data leakage</h3>
+        <p>Playwright, Chromium, and other MCP servers run inside the sandbox. No host installs, no external servers — your data never leaves the machine.</p>
+      </div>
+      <div class="does-card">
+        <h3>See what the agent sees</h3>
+        <p>Connect via VNC or RDP to watch the agent interact with GUI apps, browsers, and desktop tools in real time.</p>
       </div>
     </div>
   </section>
@@ -484,6 +506,7 @@ const profiles = [
         ))}
       </div>
       <p class="profiles-more">Also includes Electronics & IoT, Desktop & GUI, Media & Docs, and local MCPs (Playwright, Chromium). <a href="https://github.com/DimmKirr/devcell/tree/main/nixhome">See all included tools →</a></p>
+      <p class="profiles-more">Every tool comes from <a href="https://github.com/DimmKirr/devcell/tree/main/nixhome">nixhome</a> — fork it to add your own packages without losing upstream updates.</p>
     </section>
   </div>
 
@@ -502,35 +525,25 @@ const profiles = [
         <li class="step">
           <span class="step-num">2</span>
           <div>
-            <h4>Initialize</h4>
-            <p>Run <code>cell init</code> once. Scaffolds config and builds the Docker image (~5 min first time).</p>
-          </div>
-        </li>
-        <li class="step">
-          <span class="step-num">3</span>
-          <div>
             <h4>Run from any project</h4>
-            <p>Navigate to a repo and run <code>cell claude</code>, <code>cell codex</code>, or <code>cell opencode</code>. Working directory is mounted automatically.</p>
+            <p><code>cd my-project && cell claude</code> — first run auto-builds the sandbox image (~5 min). Works with <code>cell codex</code> and <code>cell opencode</code> too.</p>
           </div>
         </li>
       </ol>
 
       <div>
         <div class="code-block">
+          <div class="code-bar">
+            <span class="dot dot-r"></span>
+            <span class="dot dot-y"></span>
+            <span class="dot dot-g"></span>
+          </div>
           <span class="line"><span class="cmt"># macOS</span></span>
           <span class="line"><span class="cmd">brew </span><span class="arg">install</span> DimmKirr/tap/devcell</span>
-          <span class="gap"></span>
-          <span class="line"><span class="cmt"># one-time setup — builds the sandbox image</span></span>
-          <span class="line"><span class="cmd">cell </span><span class="arg">init</span></span>
           <span class="gap"></span>
           <span class="line"><span class="cmt"># run from any project directory</span></span>
           <span class="line"><span class="cmd">cd </span>~/dev/my-project</span>
           <span class="line"><span class="cmd">cell </span><span class="arg">claude</span></span>
-        </div>
-
-        <div class="note">
-          <strong>Note</strong>
-          On first run, <code>cell claude</code> auto-scaffolds config and offers to build the image — so <code>cell init</code> is optional if you prefer an interactive first run.
         </div>
       </div>
     </div>
