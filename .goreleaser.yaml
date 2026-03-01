@@ -33,11 +33,31 @@ release:
   replace_existing_draft: true
   make_latest: false
 
+changelog:
+  sort: asc
+  use: github
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\(.+\))??!?:.+$'
+      order: 0
+    - title: Bug Fixes
+      regexp: '^.*?fix(\(.+\))??!?:.+$'
+      order: 1
+    - title: Other
+      order: 999
+  filters:
+    exclude:
+      - '^chore'
+      - '^test'
+      - '^docs'
+      - 'Merge pull request'
+      - 'Merge branch'
+
 checksum:
   name_template: "{{ .ProjectName }}-checksums.txt"
 
 homebrew_casks:
-  - name: cell
+  - name: devcell
     repository:
       owner: DimmKirr
       name: homebrew-tap
@@ -51,10 +71,10 @@ homebrew_casks:
     homepage: "https://github.com/DimmKirr/devcell"
     description: "Run AI coding agents in a consistent Docker dev environment"
     conflicts:
-      - cask: cell-dev
+      - cask: devcell-dev
     binaries: ["cell"]
 
-  - name: "cell@{{ .Version }}"
+  - name: "devcell@{{ .Version }}"
     repository:
       owner: DimmKirr
       name: homebrew-tap
@@ -68,5 +88,5 @@ homebrew_casks:
     homepage: "https://github.com/DimmKirr/devcell"
     description: "Run AI coding agents in a consistent Docker dev environment"
     conflicts:
-      - cask: cell-dev
+      - cask: devcell-dev
     binaries: ["cell"]

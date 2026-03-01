@@ -89,8 +89,9 @@ jobs:
         run: |
           R=${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}
           V=${{ env.VERSION }}
-          for suffix in "" "-nix"; do
-            docker buildx imagetools create -t "${R}:${V}${suffix}" \
+          for suffix in "" "-base"; do
+            docker buildx imagetools create \
+              -t "${R}:${V}${suffix}" \
               "${R}:${V}-amd64${suffix}" \
               "${R}:${V}-arm64${suffix}"
           done
@@ -99,9 +100,9 @@ jobs:
         run: |
           R=${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}
           V=${{ env.VERSION }}
-          for suffix in "" "-nix"; do
-            echo "=== ${V}${suffix} ==="
-            docker buildx imagetools inspect "${R}:${V}${suffix}"
+          for tag in "${V}" "${V}-base"; do
+            echo "=== ${tag} ==="
+            docker buildx imagetools inspect "${R}:${tag}"
           done
 
   cell-release:

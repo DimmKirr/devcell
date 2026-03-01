@@ -9,6 +9,8 @@ on:
     branches:
       - main
       - feature/wip
+      - feature/add-web
+      - feature/web
   workflow_dispatch:
 
 permissions:
@@ -86,16 +88,24 @@ jobs:
         include:
           - runner: ubuntu-latest
             arch: amd64
-            variant: nix
+            variant: base
+            test_run: "TestBaseImage|TestDotenv"
+            timeout: 600s
           - runner: ubuntu-24.04-arm
             arch: arm64
-            variant: nix
+            variant: base
+            test_run: "TestBaseImage|TestDotenv"
+            timeout: 600s
           - runner: ubuntu-latest
             arch: amd64
             variant: ultimate
+            test_run: ""
+            timeout: 1200s
           - runner: ubuntu-24.04-arm
             arch: arm64
             variant: ultimate
+            test_run: ""
+            timeout: 1200s
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -119,9 +129,16 @@ jobs:
       - name: Run container tests
         env:
           DEVCELL_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:v0.0.0-${{ matrix.arch }}-${{ matrix.variant }}
+          DEVCELL_BASE_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:v0.0.0-${{ matrix.arch }}-base
+          DEVCELL_USER_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:v0.0.0-${{ matrix.arch }}-${{ matrix.variant }}
           MCP_SECRET_TEST_PASSWORD: fake-secret-ci-value
           MCP_SECRET_GITHUB_TOKEN: fake-token-ci-value
-        run: go test -v -timeout 600s ./test/...
+        run: |
+          if [ -n "${{ matrix.test_run }}" ]; then
+            go test -v -run "${{ matrix.test_run }}" -timeout ${{ matrix.timeout }} ./test/...
+          else
+            go test -v -timeout ${{ matrix.timeout }} ./test/...
+          fi
 
   docker-manifest:
     name: Docker Manifests
@@ -144,9 +161,10 @@ jobs:
       - name: Create manifests
         run: |
           R=${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}
-          for suffix in "" "-nix" "-ultimate"; do
+          for suffix in "" "-base" "-ultimate"; do
             docker buildx imagetools create \
               -t "${R}:dev${suffix}" \
+              -t "${R}:latest${suffix}" \
               -t "${R}:v0.0.0${suffix}" \
               "${R}:v0.0.0-amd64${suffix}" \
               "${R}:v0.0.0-arm64${suffix}"
@@ -203,7 +221,7 @@ jobs:
   deploy-site:
     name: Deploy Site
     needs: secrets
-    if: github.ref == 'refs/heads/main'
+    if: contains(fromJSON('["refs/heads/main","refs/heads/feature/wip","refs/heads/feature/add-web","refs/heads/feature/web"]'), github.ref)
     runs-on: ubuntu-latest
     environment:
       name: github-pages

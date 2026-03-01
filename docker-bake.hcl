@@ -3,7 +3,7 @@
 #
 # Usage:
 #   docker buildx bake                    # builds default group (ci)
-#   docker buildx bake nix                # single target
+#   docker buildx bake base               # single target
 #   docker buildx bake release            # all release variants
 #   docker buildx bake --push release     # build + push
 #
@@ -52,24 +52,24 @@ target "_base-args" {
 # Each target builds a Dockerfile stage that applies a nix home-manager profile
 # plus any language-specific tools (go install, npm, uv) that profile requires.
 
-target "nix" {
+target "base" {
   inherits   = ["_base-args"]
   context    = "."
-  dockerfile = "Dockerfile"
-  target     = "nix"
+  dockerfile = "images/Dockerfile"
+  target     = "base"
   platforms  = split(",", PLATFORMS)
   tags = [
-    "${REGISTRY}:${VERSION}-nix",
+    "${REGISTRY}:${VERSION}-base",
     "${REGISTRY}:${VERSION}",
   ]
-  cache-from = ["type=gha,scope=nix"]
-  cache-to   = ["type=gha,mode=max,scope=nix"]
+  cache-from = ["type=gha,scope=base"]
+  cache-to   = ["type=gha,mode=max,scope=base"]
 }
 
 target "go" {
   inherits   = ["_base-args"]
   context    = "."
-  dockerfile = "Dockerfile"
+  dockerfile = "images/Dockerfile"
   target     = "go"
   platforms  = split(",", PLATFORMS)
   tags       = ["${REGISTRY}:${VERSION}-go"]
@@ -80,7 +80,7 @@ target "go" {
 target "node" {
   inherits   = ["_base-args"]
   context    = "."
-  dockerfile = "Dockerfile"
+  dockerfile = "images/Dockerfile"
   target     = "node"
   platforms  = split(",", PLATFORMS)
   tags       = ["${REGISTRY}:${VERSION}-node"]
@@ -91,7 +91,7 @@ target "node" {
 target "python" {
   inherits   = ["_base-args"]
   context    = "."
-  dockerfile = "Dockerfile"
+  dockerfile = "images/Dockerfile"
   target     = "python"
   platforms  = split(",", PLATFORMS)
   tags       = ["${REGISTRY}:${VERSION}-python"]
@@ -102,7 +102,7 @@ target "python" {
 target "electronics" {
   inherits   = ["_base-args"]
   context    = "."
-  dockerfile = "Dockerfile"
+  dockerfile = "images/Dockerfile"
   target     = "electronics"
   platforms  = split(",", PLATFORMS)
   tags       = ["${REGISTRY}:${VERSION}-electronics"]
@@ -114,7 +114,7 @@ target "electronics" {
 target "fullstack" {
   inherits   = ["_base-args"]
   context    = "."
-  dockerfile = "Dockerfile"
+  dockerfile = "images/Dockerfile"
   target     = "fullstack"
   platforms  = split(",", PLATFORMS)
   tags = [
@@ -128,7 +128,7 @@ target "fullstack" {
 target "ultimate" {
   inherits   = ["_base-args"]
   context    = "."
-  dockerfile = "Dockerfile"
+  dockerfile = "images/Dockerfile"
   target     = "ultimate"
   platforms  = split(",", PLATFORMS)
   tags = [
@@ -142,22 +142,27 @@ target "ultimate" {
 
 # default: what `docker buildx bake` builds with no arguments
 group "default" {
-  targets = ["nix"]
+  targets = ["base"]
 }
 
 # ci: PR and push-to-main builds
 group "ci" {
-  targets = ["nix", "ultimate"]
+  targets = ["base", "ultimate"]
 }
 
 # release: all published variants for a tagged release
 group "release" {
-  targets = ["nix"]
+  targets = ["base"]
+}
+
+# local-base: base tagged for local scaffold Dockerfile use (FROM ghcr.io/dimmkirr/devcell:base-local)
+target "local-base" {
+  inherits = ["base"]
+  tags = ["ghcr.io/dimmkirr/devcell:base-local"]
+  pull = false
 }
 
 # local: load into local Docker daemon (no push, no multi-arch)
-# Build ultimate only — nix base stage is built as an implicit dependency
-# (sequential, avoids parallel nixpkgs downloads that exhaust disk).
 group "local" {
-  targets = ["ultimate"]
+  targets = ["local-base"]
 }
