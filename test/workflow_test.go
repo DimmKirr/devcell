@@ -33,6 +33,7 @@ func TestBaseImage(t *testing.T) {
 		if !strings.Contains(string(out), "123") {
 			t.Errorf("expected output to contain '123', got: %s", out)
 		}
+		t.Logf("PASS: %s", strings.TrimSpace(string(out)))
 	})
 
 	t.Run("nix_version", func(t *testing.T) {
@@ -47,6 +48,7 @@ func TestBaseImage(t *testing.T) {
 		if !strings.Contains(strings.ToLower(string(out)), "nix") {
 			t.Errorf("expected output to contain 'nix', got: %s", out)
 		}
+		t.Logf("PASS: %s", strings.TrimSpace(string(out)))
 	})
 
 	t.Run("home_manager", func(t *testing.T) {
@@ -61,6 +63,7 @@ func TestBaseImage(t *testing.T) {
 		if !strings.Contains(string(out), ".") {
 			t.Errorf("expected home-manager version with '.', got: %s", out)
 		}
+		t.Logf("PASS: home-manager %s", strings.TrimSpace(string(out)))
 	})
 
 	t.Run("nix_profile_activated", func(t *testing.T) {
@@ -75,6 +78,7 @@ func TestBaseImage(t *testing.T) {
 		if !strings.Contains(string(out), "/nix/store/") {
 			t.Errorf("expected nix-profile to point into /nix/store/, got: %s", out)
 		}
+		t.Logf("PASS: nix-profile → %s", strings.TrimSpace(string(out)))
 	})
 }
 

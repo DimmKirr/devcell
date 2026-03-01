@@ -18,7 +18,7 @@ const {
     <meta charset="utf-8" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@700;900&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;700&family=Inter:wght@700;900&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -42,8 +42,8 @@ const {
         --><span class="logo-accent">cell</span>
       </a>
       <nav>
-        <a href="/#what">What it does</a>
-        <a href="/#features">Features</a>
+        <a href="/#why">Why it matters</a>
+        <a href="/#inside">What's inside</a>
         <a href="/#quickstart">Quickstart</a>
         <a href="/docs/cell" class:list={[{ active: activeNav === 'docs' }]}>Docs</a>
         <a href="https://github.com/DimmKirr/devcell">GitHub</a>
@@ -77,7 +77,7 @@ const {
     --border: 2.5px solid #111111;
     --shadow: 4px 4px 0 #111111;
     --shadow-lg: 6px 6px 0 #111111;
-    --font-mono: 'JetBrains Mono', 'Courier New', monospace;
+    --font-mono: 'Fira Code', 'JetBrains Mono', 'Courier New', monospace;
     --font-sans: 'Inter', Arial, sans-serif;
   }
 
@@ -183,6 +183,7 @@ const {
     padding: 0.1em 0.3em;
     font-family: var(--font-mono);
     font-size: 0.85em;
+    white-space: nowrap;
   }
 
   /* SHARED BUTTON */

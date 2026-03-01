@@ -116,10 +116,38 @@
       session.menuFile:	/opt/devcell/.fluxbox/menu
     '';
 
-    # Disable default scroll-to-cycle-workspaces on desktop and toolbar.
-    # Without this, mouse wheel events on any empty area (or toolbar) rapidly
-    # switch workspaces instead of being passed through to the focused window.
+    # Full keybindings. home-manager replaces the entire default keys file,
+    # so we must include useful defaults here. Scroll-to-cycle-workspaces
+    # is deliberately mapped to :NOP — macOS trackpad momentum scrolling
+    # floods VNC with Button4/5 events causing a "doom scroll" effect.
     keys = ''
+      # Window focus and movement
+      Mod1 Tab :NextWindow {groups} (workspace=[current])
+      Mod1 Shift Tab :PrevWindow {groups} (workspace=[current])
+      Mod1 F4 :Close
+      Mod1 F9 :Minimize
+      Mod1 F10 :Maximize
+      Mod1 F11 :Fullscreen
+
+      # Workspace navigation (keyboard only — scroll deliberately disabled)
+      Control Mod1 Left :PrevWorkspace
+      Control Mod1 Right :NextWorkspace
+
+      # Window movement and resizing
+      OnTitlebar Mouse1 :MacroCmd {Focus} {Raise} {ActivateTab}
+      OnTitlebar Move1 :StartMoving
+      OnTitlebar Double Mouse1 :Maximize
+      OnTitlebar Mouse3 :WindowMenu
+      OnWindow Mod1 Mouse1 :MacroCmd {Raise} {Focus} {StartMoving}
+      OnWindow Mod1 Mouse3 :MacroCmd {Raise} {Focus} {StartResizing NearestCorner}
+      OnWindowBorder Move1 :StartMoving
+
+      # Desktop menus
+      OnDesktop Mouse1 :HideMenus
+      OnDesktop Mouse2 :WorkspaceMenu
+      OnDesktop Mouse3 :RootMenu
+
+      # Scroll on desktop/toolbar: NOP (prevents macOS trackpad doom scroll)
       OnDesktop Mouse4 :NOP
       OnDesktop Mouse5 :NOP
       OnToolbar Mouse4 :NOP
