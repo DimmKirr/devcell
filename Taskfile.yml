@@ -97,7 +97,7 @@ tasks:
 
   build:image:
     desc: Build local group into local Docker daemon (host platform only, no push)
-    aliases: [devcell:image:build, bake:local]
+    aliases: [build:image, bake:local]
     silent: true
     cmds:
       - USER_UID=$(id -u) USER_GID=$(id -g) PLATFORMS="" docker buildx bake --file {{.DEVCELL_DIR}}/docker-bake.hcl --load local {{.CLI_ARGS}}

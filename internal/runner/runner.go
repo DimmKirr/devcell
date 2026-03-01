@@ -117,6 +117,7 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 	if spec.CellCfg.Cell.GUI {
 		argv = append(argv, "-e", "DEVCELL_GUI_ENABLED=true")
 		argv = append(argv, "-e", "EXT_VNC_PORT="+c.VNCPort)
+		argv = append(argv, "-e", "EXT_RDP_PORT="+c.RDPPort)
 	}
 
 	// Debug flag — enables verbose entrypoint logging inside the container
@@ -147,6 +148,7 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 	// Port mapping — only when GUI is enabled
 	if spec.CellCfg.Cell.GUI {
 		argv = append(argv, "-p", c.VNCPort+":5900")
+		argv = append(argv, "-p", c.RDPPort+":3389")
 	}
 
 	// Network

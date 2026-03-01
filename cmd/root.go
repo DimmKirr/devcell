@@ -60,6 +60,7 @@ func init() {
 		buildCmd,
 		initCmd,
 		vncCmd,
+		rdpCmd,
 		chromeCmd,
 	)
 }
@@ -200,8 +201,8 @@ func runAgent(binary string, defaultFlags, userArgs []string) error {
 	}
 
 	if ux.Verbose {
-		fmt.Printf(" APP_NAME: %s | VNC: localhost:%s | HOME: %s\n",
-			c.AppName, c.VNCPort, c.CellHome)
+		fmt.Printf(" APP_NAME: %s | VNC: localhost:%s | RDP: localhost:%s | HOME: %s\n",
+			c.AppName, c.VNCPort, c.RDPPort, c.CellHome)
 	}
 
 	// Pin the container to the exact image ID just built so a concurrent
