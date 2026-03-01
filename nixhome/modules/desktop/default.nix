@@ -116,6 +116,16 @@
       session.menuFile:	/opt/devcell/.fluxbox/menu
     '';
 
+    # Disable default scroll-to-cycle-workspaces on desktop and toolbar.
+    # Without this, mouse wheel events on any empty area (or toolbar) rapidly
+    # switch workspaces instead of being passed through to the focused window.
+    keys = ''
+      OnDesktop Mouse4 :NOP
+      OnDesktop Mouse5 :NOP
+      OnToolbar Mouse4 :NOP
+      OnToolbar Mouse5 :NOP
+    '';
+
     # Chromium via the home-manager profile wrapper (includes --no-sandbox, --disable-gpu,
     # --user-data-dir etc. set in web.nix). Shell expansion resolves $USER at runtime
     # so the compat link /nix/var/nix/profiles/per-user/$USER/profile is used correctly
