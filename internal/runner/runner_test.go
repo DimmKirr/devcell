@@ -53,9 +53,9 @@ func opLookPath(bin string) (string, error) {
 func buildArgv(t *testing.T, extra ...func(*runner.RunSpec)) []string {
 	t.Helper()
 	spec := runner.RunSpec{
-		Config:  baseConfig(),
-		CellCfg: cfg.CellConfig{},
-		Binary:  "claude",
+		Config:       baseConfig(),
+		CellCfg:      cfg.CellConfig{},
+		Binary:       "claude",
 		DefaultFlags: []string{"--dangerously-skip-permissions"},
 		UserArgs:     nil,
 	}
@@ -121,7 +121,9 @@ func TestArgv_ContainerName(t *testing.T) {
 // --- Mandatory env vars ---
 
 func TestArgv_MandatoryEnvVars(t *testing.T) {
-	argv := buildArgv(t)
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.CellCfg.Cell.GUI = true
+	})
 	mustHaveEnv := []string{
 		"APP_NAME=myproject-3",
 		"HOST_USER=bob",
@@ -242,7 +244,9 @@ func TestArgv_ReadonlyVolume(t *testing.T) {
 // --- Network and port ---
 
 func TestArgv_VNCPort(t *testing.T) {
-	argv := buildArgv(t)
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.CellCfg.Cell.GUI = true
+	})
 	if !hasConsecutive(argv, "-p", "350:5900") {
 		t.Errorf("expected -p 350:5900 in argv: %v", argv)
 	}
@@ -262,7 +266,7 @@ func TestArgv_WorkdirAndImage(t *testing.T) {
 	if !hasConsecutive(argv, "--workdir", "/myproject-3") {
 		t.Errorf("expected --workdir /myproject-3: %v", argv)
 	}
-	if !hasArg(argv, "devcell-local") {
+	if !hasArg(argv, runner.UserImageTag()) {
 		t.Error("missing devcell-local image name")
 	}
 }
@@ -274,7 +278,7 @@ func TestArgv_BinaryAndDefaultFlagsAtEnd(t *testing.T) {
 	// Find devcell-local image, then expect binary after it
 	imgIdx := -1
 	for i, a := range argv {
-		if a == "devcell-local" {
+		if a == runner.UserImageTag() {
 			imgIdx = i
 			break
 		}

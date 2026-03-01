@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/DimmKirr/devcell/internal/cfg"
+	"github.com/DimmKirr/devcell/internal/runner"
 	"github.com/DimmKirr/devcell/internal/version"
 )
 
@@ -23,17 +24,19 @@ var flakeNixContent []byte
 //go:embed templates/devcell.toml.tmpl
 var devcellTomlContent []byte
 
+//go:embed templates/Vagrantfile.tmpl
+var vagrantfileContent []byte
+
 type scaffoldFile struct {
 	name    string
 	content []byte
 }
 
 func scaffoldFiles() []scaffoldFile {
-	ver := []byte(version.Version)
-	df := bytes.ReplaceAll(dockerfileContent, []byte("{{VERSION}}"), ver)
-	flake := bytes.ReplaceAll(flakeNixContent, []byte("{{VERSION}}"), ver)
+	dockerfile := bytes.ReplaceAll(dockerfileContent, []byte("{{BASE_IMAGE}}"), []byte(runner.BaseImageTag()))
+	flake := bytes.ReplaceAll(flakeNixContent, []byte("{{VERSION}}"), []byte(version.Version))
 	return []scaffoldFile{
-		{"Dockerfile", df},
+		{"Dockerfile", dockerfile},
 		{"flake.nix", flake},
 		{"devcell.toml", devcellTomlContent},
 	}
@@ -120,4 +123,25 @@ func Scaffold(dir string) error {
 func IsInitialized(dir string) bool {
 	_, err := os.Stat(filepath.Join(dir, "devcell.toml"))
 	return err == nil
+}
+
+// ScaffoldVagrantfile writes a Vagrantfile to dir substituting:
+//   - {{VAGRANT_BOX}}  with vagrantBox  (empty → falls back to MACOS_BOX env var at runtime)
+//   - {{NIXHOME_PATH}} with nixhomePath (empty → falls back to NIXHOME_PATH env var at runtime)
+//
+// Skips writing if a Vagrantfile already exists (idempotent).
+func ScaffoldVagrantfile(dir, vagrantBox, nixhomePath string) error {
+	dest := filepath.Join(dir, "Vagrantfile")
+	if _, err := os.Stat(dest); err == nil {
+		return nil // already exists
+	}
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", dir, err)
+	}
+	content := bytes.ReplaceAll(vagrantfileContent, []byte("{{VAGRANT_BOX}}"), []byte(vagrantBox))
+	content = bytes.ReplaceAll(content, []byte("{{NIXHOME_PATH}}"), []byte(nixhomePath))
+	if err := os.WriteFile(dest, content, 0644); err != nil {
+		return fmt.Errorf("write Vagrantfile: %w", err)
+	}
+	return nil
 }

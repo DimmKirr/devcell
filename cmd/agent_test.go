@@ -43,7 +43,7 @@ func makeEnv(pairs ...string) func(string) string {
 
 func trailingAfterImage(argv []string) []string {
 	for i, a := range argv {
-		if a == "devcell-local" && i+1 < len(argv) {
+		if a == runner.UserImageTag() && i+1 < len(argv) {
 			return argv[i+1:]
 		}
 	}

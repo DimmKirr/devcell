@@ -23,6 +23,7 @@ type Config struct {
 	BaseDir       string
 	HostUser      string
 	HostHome      string
+	LocalMode     bool // DEVCELL_LOCAL_MODE=true — always rebuild image on run
 }
 
 // Load resolves all config fields from cwd and an environment lookup function.
@@ -54,6 +55,7 @@ func Load(cwd string, getenv func(string) string) Config {
 		BaseDir:       cwd,
 		HostUser:      getenv("USER"),
 		HostHome:      home,
+		LocalMode:     getenv("DEVCELL_LOCAL_MODE") == "true",
 	}
 }
 
@@ -80,7 +82,7 @@ func resolveSessionName(getenv func(string) string) string {
 	if s := getenv("TMUX_SESSION_NAME"); s != "" {
 		return s
 	}
-	return "sandbox"
+	return "main"
 }
 
 func resolvePortPrefix(getenv func(string) string, cellID string) string {

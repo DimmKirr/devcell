@@ -1,26 +1,18 @@
 # syntax=docker/dockerfile:1
 
 ###############################################################################
-# Stage: apt-repo-setup
-# Adds Docker's APT repo. Isolated for layer caching.
+# Stage: base
+# Apt + user creation + nix + home-manager. Published as base image.
+# User Dockerfiles apply profiles via their own flake.nix.
 ###############################################################################
-FROM public.ecr.aws/docker/library/debian:trixie-slim AS apt-repo-setup
+FROM public.ecr.aws/docker/library/debian:trixie-slim AS base
 
-RUN apt-get update && apt-get install -y \
-      gpg \
-      curl && \
+# Add Docker APT repo and install all system packages in one layer.
+RUN apt-get update && apt-get install -y curl gpg && \
     curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg && \
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian trixie stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null && \
-    rm -rf /var/lib/apt/lists/*
-
-###############################################################################
-# Stage: nix
-# Minimal apt + user creation + nix install + home-manager.
-# Replaces: base-core, base-nix, nix-setup, base-gui, base-gui-nix.
-###############################################################################
-FROM apt-repo-setup AS nix
-
-RUN apt-get update && apt-get install -y \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian trixie stable" \
+      | tee /etc/apt/sources.list.d/docker.list > /dev/null && \
+    apt-get update && apt-get install -y \
     ca-certificates \
     curl \
     docker-ce-cli \
@@ -33,6 +25,7 @@ RUN apt-get update && apt-get install -y \
     gosu \
     procps \
     sudo \
+    tini \
     xz-utils \
     zsh \
     && rm -rf /var/lib/apt/lists/*
@@ -49,8 +42,10 @@ RUN \
     chown -R ${USER_UID}:${USER_GID} /opt/devcell && \
     echo "${USER_NAME} ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 
-RUN mkdir -p /config /data /opt/asdf /opt/npm-tools /opt/python-tools && \
-    chown -R ${USER_UID}:${USER_GID} /config /data /opt/asdf /opt/npm-tools /opt/python-tools
+RUN mkdir -p /config /data /opt/asdf /opt/npm-tools /opt/python-tools \
+             /opt/devcell/.config/home-manager && \
+    chown -R ${USER_UID}:${USER_GID} /config /data /opt/asdf /opt/npm-tools /opt/python-tools \
+             /opt/devcell/.config
 
 # System-level nix.conf (read by any nix binary regardless of user).
 # sandbox=false + filter-syscalls=false: Docker Desktop's Linux VM kernel rejects
@@ -83,29 +78,17 @@ RUN export NIX_CONFIG="$(printf 'experimental-features = nix-command flakes\nsan
 # Nix 2.15+ uses XDG paths. Add nix-profile to PATH for subsequent RUN commands.
 ENV PATH="${HOME}/.nix-profile/bin:${PATH}"
 
-# Copy home-manager flake and install home-manager once (shared by all profiles).
-COPY --chown=${USER_UID}:${USER_GID} nixhome/ /opt/nixhome/
+# Install home-manager and create nix per-user profile compat symlink.
 RUN nix profile install "nixpkgs/nixos-25.11#home-manager" && \
     mkdir -p /nix/var/nix/profiles/per-user/devcell && \
     ln -sfT "$(readlink -f $HOME/.nix-profile)" \
             /nix/var/nix/profiles/per-user/devcell/profile
 
-# Stable runtime PATH using the compat link (in /nix/, outside $HOME).
-# asdf data dir lives outside $HOME so it survives CELL_HOME bind mounts.
 ENV ASDF_DATA_DIR=/opt/asdf
 ENV PATH="/opt/asdf/shims:/nix/var/nix/profiles/per-user/devcell/profile/bin:${PATH}"
 
-# Apply devcell-base profile
-RUN ARCH=$(uname -m) && \
-    [ "$ARCH" = "aarch64" ] && ARCH_SUFFIX="-aarch64" || ARCH_SUFFIX="" && \
-    home-manager switch --flake "/opt/nixhome#devcell-base${ARCH_SUFFIX}" && \
-    ln -sfT "$(readlink -f $HOME/.nix-profile)" \
-            /nix/var/nix/profiles/per-user/devcell/profile
-
-ENV DEVCELL_PROFILE=devcell-base
-
-# Entrypoint last — changes here don't bust the nix build cache above
-COPY --chmod=755 entrypoint.sh /usr/local/bin/entrypoint.sh
+# Entrypoint last — changes here don't bust the nix/home-manager cache above
+COPY --chmod=755 images/entrypoint.sh /usr/local/bin/entrypoint.sh
 
 WORKDIR /
 
@@ -116,11 +99,11 @@ CMD ["tail", "-f", "/dev/null"]
 # Stage: go
 # devcell-go profile: Go toolchain + language-specific tools only.
 ###############################################################################
-FROM nix AS go
+FROM base AS go
 
-ARG USER_NAME=devcell
 ARG USER_UID=1000
 ARG USER_GID=1000
+COPY --chown=${USER_UID}:${USER_GID} nixhome/ /opt/nixhome/
 RUN ARCH=$(uname -m) && \
     [ "$ARCH" = "aarch64" ] && ARCH_SUFFIX="-aarch64" || ARCH_SUFFIX="" && \
     home-manager switch --flake "/opt/nixhome#devcell-go${ARCH_SUFFIX}" && \
@@ -133,18 +116,17 @@ ENV DEVCELL_PROFILE=devcell-go
 # Stage: node
 # devcell-node profile: Node.js + npm project tools only.
 ###############################################################################
-FROM nix AS node
+FROM base AS node
 
-ARG USER_NAME=devcell
 ARG USER_UID=1000
 ARG USER_GID=1000
+COPY --chown=${USER_UID}:${USER_GID} nixhome/ /opt/nixhome/
 RUN ARCH=$(uname -m) && \
     [ "$ARCH" = "aarch64" ] && ARCH_SUFFIX="-aarch64" || ARCH_SUFFIX="" && \
     home-manager switch --flake "/opt/nixhome#devcell-node${ARCH_SUFFIX}" && \
     ln -sfT "$(readlink -f $HOME/.nix-profile)" \
             /nix/var/nix/profiles/per-user/devcell/profile && \
-    $HOME/.nix-profile/bin/asdf install nodejs && \
-    $HOME/.nix-profile/bin/asdf reshim
+    asdf install nodejs && asdf reshim
 
 ENV DEVCELL_PROFILE=devcell-node
 
@@ -152,10 +134,11 @@ ENV DEVCELL_PROFILE=devcell-node
 # Stage: python
 # devcell-python profile: Python3 + uv + Playwright chromium.
 ###############################################################################
-FROM nix AS python
+FROM base AS python
 
 ARG USER_UID=1000
 ARG USER_GID=1000
+COPY --chown=${USER_UID}:${USER_GID} nixhome/ /opt/nixhome/
 RUN ARCH=$(uname -m) && \
     [ "$ARCH" = "aarch64" ] && ARCH_SUFFIX="-aarch64" || ARCH_SUFFIX="" && \
     home-manager switch --flake "/opt/nixhome#devcell-python${ARCH_SUFFIX}" && \
@@ -164,7 +147,7 @@ RUN ARCH=$(uname -m) && \
 
 ENV DEVCELL_PROFILE=devcell-python
 
-COPY --chown=${USER_UID}:${USER_GID} pyproject.toml uv.lock* /opt/python-tools/
+COPY --chown=${USER_UID}:${USER_GID} images/pyproject.toml images/uv.lock* /opt/python-tools/
 SHELL ["/bin/bash", "-c"]
 RUN cd /opt/python-tools && uv sync
 SHELL ["/bin/sh", "-c"]
@@ -179,10 +162,11 @@ ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH="/nix/var/nix/profiles/per-user/devcell/
 # Stage: electronics
 # devcell-electronics profile: Build tools + KiCad, ngspice, libspnav, poppler.
 ###############################################################################
-FROM nix AS electronics
+FROM base AS electronics
 
 ARG USER_UID=1000
 ARG USER_GID=1000
+COPY --chown=${USER_UID}:${USER_GID} nixhome/ /opt/nixhome/
 RUN ARCH=$(uname -m) && \
     [ "$ARCH" = "aarch64" ] && ARCH_SUFFIX="-aarch64" || ARCH_SUFFIX="" && \
     home-manager switch --flake "/opt/nixhome#devcell-electronics${ARCH_SUFFIX}" && \
@@ -195,28 +179,27 @@ ENV DEVCELL_PROFILE=devcell-electronics
 # Stage: fullstack
 # devcell-fullstack profile: All language tools (Go, Node, Python, web).
 ###############################################################################
-FROM nix AS fullstack
+FROM base AS fullstack
 
-ARG USER_NAME=devcell
 ARG USER_UID=1000
 ARG USER_GID=1000
+COPY --chown=${USER_UID}:${USER_GID} nixhome/ /opt/nixhome/
 RUN ARCH=$(uname -m) && \
     [ "$ARCH" = "aarch64" ] && ARCH_SUFFIX="-aarch64" || ARCH_SUFFIX="" && \
     home-manager switch --flake "/opt/nixhome#devcell-fullstack${ARCH_SUFFIX}" && \
     ln -sfT "$(readlink -f $HOME/.nix-profile)" \
             /nix/var/nix/profiles/per-user/devcell/profile && \
-    $HOME/.nix-profile/bin/asdf install nodejs && \
-    $HOME/.nix-profile/bin/asdf reshim
+    asdf install nodejs && asdf reshim
 
 ENV DEVCELL_PROFILE=devcell-fullstack
 
 # Agent CLI tools (npm) — requires Node.js from asdf above
-COPY --chown=${USER_UID}:${USER_GID} package.json package-lock.json* /opt/npm-tools/
+COPY --chown=${USER_UID}:${USER_GID} images/package.json images/package-lock.json* /opt/npm-tools/
 RUN cd /opt/npm-tools/ && npm install
 ENV PATH="/opt/npm-tools/node_modules/.bin:${PATH}"
 
 # Python tools (project-specific, not in nixpkgs)
-COPY --chown=${USER_UID}:${USER_GID} pyproject.toml uv.lock* /opt/python-tools/
+COPY --chown=${USER_UID}:${USER_GID} images/pyproject.toml images/uv.lock* /opt/python-tools/
 SHELL ["/bin/bash", "-c"]
 RUN cd /opt/python-tools && uv sync
 SHELL ["/bin/sh", "-c"]

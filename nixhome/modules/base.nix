@@ -40,6 +40,12 @@
   };
 
   home.packages = with pkgs; [
+    # fonts — monospace with good Unicode block element coverage
+    cascadia-code  # Microsoft terminal font; seamless block elements
+    fira-code      # popular terminal font; decent block elements
+    iosevka-bin    # best block element coverage; designed for terminals
+    noto-fonts     # comprehensive Unicode incl. Noto Sans Mono
+
     aria2 # download tool
     dasel # JSON/TOML/YAML/XML processor with TOML output support
     ffmpeg # media processing

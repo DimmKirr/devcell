@@ -28,8 +28,9 @@ func buildBehaviourArgv(cwd string, envPairs []string, binary string, defaultFla
 
 // Scenario A: cwd=/tmp/myproject, TMUX_PANE=%3
 func TestScenarioA_ContainerNameAndVNC(t *testing.T) {
+	guiCfg := cfg.CellConfig{Cell: cfg.CellSection{GUI: true}}
 	argv := buildBehaviourArgv("/tmp/myproject", []string{"TMUX_PANE", "%3"},
-		"claude", []string{"--dangerously-skip-permissions"}, nil, cfg.CellConfig{})
+		"claude", []string{"--dangerously-skip-permissions"}, nil, guiCfg)
 
 	if !hasConsecutive(argv, "--name", "cell-myproject-3-run") {
 		t.Errorf("expected --name cell-myproject-3-run: %v", argv)
@@ -41,10 +42,11 @@ func TestScenarioA_ContainerNameAndVNC(t *testing.T) {
 
 // Scenario B: two panes — names and VNC ports differ
 func TestScenarioB_TwoPanesNamesAndPortsDiffer(t *testing.T) {
+	guiCfg := cfg.CellConfig{Cell: cfg.CellSection{GUI: true}}
 	argv3 := buildBehaviourArgv("/tmp/myproject", []string{"TMUX_PANE", "%3"},
-		"claude", nil, nil, cfg.CellConfig{})
+		"claude", nil, nil, guiCfg)
 	argv4 := buildBehaviourArgv("/tmp/myproject", []string{"TMUX_PANE", "%4"},
-		"claude", nil, nil, cfg.CellConfig{})
+		"claude", nil, nil, guiCfg)
 
 	name3 := findFlagVal(argv3, "--name")
 	name4 := findFlagVal(argv4, "--name")

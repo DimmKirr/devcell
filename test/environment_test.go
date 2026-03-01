@@ -163,7 +163,40 @@ func TestEnvWritePaths(t *testing.T) {
 	}
 }
 
-// ── 4. Startup time ──────────────────────────────────────────────────────────
+// ── 4. Base image permissions ────────────────────────────────────────────────
+
+// TestEnvBasePermissions — /opt/devcell directories must be owned by devcell (uid 1000).
+// Regression: COPY/mkdir in Dockerfile can create intermediate dirs as root,
+// breaking home-manager switch (flake.lock write) and nix config setup.
+func TestEnvBasePermissions(t *testing.T) {
+	c := startEnvContainer(t)
+
+	dirs := []string{
+		"/opt/devcell",
+		"/opt/devcell/.config",
+		"/opt/devcell/.config/nix",
+		"/opt/devcell/.config/home-manager",
+		"/opt/devcell/.nix-profile",
+		"/opt/asdf",
+		"/opt/npm-tools",
+		"/opt/python-tools",
+	}
+
+	for _, dir := range dirs {
+		out, code := exec(t, c, []string{"stat", "-c", "%u:%g", dir})
+		if code != 0 {
+			t.Errorf("FAIL: %s does not exist", dir)
+			continue
+		}
+		if out != "1000:1000" {
+			t.Errorf("FAIL: %s owned by %s, want 1000:1000", dir, out)
+		} else {
+			t.Logf("PASS: %s owned by %s", dir, out)
+		}
+	}
+}
+
+// ── 5. Startup time ──────────────────────────────────────────────────────────
 
 // TestEnvStartupTime — container must reach ready state within budget.
 //

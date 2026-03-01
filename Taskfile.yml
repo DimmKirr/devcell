@@ -24,12 +24,6 @@ vars:
   PORT_PREFIX: '{{env "SESSION_PORT_PREFIX" | default ""}}{{env "CELL_ID" | default (env "TMUX_PANE" | replace "%" "" | default "")}}'
   BASE_DIR: "{{ default .USER_WORKING_DIR }}"
 
-  # Guest VM paths (convert /Users/<host-user>/... to /Users/vagrant/...)
-  GUEST_DIR: '{{regexReplaceAll "^/Users/[^/]+" .USER_WORKING_DIR "/Users/vagrant"}}'
-  VAGRANT_CLAUDE: 'vagrant ssh -c "cd {{.GUEST_DIR}} && claude --dangerously-skip-permissions {{.CLI_ARGS}}"'
-  VAGRANT_SHELL: 'vagrant ssh -- -t "cd {{.GUEST_DIR}} && exec zsh -l"'
-  # MACOS_SSH_HOST: "{{.APP_NAME}}.local"  # Use Vagrantfile default
-
 env:
   APP_NAME: "{{.APP_NAME}}"
   BASE_DIR: "{{.BASE_DIR}}"
@@ -40,13 +34,9 @@ env:
   PORT_PREFIX: "{{.PORT_PREFIX}}"
   EXT_VNC_PORT: "{{.PORT_PREFIX}}50"
 
-  VAGRANT_CWD: "{{.DEVCELL_DIR}}"
-
   PORT: "{{.PORT}}"
   BUILDKIT_PROGRESS: plain
   CELL_HOME: "{{.CELL_HOME}}"
-
-  # MACOS_SSH_HOST: "{{.MACOS_SSH_HOST}}"  # Use Vagrantfile default
 
 ###
 # Include this via:
@@ -65,96 +55,7 @@ tasks:
         echo "Opening Chromium with profile: {{.CELL_HOME}}/.chrome"
         open -na "Chromium" --args --user-data-dir="{{.CELL_HOME}}/.chrome" {{.CLI_ARGS}}
 
-  chrome:export-cookies:
-    desc: Export decrypted cookies from macOS Chromium profile to ~/.chrome-cookies.json (run on macOS)
-    silent: true
-    cmds:
-      - |
-        uv run --with pycryptodome python3 << 'PYEOF'
-        import subprocess, sqlite3, json, shutil, os, sys, hashlib
-        from Crypto.Cipher import AES
-
-        cookies_db = os.path.expanduser("{{.CELL_HOME}}/.chrome/Default/Cookies")
-        output     = os.path.expanduser("{{.CELL_HOME}}/.chrome-cookies.json")
-
-        # Get encryption key from macOS Keychain (try Chromium then Chrome)
-        key = None
-        for service, account in [("Chromium Safe Storage", "Chromium"), ("Chrome Safe Storage", "Chrome")]:
-            try:
-                passwd = subprocess.check_output(
-                    ["security", "find-generic-password", "-w", "-s", service, "-a", account],
-                    stderr=subprocess.DEVNULL).strip()
-                key = hashlib.pbkdf2_hmac("sha1", passwd, b"saltysalt", 1003, dklen=16)
-                break
-            except Exception:
-                continue
-        if not key:
-            print("ERROR: Could not find Chromium key in macOS Keychain"); sys.exit(1)
-
-        def decrypt(enc, key):
-            if not enc: return ""
-            if enc[:3] != b"v10": return enc.decode("utf-8", errors="replace")
-            cipher = AES.new(key, AES.MODE_CBC, IV=b" " * 16)
-            dec = cipher.decrypt(enc[3:])
-            return dec[:-dec[-1]].decode("utf-8", errors="replace")
-
-        tmp = cookies_db + ".tmp"
-        shutil.copy2(cookies_db, tmp)
-        try:
-            conn = sqlite3.connect(tmp)
-            rows = conn.execute(
-                "SELECT host_key, name, value, encrypted_value, path, expires_utc, "
-                "is_secure, is_httponly, samesite FROM cookies").fetchall()
-            conn.close()
-        finally:
-            os.unlink(tmp)
-
-        cookies = [{"host": r[0], "name": r[1],
-                    "value": decrypt(r[3], key) if r[3] else r[2],
-                    "path": r[4], "expires": r[5],
-                    "secure": bool(r[6]), "httponly": bool(r[7]), "samesite": r[8]}
-                   for r in rows]
-        with open(output, "w") as f: json.dump(cookies, f, indent=2)
-        print(f"Exported {len(cookies)} cookies → {output}")
-        PYEOF
-
-  chrome:import-cookies:
-    desc: Import cookies from ~/.chrome-cookies.json into container Chromium profile (run in container)
-    silent: true
-    cmds:
-      - |
-        docker exec -i "cell-{{.APP_NAME}}-run" python3 << 'PYEOF'
-        import sqlite3, json, os, sys
-
-        src = os.path.expanduser("~/.chrome-cookies.json")
-        db  = os.path.expanduser("~/.chrome/Default/Cookies")
-
-        if not os.path.exists(src):
-            print(f"Not found: {src} — run 'task chrome:export-cookies' on macOS first"); sys.exit(1)
-
-        with open(src) as f: cookies = json.load(f)
-
-        conn = sqlite3.connect(db)
-        # Get actual column names to stay schema-version safe
-        cols = {r[1] for r in conn.execute("PRAGMA table_info(cookies)")}
-
-        for c in cookies:
-            conn.execute("DELETE FROM cookies WHERE host_key=? AND name=? AND path=?",
-                         (c["host"], c["name"], c["path"]))
-            row = {"host_key": c["host"], "name": c["name"], "value": c["value"],
-                   "encrypted_value": b"", "path": c["path"], "expires_utc": c["expires"],
-                   "is_secure": int(c["secure"]), "is_httponly": int(c["httponly"]),
-                   "samesite": c["samesite"], "last_access_utc": 0, "creation_utc": 0,
-                   "has_expires": 1, "is_persistent": 1, "priority": 1, "source_scheme": 2}
-            row = {k: v for k, v in row.items() if k in cols}
-            placeholders = ", ".join("?" * len(row))
-            conn.execute(f"INSERT INTO cookies ({', '.join(row)}) VALUES ({placeholders})",
-                         list(row.values()))
-        conn.commit(); conn.close()
-        print(f"Imported {len(cookies)} cookies into {db}")
-        PYEOF
-
-  devcell:nix:validate:
+  nix:validate:
     desc: Validate all nixhome profiles — syntax check then attr check (no build, no activation)
     dir: "{{.TASKFILE_DIR}}"
     cmds:
@@ -207,137 +108,14 @@ tasks:
     cmds:
       - docker buildx bake --file {{.DEVCELL_DIR}}/docker-bake.hcl --push ci {{.CLI_ARGS}}
 
-  vagrant:destroy:
-    desc: Destroy
+  web:docs:
+    desc: Generate cell CLI markdown reference for the website (requires Go)
     silent: true
+    dir: "{{.DEVCELL_DIR}}"
     cmds:
-      - |
-        echo "APP_NAME: {{.APP_NAME}}"
-        echo "DEVCELL_DIR: {{.DEVCELL_DIR}}"
+      - go run $(ls cmd/*.go | grep -Ev '(_test|main)\.go') web/src/content/cell
 
-      - vagrant destroy -f
-
-  macos:claude:
-    desc: Run Claude CLI in dev vagrant
-    silent: true
-    var:
-      TMUX_PANE: ""
-    cmds:
-      - |
-        echo "APP_NAME: {{.APP_NAME}}"
-        echo "GUEST_DIR: {{.GUEST_DIR}}"
-        echo "CELL_HOME: {{.CELL_HOME}}"
-
-        # Copy Vagrantfile.local from example if it doesn't exist
-        if [ ! -f "{{.DEVCELL_DIR}}/Vagrantfile.local" ]; then
-          cp "{{.DEVCELL_DIR}}/Vagrantfile.local-example" "{{.DEVCELL_DIR}}/Vagrantfile.local"
-        fi
-      - vagrant up --provider=utm --provision
-      - "{{.VAGRANT_CLAUDE}}"
-
-  macos:shell:
-    desc: Run shell in dev vagrant
-    silent: true
-    var:
-      TMUX_PANE: ""
-    cmds:
-      - |
-        echo "APP_NAME: {{.APP_NAME}}"
-        echo "GUEST_DIR: {{.GUEST_DIR}}"
-      - "{{.VAGRANT_SHELL}}"
-
-  macos:stop:
-    desc: Stop dev vagrant VM
-    silent: true
-    var:
-      TMUX_PANE: ""
-    cmds:
-      - |
-        echo "APP_NAME: {{.APP_NAME}}"
-      - vagrant destroy -f
-
-  vagrant:
-    desc: vagrant
-    silent: true
-    cmds:
-      - |
-        echo "APP_NAME: {{.APP_NAME}}"
-      - vagrant {{.CLI_ARGS}}
-
-  vagrant:box:export:
-    desc: "Export UTM VM as Vagrant box (usage: task vagrant:box:export -- <boxname> <vm-name>)"
-    silent: false
-    cmds:
-      - |
-        set -e
-        if [ -z "{{.CLI_ARGS}}" ]; then
-          echo "Usage: task vagrant:box:export -- <boxname> <vm-name>"
-          echo "Example: task vagrant:box:export -- devcell-macOS26 callnut-60"
-          exit 1
-        fi
-
-        BOX_NAME=$(echo "{{.CLI_ARGS}}" | awk '{print $1}')
-        VM_NAME=$(echo "{{.CLI_ARGS}}" | awk '{print $2}')
-        UTM_DIR="$HOME/Library/Containers/com.utmapp.UTM/Data/Documents"
-
-        if [ -z "$BOX_NAME" ] || [ -z "$VM_NAME" ]; then
-          echo "Error: Both boxname and vm-name are required"
-          echo "Usage: task vagrant:box:export -- <boxname> <vm-name>"
-          exit 1
-        fi
-
-        if [ ! -d "$UTM_DIR/$VM_NAME.utm" ]; then
-          echo "Error: VM not found at $UTM_DIR/$VM_NAME.utm"
-          echo "Available VMs:"
-          ls -1 "$UTM_DIR"/*.utm 2>/dev/null | xargs -I {} basename {} .utm
-          exit 1
-        fi
-
-        echo "Exporting VM '$VM_NAME' as box '$BOX_NAME'..."
-
-        # Create temp directory with correct structure
-        TEMP_DIR=$(mktemp -d)
-
-        # Create metadata.json
-        echo '{"provider":"utm"}' > "$TEMP_DIR/metadata.json"
-
-        # Create embedded Vagrantfile with box defaults
-        cat > "$TEMP_DIR/Vagrantfile" <<'VAGRANTFILE'
-        Vagrant.configure("2") do |config|
-          config.ssh.username = "vagrant"
-          config.ssh.host = "vagrant-macos.local"
-          config.ssh.port = 22
-          config.ssh.insert_key = false
-
-          config.vm.provider :utm do |utm|
-            utm.check_guest_additions = false
-            utm.skip_directory_share_mode = true
-          end
-        end
-        VAGRANTFILE
-
-        # Copy VM as box.utm (required name for vagrant_utm)
-        echo "Copying VM (this may take a while)..."
-        cp -R "$UTM_DIR/$VM_NAME.utm" "$TEMP_DIR/box.utm"
-
-        # Create box archive (no utm/ wrapper - vagrant creates the provider folder)
-        echo "Creating box archive..."
-        tar cvzf ~/$BOX_NAME.box -C "$TEMP_DIR" metadata.json Vagrantfile box.utm
-
-        # Cleanup temp dir
-        rm -rf "$TEMP_DIR"
-
-        echo "Adding box to Vagrant..."
-        vagrant box add ~/$BOX_NAME.box --name $BOX_NAME --force
-
-        echo ""
-        echo "Box exported successfully!"
-        echo "Use with: MACOS_BOX=$BOX_NAME task macos:claude"
-        echo ""
-        vagrant box list
-  
-
-  devcell:web:start:
+  web:start:
     desc: Start Astro dev server for the DevCell landing page
     silent: true
     dir: "{{.DEVCELL_DIR}}/web"
@@ -350,7 +128,7 @@ tasks:
     dir: "{{.DEVCELL_DIR}}"
     cmds:
       - mkdir -p ~/.local/bin
-      - CGO_ENABLED=0 go build -ldflags "{{.CELL_LDFLAGS}}" -o ~/.local/bin/cell ./cmd/
+      - task: build
       - echo "Installed to ~/.local/bin/cell"
 
   build:
@@ -358,44 +136,10 @@ tasks:
     aliases: [cell:build]
     dir: "{{.DEVCELL_DIR}}"
     cmds:
-      - CGO_ENABLED=0 go build -ldflags "{{.CELL_LDFLAGS}}" -o bin/cell ./cmd/
-
-  cell:install:
-    desc: Install cell binary to GOPATH/bin
-    cmds:
-      - CGO_ENABLED=0 go install -ldflags "{{.CELL_LDFLAGS}}" ./cmd/
-
-  cell:test:
-    desc: Run cell CLI unit tests
-    cmds:
-      - go test -v ./cmd/... {{.CLI_ARGS}}
-
-  cell:dist:mac-arm64:
-    desc: Cross-compile cell for macOS arm64
-    cmds:
-      - CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags "{{.CELL_LDFLAGS}}" -o dist/cell-darwin-arm64 ./cmd/
-
-  cell:dist:mac-amd64:
-    desc: Cross-compile cell for macOS amd64
-    cmds:
-      - CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags "{{.CELL_LDFLAGS}}" -o dist/cell-darwin-amd64 ./cmd/
-
-  cell:dist:linux-amd64:
-    desc: Cross-compile cell for Linux amd64
-    cmds:
-      - CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "{{.CELL_LDFLAGS}}" -o dist/cell-linux-amd64 ./cmd/
-
-  cell:dist:linux-arm64:
-    desc: Cross-compile cell for Linux arm64
-    cmds:
-      - CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags "{{.CELL_LDFLAGS}}" -o dist/cell-linux-arm64 ./cmd/
-
-  cell:dist:all:
-    desc: Cross-compile cell for all platforms
-    deps: [cell:dist:mac-arm64, cell:dist:mac-amd64, cell:dist:linux-amd64, cell:dist:linux-arm64]
+      - CGO_ENABLED=0 go build -ldflags "{{.CELL_LDFLAGS}}" -o ~/.local/bin/cell ./cmd/
 
   ########################################################################################################################
-  devcell:test:
+  test:
     desc: Run the full container integration test suite
     silent: true
     cmds:

@@ -1,55 +1,10 @@
 ---
 import Base from '../layouts/Base.astro';
 
-const features = [
-  {
-    category: "AI Agents",
-    items: [
-      { name: "Claude Code", desc: "Isolated container with full project file access" },
-      { name: "OpenAI Codex", desc: "Runs with correct environment and terminal support" },
-      { name: "OpenCode", desc: "Open-source coding agent with MCP server integration" },
-    ],
-  },
-  {
-    category: "Languages & Runtimes",
-    items: [
-      { name: "asdf", desc: "Node.js, Python 3.13, Go, Ruby — versions pinned via .tool-versions" },
-      { name: "Swift / Clang / LLVM", desc: "Open-source Apple toolchain available on Linux" },
-      { name: "Nix home-manager", desc: "Declarative environment profiles, byte-identical across machines" },
-    ],
-  },
-  {
-    category: "Infrastructure",
-    items: [
-      { name: "Terraform / OpenTofu", desc: "IaC toolchain with OpenTofu MCP server" },
-      { name: "Docker & Compose", desc: "Docker CLI with Compose plugin" },
-      { name: "Packer", desc: "Machine image building" },
-    ],
-  },
-  {
-    category: "Electronics & IoT",
-    items: [
-      { name: "ESPHome", desc: "ESP microcontroller firmware configuration" },
-      { name: "Wokwi CLI", desc: "Circuit simulation without hardware" },
-      { name: "ngspice", desc: "SPICE circuit simulator" },
-    ],
-  },
-  {
-    category: "Desktop & GUI",
-    items: [
-      { name: "VNC", desc: "Full desktop environment accessible via VNC" },
-      { name: "X11 forwarding", desc: "GUI apps rendered on your host screen" },
-      { name: "Playwright MCP", desc: "Browser automation with secrets injection" },
-    ],
-  },
-  {
-    category: "Media & Docs",
-    items: [
-      { name: "ffmpeg / ImageMagick", desc: "Media processing" },
-      { name: "Slidev", desc: "Markdown-based presentations" },
-      { name: "yt-dlp", desc: "Video downloader" },
-    ],
-  },
+const profiles = [
+  { category: "AI Agents",            tools: ["Claude Code", "OpenAI Codex", "OpenCode"] },
+  { category: "Languages & Runtimes", tools: ["Node.js", "Python 3.13", "Go", "Ruby", "Swift / Clang / LLVM"] },
+  { category: "Infrastructure",       tools: ["Terraform", "OpenTofu", "Docker", "Compose", "Packer"] },
 ];
 ---
 
@@ -94,13 +49,18 @@ const features = [
     h1 {
       font-size: clamp(2.8rem, 6vw, 5rem);
       font-weight: 900;
-      line-height: 1.05;
+      line-height: 1;
       letter-spacing: -2px;
       text-transform: uppercase;
       margin-bottom: 1.5rem;
     }
 
-    h1 .hl { background: var(--accent); padding: 0 0.1em; }
+    h1 .hl {
+      background: var(--accent);
+      display: inline-block;
+      padding: 0.05em 0.15em;
+      line-height: 0.9;
+    }
 
     .hero-desc {
       font-family: var(--font-mono);
@@ -111,7 +71,31 @@ const features = [
       max-width: 460px;
     }
 
-    .hero-actions { display: flex; gap: 0.75rem; flex-wrap: wrap; }
+    .hero-actions { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1.75rem; }
+
+    .hero-quote {
+      border-left: 3px solid var(--black);
+      padding: 0.75rem 1rem;
+      background: var(--bg-muted);
+      max-width: 460px;
+    }
+
+    .hero-quote p {
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+      line-height: 1.6;
+      color: #333;
+      margin-bottom: 0.35rem;
+    }
+
+    .hero-quote cite {
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      color: #888;
+      font-style: normal;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
 
     /* TERMINAL */
     .terminal {
@@ -137,13 +121,26 @@ const features = [
     .dot-y { background: #FFBD2E; }
     .dot-g { background: #28CA41; }
 
-    .t-path { color: #5F8AFF; }
+    .t-path   { color: #5F8AFF; }
     .t-branch { color: #C678DD; }
-    .t-cmd { color: #E5E5E5; }
-    .t-ok { color: #98C379; }
-    .t-dim { color: #555; }
-    .t-cursor { color: var(--accent); animation: blink 1s step-end infinite; }
-    @keyframes blink { 50% { opacity: 0; } }
+    .t-cmd    { color: #E5E5E5; }
+    .t-ok     { color: #98C379; }
+    .t-dim    { color: #555; }
+    .t-hr     { color: #333; line-height: 1.2; }
+    .t-logo   { color: #E8834E; font-family: ui-monospace, 'SF Mono', Menlo, 'Courier New', monospace; letter-spacing: 0; }
+    .t-title  { color: #E5E5E5; font-weight: 700; }
+    .t-ver    { color: #555; }
+    .t-safe   { color: #98C379; }
+    .t-safe .fa-solid { font-size: 0.85em; vertical-align: baseline; }
+    .t-prompt { color: var(--accent); }
+    .t-splash {
+      font-family: var(--font-mono);
+      font-size: inherit;
+      line-height: 1.55;
+      margin: 0.1rem 0;
+      white-space: pre;
+      letter-spacing: 0;
+    }
 
     /* SECTION */
     section { max-width: 1200px; margin: 0 auto; padding: 3rem 2rem; }
@@ -178,7 +175,7 @@ const features = [
       padding-bottom: 0.75rem;
     }
 
-    /* WHAT IT DOES */
+    /* CARDS */
     .does-grid {
       display: grid;
       grid-template-columns: repeat(3, 1fr);
@@ -197,8 +194,19 @@ const features = [
     }
 
     .does-card:nth-child(3n) { border-right: none; }
-    .does-card:nth-last-child(-n+3) { border-bottom: none; }
+    .does-card:last-child { border-right: none; border-bottom: none; }
+    .does-card:nth-child(3n+1):nth-last-child(-n+3) { border-bottom: none; }
+    .does-card:nth-child(3n+2):nth-last-child(-n+2) { border-bottom: none; }
+    .does-card:nth-child(3n):nth-last-child(-n+1)   { border-bottom: none; }
     .does-card:hover { background: var(--accent); }
+
+    .does-card a, .step a {
+      color: var(--black);
+      font-weight: 900;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+    .does-card a:hover, .step a:hover { background: var(--accent); text-decoration: none; }
 
     .does-card h3 {
       font-size: 0.85rem;
@@ -215,70 +223,69 @@ const features = [
       line-height: 1.65;
     }
 
-    /* FEATURES */
+    /* INSIDE */
     .features-wrap {
       background: var(--bg-muted);
       border-top: var(--border);
       border-bottom: var(--border);
     }
 
-    .features-grid {
-      display: grid;
-      grid-template-columns: repeat(2, 1fr);
-      gap: 1.25rem;
-    }
-
-    @media (max-width: 768px) { .features-grid { grid-template-columns: 1fr; } }
-
-    .feat-group {
-      background: var(--white);
+    .profiles-grid {
       border: var(--border);
-      box-shadow: var(--shadow);
-      overflow: hidden;
-      transition: transform 0.1s, box-shadow 0.1s;
+      margin-bottom: 1rem;
     }
 
-    .feat-group:hover { transform: translate(-2px, -2px); box-shadow: var(--shadow-lg); }
+    .profile-row {
+      display: grid;
+      grid-template-columns: 13rem 1fr;
+      border-bottom: 1px solid #CCCCCC;
+      align-items: baseline;
+    }
 
-    .feat-header {
-      background: var(--black);
-      color: var(--white);
-      padding: 0.65rem 1.1rem;
+    .profile-row:last-child { border-bottom: none; }
+
+    .profile-cat {
       font-size: 0.72rem;
       font-weight: 900;
       text-transform: uppercase;
-      letter-spacing: 1.5px;
+      letter-spacing: 1px;
+      padding: 0.8rem 1.1rem;
+      border-right: 1px solid #CCCCCC;
     }
 
-    .feat-items { list-style: none; }
-
-    .feat-item {
-      padding: 0.85rem 1.1rem;
-      border-bottom: 1px solid #CCCCCC;
-      display: grid;
-      grid-template-columns: auto 1fr;
-      gap: 0.75rem;
-      align-items: start;
-    }
-
-    .feat-item:last-child { border-bottom: none; }
-
-    .feat-bullet {
-      width: 6px;
-      height: 6px;
-      background: var(--black);
-      margin-top: 6px;
-      flex-shrink: 0;
-    }
-
-    .feat-name { font-size: 0.83rem; font-weight: 900; margin-bottom: 0.15rem; }
-
-    .feat-desc {
+    .profile-tools {
       font-family: var(--font-mono);
-      font-size: 0.74rem;
-      color: #666;
-      line-height: 1.5;
+      font-size: 0.78rem;
+      color: #444;
+      padding: 0.8rem 1.1rem;
     }
+
+    @media (max-width: 600px) {
+      .profile-row { grid-template-columns: 1fr; }
+      .profile-cat { border-right: none; border-bottom: 1px solid #CCCCCC; }
+    }
+
+    .profiles-more {
+      font-family: var(--font-mono);
+      font-size: 0.78rem;
+      color: #888;
+    }
+
+    .profiles-more a {
+      color: var(--black);
+      font-weight: 900;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+
+    /* EYEBROW STAR LINK */
+    .eyebrow-stars {
+      color: var(--black);
+      text-decoration: none;
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+    }
+    .eyebrow-stars:hover { color: var(--black); text-decoration: underline; }
 
     /* QUICKSTART */
     .qs-grid {
@@ -372,21 +379,27 @@ const features = [
     }
 </style>
 
-<Base title="DevCell" description="DevCell — Run Claude Code, Codex, and OpenCode in an isolated container. One command from any project directory.">
+<Base title="devcell — Claude Code, without the blast radius" description="An AI agent sandbox. Run Claude Code, Codex, or OpenCode with auto-approve — SSH keys, other repos, and your host filesystem stay completely out of reach.">
   <div class="hero-wrap">
     <div class="hero">
       <div>
-        <p class="hero-eyebrow">MIT License · Open Source</p>
-        <h1>Container<br/>for AI<br/><span class="hl">agents</span></h1>
+        <p class="hero-eyebrow">AI Agent Sandbox · Apache 2.0 · <a href="https://github.com/DimmKirr/devcell" class="eyebrow-stars">★ Star on GitHub</a></p>
+        <h1>Claude Code,<br/>Without the<br/><span class="hl">Blast Radius.</span></h1>
         <p class="hero-desc">
-          One command launches Claude Code, Codex, or OpenCode in an isolated
-          container. Your project directory is available at /workspace —
-          nothing else is exposed.
+          You want Claude to just do things — no approval prompts, full dev cycle.
+          But locally, auto-approve means the agent has your SSH keys, other repos,
+          and every credential on the machine.<br/><br/>
+          devcell is an AI agent sandbox: your project directory is mounted inside,
+          everything else stays out.
         </p>
         <div class="hero-actions">
           <a href="https://github.com/DimmKirr/devcell" class="btn btn-primary">View on GitHub →</a>
           <a href="#quickstart" class="btn btn-secondary">Quickstart</a>
         </div>
+        <blockquote class="hero-quote">
+          <p>"Run this in a container, not your actual machine."</p>
+          <cite>— Anthropic, Claude Code documentation</cite>
+        </blockquote>
       </div>
 
       <div class="terminal">
@@ -395,71 +408,53 @@ const features = [
           <span class="dot dot-y"></span>
           <span class="dot dot-g"></span>
         </div>
-        <div><span class="t-path">~/myproject </span><span class="t-dim">on </span><span class="t-branch">main</span></div>
-        <div><span class="t-cmd">$ cell claude</span></div>
-        <div class="t-dim">starting container...</div>
-        <div><span class="t-ok">✔ </span><span class="t-dim">image ready</span></div>
-        <div><span class="t-ok">✔ </span><span class="t-dim">workspace mounted</span></div>
-        <div class="t-dim">──────────────────────────</div>
-        <div><span class="t-ok">Claude Code </span><span class="t-dim">ready in /workspace</span></div>
-        <div><span class="t-cursor">▌</span></div>
+        <div><span class="t-path">~/myproject</span> <span class="t-dim">$</span> <span class="t-cmd"> cell claude</span></div>
+        <div class="t-dim">starting sandbox…</div>
+        <div><span class="t-ok">✔</span> <span class="t-dim">mounted /home/alex/myproject</span></div>
+        <div class="t-hr">───────────────────────────────────────</div>
+        <pre class="t-splash"><span class="t-logo"> ▐▛███▜▌</span>  <span class="t-title">Claude Code</span> <span class="t-ver">v2.1.49</span>
+<span class="t-logo">▝▜█████▛▘</span>  <span class="t-dim">Sonnet 4.6 · Claude Max</span>
+<span class="t-logo">  ▘▘ ▝▝ </span>  <span class="t-path">/myproject</span>
+<span class="t-logo">        </span>  <span class="t-path">⏵⏵ auto-approve · </span><span class="t-safe"><span style="color:#fff">[</span><span style="color:#E85D26">*</span><span style="color:#AAAAAA">.</span><span style="color:#fff">]</span> Cell Active</span></pre>
+        <div class="t-hr">───────────────────────────────────────</div>
+        <div><span class="t-prompt">❯</span><span class="t-cmd"> implement login form</span></div>
+        <div class="t-hr">───────────────────────────────────────</div>
       </div>
     </div>
   </div>
 
-  <section id="what">
-    <p class="section-label">Overview</p>
-    <h2>What it does</h2>
+  <section id="why">
+    <p class="section-label">Why it matters</p>
+    <h2>Auto-approve, safely.</h2>
     <div class="does-grid">
       <div class="does-card">
-        <h3>Isolated execution</h3>
-        <p>Runs AI agents inside Docker with full access to your project directory. The agent edits freely; your host system is untouched.</p>
+        <h3>Blast radius bounded</h3>
+        <p>SSH keys, other repos, host APIs — unreachable. The agent edits freely inside your project; your host system is completely untouched.</p>
       </div>
       <div class="does-card">
-        <h3>Full toolchain</h3>
-        <p>Debian base with Go, Node, Python, asdf, Docker CLI, Terraform, and more pre-installed. No extra setup per project.</p>
+        <h3>One command, any project</h3>
+        <p><code>cd my-project && cell claude</code> — working directory mounted automatically. No per-project config. Works for Claude Code, Codex, and OpenCode.</p>
       </div>
       <div class="does-card">
-        <h3>Reproducible via Nix</h3>
-        <p>Nix home-manager pins every tool to an exact version. The environment is byte-identical across machines and rebuilds.</p>
-      </div>
-      <div class="does-card">
-        <h3>GUI & desktop</h3>
-        <p>VNC and X11 forwarding for running browsers and GUI tools inside the container — useful for Playwright and visual debugging.</p>
-      </div>
-      <div class="does-card">
-        <h3>Project isolation</h3>
-        <p>Each project gets its own container state, cell home, and Chrome profile. No state bleed between projects.</p>
-      </div>
-      <div class="does-card">
-        <h3>One command, anywhere</h3>
-        <p>Navigate to any repo and run <code>cell claude</code>. The working directory is mounted automatically — no project-level config needed.</p>
+        <h3>Toolchain that won't break</h3>
+        <p>Go, Node.js, Python, asdf, Terraform and more, pre-installed and community-vetted. No download URLs to die. No version drift between machines.</p>
       </div>
     </div>
   </section>
 
-  <div class="features-wrap" id="features">
+  <div class="features-wrap" id="inside">
     <section>
-      <p class="section-label">Included packages</p>
-      <h2>Feature set</h2>
-      <div class="features-grid">
-        {features.map((group) => (
-          <div class="feat-group">
-            <div class="feat-header">{group.category}</div>
-            <ul class="feat-items">
-              {group.items.map((item) => (
-                <li class="feat-item">
-                  <span class="feat-bullet"></span>
-                  <div>
-                    <div class="feat-name">{item.name}</div>
-                    <div class="feat-desc">{item.desc}</div>
-                  </div>
-                </li>
-              ))}
-            </ul>
+      <p class="section-label">What's inside</p>
+      <h2>Batteries included.</h2>
+      <div class="profiles-grid">
+        {profiles.map((group) => (
+          <div class="profile-row">
+            <span class="profile-cat">{group.category}</span>
+            <span class="profile-tools">{group.tools.join(' · ')}</span>
           </div>
         ))}
       </div>
+      <p class="profiles-more">Also includes Electronics & IoT, Desktop & GUI, Media & Docs, and local MCPs (Playwright, Chromium). <a href="https://github.com/DimmKirr/devcell/tree/main/nixhome">See all included tools →</a></p>
     </section>
   </div>
 
@@ -472,7 +467,7 @@ const features = [
           <span class="step-num">1</span>
           <div>
             <h4>Install</h4>
-            <p>Download the <code>cell</code> binary for your platform from <a href="https://github.com/DimmKirr/devcell/releases">GitHub releases</a>. Requires <code>docker</code>.</p>
+            <p>macOS: <code>brew install DimmKirr/tap/devcell</code><br/>Linux: download from <a href="https://github.com/DimmKirr/devcell/releases">GitHub releases</a>. Requires <code>docker</code>.</p>
           </div>
         </li>
         <li class="step">
@@ -493,10 +488,10 @@ const features = [
 
       <div>
         <div class="code-block">
-          <span class="line"><span class="cmt"># download cell from GitHub releases</span></span>
-          <span class="line"><span class="cmt"># github.com/DimmKirr/devcell/releases</span></span>
+          <span class="line"><span class="cmt"># macOS</span></span>
+          <span class="line"><span class="cmd">brew </span><span class="arg">install</span> DimmKirr/tap/devcell</span>
           <span class="gap"></span>
-          <span class="line"><span class="cmt"># one-time setup — builds the Docker image</span></span>
+          <span class="line"><span class="cmt"># one-time setup — builds the sandbox image</span></span>
           <span class="line"><span class="cmd">cell </span><span class="arg">init</span></span>
           <span class="gap"></span>
           <span class="line"><span class="cmt"># run from any project directory</span></span>

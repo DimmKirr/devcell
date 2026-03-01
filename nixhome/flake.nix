@@ -7,6 +7,10 @@
       url = "github:nix-community/home-manager/release-25.11";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    nix-darwin = {
+      url = "github:LnL7/nix-darwin/nix-darwin-25.11";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
     asdf = {
       url = "github:DimmKirr/nix-asdf";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -18,6 +22,7 @@
     self,
     nixpkgs,
     home-manager,
+    nix-darwin,
     asdf,
     mcp-nixos,
   }: let
@@ -76,5 +81,21 @@
       profiles;
   in {
     homeConfigurations = mkAllConfigs;
+
+    # macOS VM (Vagrant/UTM) — applied via: darwin-rebuild switch --flake .#macOS
+    darwinConfigurations.macOS = nix-darwin.lib.darwinSystem {
+      system = "aarch64-darwin";
+      modules = [
+        ./hosts/macos/default.nix
+        home-manager.darwinModules.home-manager
+        {
+          # Pass flake inputs into home-manager modules (needed by base.nix → managed-*.nix)
+          home-manager.extraSpecialArgs = {inherit asdf mcp-nixos;};
+          home-manager.useGlobalPkgs = true;
+          home-manager.useUserPackages = true;
+          home-manager.users.vagrant = import ./hosts/macos/home.nix;
+        }
+      ];
+    };
   };
 }

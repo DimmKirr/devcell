@@ -17,9 +17,14 @@ var initCmd = &cobra.Command{
 
 func init() {
 	initCmd.Flags().BoolP("yes", "y", false, "Skip confirmation prompts and proceed with defaults")
+	initCmd.Flags().Bool("macos", false, "Set up a macOS VM box via UTM + Vagrant")
 }
 
 func runInit(cmd *cobra.Command, _ []string) error {
+	macos, _ := cmd.Flags().GetBool("macos")
+	if macos {
+		return runInitMacOS()
+	}
 	applyOutputFlags()
 	yes, _ := cmd.Flags().GetBool("yes")
 

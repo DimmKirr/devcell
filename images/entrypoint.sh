@@ -24,8 +24,22 @@ if ! id "$HOST_USER" &>/dev/null; then
     echo "$HOST_USER ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 fi
 
-mkdir -p "$HOME/.local/bin"
-chown "$HOST_USER" "$HOME/.local/bin"
+# ── Grant docker socket access to session user ────────────────────────────────
+# The socket GID varies per host; resolve it at runtime and add HOST_USER to
+# whatever group owns the socket (creating it if it doesn't exist inside the
+# container yet).
+if [ -S /var/run/docker.sock ]; then
+    DOCKER_GID=$(stat -c '%g' /var/run/docker.sock)
+    DOCKER_GROUP=$(getent group "$DOCKER_GID" | cut -d: -f1)
+    if [ -z "$DOCKER_GROUP" ]; then
+        groupadd -g "$DOCKER_GID" dockerhost
+        DOCKER_GROUP=dockerhost
+    fi
+    usermod -aG "$DOCKER_GROUP" "$HOST_USER"
+fi
+
+mkdir -p "$HOME/.local/bin" "$HOME/tmp"
+chown "$HOST_USER" "$HOME/.local/bin" "$HOME/tmp"
 
 # ── Give session user access to devcell's nix environment ─────────────────────
 # nix.sh resolves $HOME/.nix-profile to find nix tools. Create a symlink so
@@ -42,8 +56,8 @@ for file in .bashrc .zshrc .profile; do
         # Override write-path vars set by hm-session-vars.sh, and session identity.
         # Explicitly include nix profile bin via compat symlink (world-readable);
         # /opt/devcell/ is 700 so testuser cannot follow the .nix-profile symlink there.
-        printf '\n# -- devcell session user overrides --\nexport USER="%s"\nexport GOPATH="%s/go"\nexport PATH="%s/go/bin:/nix/var/nix/profiles/per-user/devcell/profile/bin:/opt/asdf/shims:/opt/python-tools/.venv/bin:/opt/npm-tools/node_modules/.bin${PATH:+:}${PATH}"\n' \
-            "$HOST_USER" "$HOME" "$HOME" >> "$HOME/$file"
+        printf '\n# -- devcell session user overrides --\nexport USER="%s"\nexport GOPATH="%s/go"\nexport ASDF_DATA_DIR="%s/.asdf"\nexport PATH="%s/go/bin:/nix/var/nix/profiles/per-user/devcell/profile/bin:%s/.asdf/shims:/opt/python-tools/.venv/bin:/opt/npm-tools/node_modules/.bin${PATH:+:}${PATH}"\n' \
+            "$HOST_USER" "$HOME" "$HOME" "$HOME" "$HOME" >> "$HOME/$file"
         chown "$HOST_USER" "$HOME/$file"
     fi
 done
@@ -52,6 +66,78 @@ for file in .asdfrc .tool-versions; do
     [ -e "$DEVCELL_HOME/$file" ] && [ ! -e "$HOME/$file" ] \
         && cp -r "$DEVCELL_HOME/$file" "$HOME/$file" && chown -R "$HOST_USER" "$HOME/$file"
 done
+
+# ── Setup ~/.asdf (user-persisted ASDF_DATA_DIR) ──────────────────────────────
+# /opt/asdf holds baked-in installs (ephemeral, reset on each container start).
+# ~/.asdf (CellHome, bind-mounted) holds user-installed versions that persist.
+# Baked-in versions are symlinked per-version into ~/.asdf so asdf resolves both
+# through a single ASDF_DATA_DIR without copying data.
+setup_asdf_home() {
+    local baked="/opt/asdf"
+    local user_asdf="$HOME/.asdf"
+    local asdf_bin="/nix/var/nix/profiles/per-user/devcell/profile/bin/asdf"
+
+    mkdir -p "$user_asdf/installs" "$user_asdf/plugins" "$user_asdf/shims"
+
+    # Symlink each baked-in tool version individually so user installs can coexist
+    # as real directories alongside the symlinks.
+    for tool_dir in "$baked/installs"/*/; do
+        [ -d "$tool_dir" ] || continue
+        tool_name=$(basename "$tool_dir")
+        mkdir -p "$user_asdf/installs/$tool_name"
+
+        # Remove dangling symlinks left by superseded image versions.
+        # Use * (not */) so dangling symlinks (no live target) are included.
+        for link in "$user_asdf/installs/$tool_name"/*; do
+            if [ -L "$link" ] && [ ! -e "$link" ]; then rm -f "$link"; fi
+        done
+
+        # Symlink current baked-in versions (skip real dirs — user installs).
+        for ver_dir in "$tool_dir"*/; do
+            [ -d "$ver_dir" ] || continue
+            ver_name=$(basename "$ver_dir")
+            dest="$user_asdf/installs/$tool_name/$ver_name"
+            # Never overwrite a real directory (user-installed version).
+            [ -d "$dest" ] && [ ! -L "$dest" ] && continue
+            ln -sfT "$ver_dir" "$dest"
+        done
+    done
+
+    # Symlink baked-in plugins (only if not already a real/user-managed dir).
+    for plugin_dir in "$baked/plugins"/*/; do
+        [ -d "$plugin_dir" ] || continue
+        plugin_name=$(basename "$plugin_dir")
+        dest="$user_asdf/plugins/$plugin_name"
+        [ -d "$dest" ] && [ ! -L "$dest" ] && continue
+        ln -sfT "$plugin_dir" "$dest"
+    done
+
+    chown -R "$HOST_USER" "$user_asdf"
+
+    # Regenerate shims into ~/.asdf/shims for all currently visible installs.
+    ASDF_DATA_DIR="$user_asdf" HOME="$HOME" "$asdf_bin" reshim 2>/dev/null || true
+
+    # Install any versions listed in ~/.tool-versions that aren't baked.
+    # Runs on first start (or after user edits the file); subsequent starts are
+    # instant because installed versions persist in the cell home.
+    if [ -f "$HOME/.tool-versions" ]; then
+        log "Installing global tool versions from ~/.tool-versions..."
+        (cd "$HOME" && ASDF_DATA_DIR="$user_asdf" HOME="$HOME" USER="$HOST_USER" \
+            "$asdf_bin" install 2>&1) | while IFS= read -r line; do log "$line"; done || true
+        chown -R "$HOST_USER" "$user_asdf"
+    fi
+
+    # If the workspace has a .tool-versions, install any missing versions now so
+    # they land in ~/.asdf (CellHome) and persist — no re-download on next start.
+    local workspace="/${APP_NAME:-}"
+    if [ -n "$APP_NAME" ] && [ -f "$workspace/.tool-versions" ]; then
+        log "Installing workspace tool versions from $workspace/.tool-versions..."
+        (cd "$workspace" && ASDF_DATA_DIR="$user_asdf" HOME="$HOME" USER="$HOST_USER" \
+            "$asdf_bin" install 2>&1) | while IFS= read -r line; do log "$line"; done || true
+        chown -R "$HOST_USER" "$user_asdf"
+    fi
+}
+setup_asdf_home
 
 if [ -d "$DEVCELL_HOME/.config/nix" ] && [ ! -d "$HOME/.config/nix" ]; then
     mkdir -p "$HOME/.config"
@@ -500,26 +586,9 @@ if [ "$DEVCELL_GUI_ENABLED" = "true" ]; then
         gosu "$USER" feh --bg-fill "$DEVCELL_HOME/.fluxbox/wallpaper.png" 2>/dev/null || true
     fi
 
-    (
-        LAST_CLIP="" LAST_PRIM=""
-        while true; do
-            PRIM=$(gosu "$USER" xclip -display :${DISPLAY_NUM} -selection primary -o 2>/dev/null)
-            CLIP=$(gosu "$USER" xclip -display :${DISPLAY_NUM} -selection clipboard -o 2>/dev/null)
-            if [ -n "$PRIM" ] && [ "$PRIM" != "$LAST_PRIM" ] && [ "$PRIM" != "$CLIP" ]; then
-                echo -n "$PRIM" | gosu "$USER" xclip -display :${DISPLAY_NUM} -selection clipboard
-                LAST_PRIM="$PRIM"
-            fi
-            if [ -n "$CLIP" ] && [ "$CLIP" != "$LAST_CLIP" ] && [ "$CLIP" != "$PRIM" ]; then
-                echo -n "$CLIP" | gosu "$USER" xclip -display :${DISPLAY_NUM} -selection primary
-                LAST_CLIP="$CLIP"
-            fi
-            sleep 0.3
-        done
-    ) &
-
     log "Starting x11vnc on port 5900..."
     gosu "$USER" x11vnc -display :${DISPLAY_NUM} -forever -shared -passwd vnc -rfbport 5900 \
-        -desktop "${APP_NAME:-cell}" &>/dev/null &
+        -desktop "${APP_NAME:-cell}" -pointer_mode 2 &>/dev/null &
 
     log "VNC server ready - connect to localhost:${EXT_VNC_PORT:-5900}"
     log "DISPLAY=:${DISPLAY_NUM}"
@@ -527,5 +596,11 @@ fi
 
 export CHROMIUM_PROFILE_PATH="${HOME}/.chrome-${APP_NAME:-cell}"
 export PLAYWRIGHT_MCP_USER_DATA_DIR="${HOME}/.playwright-${APP_NAME:-cell}"
+
+# Ensure ASDF_DATA_DIR and shims are correct for exec'd processes (e.g. claude)
+# that don't source shell rc files and would otherwise inherit the container ENV
+# which still points at the ephemeral /opt/asdf.
+export ASDF_DATA_DIR="${HOME}/.asdf"
+export PATH="${HOME}/.asdf/shims:${PATH}"
 
 exec gosu "$USER" "$@"

@@ -9,82 +9,23 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/DimmKirr/devcell/internal/scaffold"
 	"github.com/creack/pty"
 )
 
-// workflowSetup builds the cell binary, runs cell init --yes, and returns
-// the cell binary path and the scaffold config directory.
-// It skips in short mode and registers cleanup to remove devcell-local image.
-func workflowSetup(t *testing.T) (cellBin, configDir, projectDir string) {
-	t.Helper()
+// TestBaseImage validates base image capabilities via direct docker run.
+// CI runs this with DEVCELL_IMAGE pointing to the base image.
+func TestBaseImage(t *testing.T) {
 	if testing.Short() {
-		t.Skip("skipping workflow test in short mode")
+		t.Skip("skipping in short mode")
 	}
+	img := image()
 
-	// Build cell binary.
-	cellBin = filepath.Join(t.TempDir(), "cell")
-	build := osexec.Command("go", "build", "-o", cellBin, "./cmd")
-	build.Dir = filepath.Join("..")
-	build.Stdout = os.Stdout
-	build.Stderr = os.Stderr
-	if err := build.Run(); err != nil {
-		t.Fatalf("go build cell: %v", err)
-	}
-
-	// Run cell init --yes (scaffolds + docker build -t devcell-local).
-	configDir = t.TempDir()
-	projectDir = t.TempDir()
-
-	cmd := osexec.Command(cellBin, "init", "--yes")
-	cmd.Dir = projectDir
-	cmd.Env = append(os.Environ(),
-		"XDG_CONFIG_HOME="+configDir,
-		"HOME="+t.TempDir(),
-	)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("cell init --yes: %v", err)
-	}
-
-	t.Cleanup(func() {
-		osexec.Command("docker", "rmi", "-f", "devcell-local").Run()
-	})
-
-	return cellBin, configDir, projectDir
-}
-
-// TestWorkflow_ImageContents tests: cell init → assert scaffold → docker run commands.
-// Validates the built image directly without going through cell shell.
-func TestWorkflow_ImageContents(t *testing.T) {
-	_, configDir, _ := workflowSetup(t)
-	devcellConfigDir := filepath.Join(configDir, "devcell")
-
-	// Assert scaffold output files exist.
-	for _, name := range []string{"Dockerfile", "flake.nix", "devcell.toml"} {
-		path := filepath.Join(devcellConfigDir, name)
-		if _, err := os.Stat(path); err != nil {
-			t.Errorf("expected scaffold file %s: %v", name, err)
-		}
-	}
-
-	// Assert Dockerfile starts with the expected FROM.
-	df, err := os.ReadFile(filepath.Join(devcellConfigDir, "Dockerfile"))
-	if err != nil {
-		t.Fatalf("read Dockerfile: %v", err)
-	}
-	if !strings.HasPrefix(string(df), "FROM ghcr.io/dimmkirr/devcell:v0.0.0") {
-		t.Errorf("Dockerfile FROM mismatch; got: %s", strings.SplitN(string(df), "\n", 2)[0])
-	}
-
-	// bash echo — image runs and bash works.
 	t.Run("bash_echo", func(t *testing.T) {
 		out, err := osexec.Command("docker", "run", "--rm",
-			"--user", "0",
-			"-e", "HOST_USER=testuser",
-			"-e", "APP_NAME=test",
-			"devcell-local",
-			"bash", "-c", "echo 123",
+			"--entrypoint", "bash",
+			img,
+			"-c", "echo 123",
 		).CombinedOutput()
 		if err != nil {
 			t.Fatalf("docker run bash echo: %v\noutput: %s", err, out)
@@ -94,14 +35,11 @@ func TestWorkflow_ImageContents(t *testing.T) {
 		}
 	})
 
-	// nix --version — nix is available in the image.
 	t.Run("nix_version", func(t *testing.T) {
 		out, err := osexec.Command("docker", "run", "--rm",
-			"--user", "0",
-			"-e", "HOST_USER=testuser",
-			"-e", "APP_NAME=test",
-			"devcell-local",
-			"gosu", "testuser", "bash", "-lc", "nix --version",
+			"--entrypoint", "bash",
+			img,
+			"-lc", "nix --version",
 		).CombinedOutput()
 		if err != nil {
 			t.Fatalf("docker run nix --version: %v\noutput: %s", err, out)
@@ -110,20 +48,91 @@ func TestWorkflow_ImageContents(t *testing.T) {
 			t.Errorf("expected output to contain 'nix', got: %s", out)
 		}
 	})
+
+	t.Run("home_manager", func(t *testing.T) {
+		out, err := osexec.Command("docker", "run", "--rm",
+			"--entrypoint", "bash",
+			img,
+			"-lc", "home-manager --version",
+		).CombinedOutput()
+		if err != nil {
+			t.Fatalf("docker run home-manager --version: %v\noutput: %s", err, out)
+		}
+		if !strings.Contains(string(out), ".") {
+			t.Errorf("expected home-manager version with '.', got: %s", out)
+		}
+	})
+
+	t.Run("nix_profile_activated", func(t *testing.T) {
+		out, err := osexec.Command("docker", "run", "--rm",
+			"--entrypoint", "bash",
+			img,
+			"-lc", "readlink -f /opt/devcell/.nix-profile",
+		).CombinedOutput()
+		if err != nil {
+			t.Fatalf("readlink nix-profile: %v\noutput: %s", err, out)
+		}
+		if !strings.Contains(string(out), "/nix/store/") {
+			t.Errorf("expected nix-profile to point into /nix/store/, got: %s", out)
+		}
+	})
 }
 
-// TestWorkflow_CellShell tests the actual cell shell command end-to-end.
-// Uses a PTY because cell shell runs docker with -it.
-func TestWorkflow_CellShell(t *testing.T) {
-	cellBin, configDir, projectDir := workflowSetup(t)
+// TestCellShell validates the cell shell command end-to-end via PTY.
+// CI runs this with DEVCELL_IMAGE pointing to the ultimate image.
+func TestCellShell(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode")
+	}
 
-	// cell shell -- bash -c "echo 123"
+	// Build cell binary.
+	cellBin := filepath.Join(t.TempDir(), "cell")
+	build := osexec.Command("go", "build", "-o", cellBin, "./cmd")
+	build.Dir = filepath.Join("..")
+	build.Stdout = os.Stdout
+	build.Stderr = os.Stderr
+	if err := build.Run(); err != nil {
+		t.Fatalf("go build cell: %v", err)
+	}
+
+	// Scaffold config directory (cell shell needs devcell.toml).
+	configDir := t.TempDir()
+	devcellConfigDir := filepath.Join(configDir, "devcell")
+	if err := scaffold.Scaffold(devcellConfigDir); err != nil {
+		t.Fatalf("scaffold: %v", err)
+	}
+
+	projectDir := t.TempDir()
+	userImage := image() // pre-built image from DEVCELL_IMAGE
+
+	// cellShellHome creates a manually-managed HOME directory.
+	// cell shell bind-mounts CellHome into the container, and the container
+	// creates files owned by its internal user. t.TempDir() cleanup can't
+	// remove those files (permission denied), so we clean up via docker.
+	cellShellHome := func(t *testing.T) string {
+		t.Helper()
+		home, err := os.MkdirTemp("", "celltest-home-*")
+		if err != nil {
+			t.Fatalf("mkdtemp: %v", err)
+		}
+		t.Cleanup(func() {
+			osexec.Command("docker", "run", "--rm",
+				"-v", home+":"+home,
+				"alpine", "rm", "-rf", home,
+			).Run()
+			os.RemoveAll(home)
+		})
+		return home
+	}
+
 	t.Run("bash_echo", func(t *testing.T) {
+		home := cellShellHome(t)
 		cmd := osexec.Command(cellBin, "shell", "--", "bash", "-c", "echo 123")
 		cmd.Dir = projectDir
 		cmd.Env = append(os.Environ(),
 			"XDG_CONFIG_HOME="+configDir,
-			"HOME="+t.TempDir(),
+			"HOME="+home,
+			"DEVCELL_USER_IMAGE="+userImage,
 		)
 
 		ptmx, err := pty.Start(cmd)
@@ -133,7 +142,7 @@ func TestWorkflow_CellShell(t *testing.T) {
 		defer ptmx.Close()
 
 		var buf bytes.Buffer
-		io.Copy(&buf, ptmx) // reads until process exits / PTY closes
+		io.Copy(&buf, ptmx)
 		cmd.Wait()
 
 		out := buf.String()
@@ -142,13 +151,14 @@ func TestWorkflow_CellShell(t *testing.T) {
 		}
 	})
 
-	// cell shell -- bash -lc "nix --version"
 	t.Run("nix_version", func(t *testing.T) {
+		home := cellShellHome(t)
 		cmd := osexec.Command(cellBin, "shell", "--", "bash", "-lc", "nix --version")
 		cmd.Dir = projectDir
 		cmd.Env = append(os.Environ(),
 			"XDG_CONFIG_HOME="+configDir,
-			"HOME="+t.TempDir(),
+			"HOME="+home,
+			"DEVCELL_USER_IMAGE="+userImage,
 		)
 
 		ptmx, err := pty.Start(cmd)
