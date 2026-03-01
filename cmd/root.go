@@ -44,10 +44,14 @@ func Execute() {
 
 func init() {
 	rootCmd.Version = version.Version
-	rootCmd.PersistentFlags().Bool("build", false, "rebuild image before running")
+	rootCmd.PersistentFlags().Bool("build", false, "rebuild image before running (forces --no-cache)")
 	rootCmd.PersistentFlags().Bool("dry-run", false, "print docker run argv and exit without running")
 	rootCmd.PersistentFlags().Bool("plain-text", false, "disable spinners, use plain log output (for CI/non-TTY)")
 	rootCmd.PersistentFlags().Bool("debug", false, "plain-text mode plus stream full build log to stdout")
+	rootCmd.PersistentFlags().String("engine", "docker", "execution engine: docker or vagrant")
+	rootCmd.PersistentFlags().Bool("macos", false, "use macOS VM via Vagrant (alias for --engine=vagrant)")
+	rootCmd.PersistentFlags().String("vagrant-provider", "utm", "Vagrant provider (e.g. utm)")
+	rootCmd.PersistentFlags().String("vagrant-box", "", "Vagrant box name override")
 	rootCmd.AddCommand(
 		claudeCmd,
 		codexCmd,
@@ -68,7 +72,7 @@ func init() {
 // DisableFlagParsing=true, which prevents cobra from parsing persistent
 // flags on the root command.
 func applyOutputFlags() {
-	for _, arg := range os.Args {
+	for _, arg := range osArgs {
 		switch arg {
 		case "--plain-text":
 			ux.LogPlainText = true
@@ -79,26 +83,54 @@ func applyOutputFlags() {
 	}
 }
 
-// cellFlags are flags consumed by devcell itself and must not be forwarded
-// to the inner binary. DisableFlagParsing on subcommands causes cobra to
-// leak persistent flags into args.
-var cellFlags = map[string]bool{
-	"--debug":      true,
-	"--plain-text": true,
-	"--dry-run":    true,
+// cellBoolFlags are boolean flags consumed by devcell: strip the flag token only.
+var cellBoolFlags = map[string]bool{
 	"--build":      true,
+	"--dry-run":    true,
+	"--plain-text": true,
+	"--debug":      true,
+	"--macos":      true,
 }
 
-// stripCellFlags removes devcell-specific flags from args so they are not
-// forwarded to the inner binary.
+// cellStringFlags are string flags consumed by devcell: strip the flag token
+// AND its value (handles both "--flag value" and "--flag=value" forms).
+var cellStringFlags = map[string]bool{
+	"--engine":           true,
+	"--vagrant-provider": true,
+	"--vagrant-box":      true,
+}
+
+// stripCellFlags removes devcell-specific flags (and their values) from args
+// so they are not forwarded to the inner binary.
 func stripCellFlags(args []string) []string {
-	filtered := make([]string, 0, len(args))
+	out := make([]string, 0, len(args))
+	skipNext := false
 	for _, a := range args {
-		if !cellFlags[a] {
-			filtered = append(filtered, a)
+		if skipNext {
+			skipNext = false
+			continue
 		}
+		if cellBoolFlags[a] {
+			continue
+		}
+		if cellStringFlags[a] {
+			skipNext = true
+			continue
+		}
+		// "--flag=value" form for string flags
+		stripped := false
+		for f := range cellStringFlags {
+			if strings.HasPrefix(a, f+"=") {
+				stripped = true
+				break
+			}
+		}
+		if stripped {
+			continue
+		}
+		out = append(out, a)
 	}
-	return filtered
+	return out
 }
 
 // runAgent is the shared pre-exec sequence for all agent and shell commands.
@@ -124,15 +156,29 @@ func runAgent(binary string, defaultFlags, userArgs []string) error {
 		}
 	}
 
+	// Vagrant engine branch — stub, not yet implemented
+	engine := scanStringFlag("--engine")
+	if scanFlag("--macos") {
+		engine = "vagrant"
+	}
+	if engine == "vagrant" {
+		vagrantBox := scanStringFlag("--vagrant-box")
+		if err := scaffold.ScaffoldVagrantfile(c.ConfigDir, vagrantBox, ""); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: vagrantfile scaffold failed: %v\n", err)
+		}
+		fmt.Fprintln(os.Stderr, "Vagrant engine is not yet implemented.")
+		fmt.Fprintf(os.Stderr, "Vagrantfile scaffolded at: %s/Vagrantfile\n", c.ConfigDir)
+		return nil
+	}
+
 	cellCfg := cfg.LoadFromOS(c.ConfigDir, c.BaseDir)
 
-	// Build image if --build flag passed or image doesn't exist
-	forceBuild := scanFlag("--build")
-	if forceBuild {
-		if err := buildImageWithSpinner(c.ConfigDir, false, "Building devcell image", false); err != nil {
+	if scanFlag("--build") && !scanFlag("--dry-run") {
+		if err := buildImageWithSpinner(c.ConfigDir, true, "Building devcell image", false); err != nil {
 			return err
 		}
-	} else if !runner.ImageExists(context.Background(), "devcell-local") {
+	} else if !scanFlag("--dry-run") && !runner.ImageExists(context.Background(), runner.UserImageTag()) {
+		fmt.Printf(" No %s image found — building automatically\n", runner.UserImageTag())
 		if err := buildImageWithSpinner(c.ConfigDir, false, "Building devcell image", false); err != nil {
 			return err
 		}
@@ -158,6 +204,14 @@ func runAgent(binary string, defaultFlags, userArgs []string) error {
 			c.AppName, c.VNCPort, c.CellHome)
 	}
 
+	// Pin the container to the exact image ID just built so a concurrent
+	// cell build on another terminal can't swap the tag under us mid-launch.
+	imageID, err := runner.LocalImageID(context.Background())
+	if err != nil {
+		// Non-fatal: fall back to the mutable tag.
+		imageID = ""
+	}
+
 	spec := runner.RunSpec{
 		Config:       c,
 		CellCfg:      cellCfg,
@@ -165,6 +219,7 @@ func runAgent(binary string, defaultFlags, userArgs []string) error {
 		DefaultFlags: defaultFlags,
 		UserArgs:     userArgs,
 		Debug:        ux.Verbose,
+		Image:        imageID,
 	}
 	argv := runner.BuildArgv(spec, runner.OsFS, exec.LookPath)
 
@@ -181,16 +236,35 @@ func runAgent(binary string, defaultFlags, userArgs []string) error {
 	return syscall.Exec(execBin, argv, os.Environ())
 }
 
-// scanFlag checks os.Args for a flag (needed because DisableFlagParsing
-// prevents cobra from parsing persistent flags on agent subcommands).
+// osArgs is the argument source for flag scanning. Overridable in tests.
+var osArgs = os.Args
+
+// scanFlag checks osArgs for a boolean flag.
+// Needed because DisableFlagParsing prevents cobra from parsing persistent
+// flags on agent subcommands.
 func scanFlag(flag string) bool {
-	for _, arg := range os.Args {
+	for _, arg := range osArgs {
 		if arg == flag {
 			return true
 		}
 	}
 	return false
 }
+
+// scanStringFlag scans osArgs for a string flag, handling both
+// "--flag value" and "--flag=value" forms. Returns "" if not found.
+func scanStringFlag(flag string) string {
+	for i, arg := range osArgs {
+		if arg == flag && i+1 < len(osArgs) {
+			return osArgs[i+1]
+		}
+		if strings.HasPrefix(arg, flag+"=") {
+			return arg[len(flag)+1:]
+		}
+	}
+	return ""
+}
+
 
 // buildImageWithSpinner runs docker build with a spinner.
 // In verbose mode (--debug), build output streams to stdout.

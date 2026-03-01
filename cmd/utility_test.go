@@ -3,6 +3,8 @@ package main_test
 import (
 	"strings"
 	"testing"
+
+	"github.com/DimmKirr/devcell/internal/cfg"
 )
 
 // --- shell ---
@@ -90,8 +92,9 @@ func TestVNCPort_SamePaneSamePort(t *testing.T) {
 }
 
 func TestVNCPort_DifferentPanesDifferentPorts(t *testing.T) {
-	argv3 := buildTestArgv("claude", nil, nil, "TMUX_PANE", "%3")
-	argv4 := buildTestArgv("claude", nil, nil, "TMUX_PANE", "%4")
+	guiCfg := cfg.CellConfig{Cell: cfg.CellSection{GUI: true}}
+	argv3 := buildBehaviourArgv("/tmp/myproject", []string{"TMUX_PANE", "%3"}, "claude", nil, nil, guiCfg)
+	argv4 := buildBehaviourArgv("/tmp/myproject", []string{"TMUX_PANE", "%4"}, "claude", nil, nil, guiCfg)
 	port3 := extractPort(argv3)
 	port4 := extractPort(argv4)
 	if port3 == port4 {

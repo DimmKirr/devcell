@@ -79,10 +79,10 @@ func TestCellHome_WithTmuxSession(t *testing.T) {
 	}
 }
 
-func TestCellHome_DefaultSandbox(t *testing.T) {
+func TestCellHome_DefaultMain(t *testing.T) {
 	c := config.Load("/cwd", env("HOME", "/home/bob"))
-	if c.CellHome != "/home/bob/.devcell/sandbox" {
-		t.Errorf("want /home/bob/.devcell/sandbox, got %q", c.CellHome)
+	if c.CellHome != "/home/bob/.devcell/main" {
+		t.Errorf("want /home/bob/.devcell/main, got %q", c.CellHome)
 	}
 }
 

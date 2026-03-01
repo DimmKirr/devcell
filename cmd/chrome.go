@@ -9,8 +9,18 @@ import (
 )
 
 var chromeCmd = &cobra.Command{
-	Use:                "chrome [args...]",
-	Short:              "Open Chromium with a project-scoped profile",
+	Use:   "chrome [args...]",
+	Short: "Open Chromium with a project-scoped profile",
+	Long: `Opens Chromium with a project-scoped browser profile stored in the cell home.
+
+Each project gets its own isolated Chrome profile so cookies, extensions, and
+logins don't bleed across projects. All additional args are forwarded to
+Chromium unchanged.
+
+Examples:
+
+    cell chrome
+    cell chrome https://example.com`,
 	DisableFlagParsing: true,
 	RunE:               runChrome,
 }

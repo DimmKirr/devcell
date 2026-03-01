@@ -9,10 +9,36 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/DimmKirr/devcell/internal/cfg"
 	"github.com/DimmKirr/devcell/internal/config"
 )
+
+const (
+	// defaultBaseImageTag is the base image tag used in scaffold FROM.
+	defaultBaseImageTag = "ghcr.io/dimmkirr/devcell:base-local"
+	// defaultUserImageTag is the user-built image tag produced by cell build.
+	defaultUserImageTag = "ghcr.io/dimmkirr/devcell:user-local"
+)
+
+// BaseImageTag returns the base image tag used in scaffold FROM,
+// allowing override via DEVCELL_BASE_IMAGE env var (used by CI).
+func BaseImageTag() string {
+	if tag := os.Getenv("DEVCELL_BASE_IMAGE"); tag != "" {
+		return tag
+	}
+	return defaultBaseImageTag
+}
+
+// UserImageTag returns the user image tag, allowing override via
+// DEVCELL_USER_IMAGE env var (used by tests to avoid clobbering real images).
+func UserImageTag() string {
+	if tag := os.Getenv("DEVCELL_USER_IMAGE"); tag != "" {
+		return tag
+	}
+	return defaultUserImageTag
+}
 
 // FS abstracts filesystem stat for testability.
 type FS interface {
@@ -37,7 +63,8 @@ type RunSpec struct {
 	Binary       string
 	DefaultFlags []string
 	UserArgs     []string
-	Debug        bool // pass DEVCELL_DEBUG=true into the container
+	Debug        bool   // pass DEVCELL_DEBUG=true into the container
+	Image        string // image ID or tag to run; defaults to UserImageTag
 }
 
 // BuildArgv constructs the full docker run argv for the given spec.
@@ -128,8 +155,12 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 	// Workdir
 	argv = append(argv, "--workdir", "/"+c.AppName)
 
-	// Image
-	argv = append(argv, "devcell-local")
+	// Image — use pinned digest when available, fall back to mutable tag
+	image := spec.Image
+	if image == "" {
+		image = UserImageTag()
+	}
+	argv = append(argv, image)
 
 	// Binary + flags + user args
 	argv = append(argv, spec.Binary)
@@ -166,15 +197,17 @@ func EnsureNetwork(ctx context.Context) error {
 	return nil
 }
 
-// BuildImage runs docker build to build devcell-local from configDir.
+// BuildImage runs docker build to build UserImageTag from configDir.
 // verbose=true streams plain-text output to out; verbose=false suppresses all
 // docker output (quiet mode) and captures stderr to out for error replay.
+// --pull is always passed so Docker checks for a newer base image digest and
+// busts the layer cache when the upstream image has been updated.
 func BuildImage(ctx context.Context, configDir string, noCache bool, verbose bool, out io.Writer) error {
 	progress := "--progress=quiet"
 	if verbose {
 		progress = "--progress=plain"
 	}
-	args := []string{"build", "-t", "devcell-local", progress}
+	args := []string{"build", "-t", UserImageTag(), progress}
 	if noCache {
 		args = append(args, "--no-cache")
 	}
@@ -213,6 +246,43 @@ func BuildImage(ctx context.Context, configDir string, noCache bool, verbose boo
 // ImageExists returns true if a Docker image with the given tag exists locally.
 func ImageExists(ctx context.Context, tag string) bool {
 	return exec.CommandContext(ctx, "docker", "image", "inspect", tag).Run() == nil
+}
+
+// DockerfileChanged reports whether any build-input file in configDir
+// (Dockerfile, flake.nix) is newer than the user image.
+// Returns true when the user image doesn't exist or inspect fails.
+func DockerfileChanged(configDir string) bool {
+	out, err := exec.Command("docker", "image", "inspect",
+		UserImageTag(), "--format", "{{.Created}}").Output()
+	if err != nil {
+		return true // image missing or inspect failed — treat as changed
+	}
+	imageCreated, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(string(out)))
+	if err != nil {
+		return true
+	}
+	for _, name := range []string{"Dockerfile", "flake.nix"} {
+		info, err := os.Stat(filepath.Join(configDir, name))
+		if err != nil {
+			continue
+		}
+		if info.ModTime().After(imageCreated) {
+			return true
+		}
+	}
+	return false
+}
+
+// LocalImageID returns the full image ID (sha256:...) of the user image.
+// Used to pin the running container to the exact image just built,
+// rather than the mutable tag which could race with a concurrent build.
+func LocalImageID(ctx context.Context) (string, error) {
+	out, err := exec.CommandContext(ctx, "docker", "image", "inspect",
+		UserImageTag(), "--format", "{{.Id}}").Output()
+	if err != nil {
+		return "", fmt.Errorf("inspect %s: %w", UserImageTag(), err)
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 func envOrDefault(key, def string) string {
