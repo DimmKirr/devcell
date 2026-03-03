@@ -162,7 +162,14 @@ target "local-base" {
   pull = false
 }
 
+# local-ultimate: ultimate profile for local testing (uses local nixhome/)
+target "local-ultimate" {
+  inherits = ["ultimate"]
+  tags = ["ghcr.io/dimmkirr/devcell:ultimate-local"]
+  pull = false
+}
+
 # local: load into local Docker daemon (no push, no multi-arch)
 group "local" {
-  targets = ["local-base"]
+  targets = ["local-base", "local-ultimate"]
 }

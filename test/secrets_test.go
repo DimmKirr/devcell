@@ -19,7 +19,7 @@ func image() string {
 	if img := os.Getenv("DEVCELL_IMAGE"); img != "" {
 		return img
 	}
-	return "ghcr.io/dimmkirr/devcell:latest-ultimate"
+	return "ghcr.io/dimmkirr/devcell:ultimate-local"
 }
 
 func startContainer(t *testing.T, env map[string]string) testcontainers.Container {

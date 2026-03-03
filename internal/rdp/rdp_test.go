@@ -8,7 +8,7 @@ import (
 
 func TestRDPUrl(t *testing.T) {
 	got := rdp.RDPUrl("389")
-	want := "rdp://127.0.0.1:389"
+	want := "rdp://full%20address=s%3A127.0.0.1%3A389"
 	if got != want {
 		t.Errorf("want %q, got %q", want, got)
 	}
