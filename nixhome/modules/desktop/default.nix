@@ -33,6 +33,7 @@
     # VNC/RDP server stack — used by entrypoint.sh when DEVCELL_GUI_ENABLED=true
     x11vnc # VNC server for X11
     xrdp   # RDP server — gateway to VNC session (entrypoint starts on port 3389)
+    freerdp # RDP client (use: xfreerdp /v:host:3389 /u:user /cert:ignore)
     xorg.xorgserver # X.Org server; provides Xvfb virtual framebuffer
 
     # X11 display utilities
@@ -45,6 +46,9 @@
 
     # Clipboard utilities — used by entrypoint.sh clipboard sync daemon
     xclip # read/write X11 selections; used in PRIMARY↔CLIPBOARD sync loop
+
+    # Screenshot capture — used by tests to verify desktop renders
+    imagemagick # provides `import` CLI for X11 screen capture
 
     # Terminal emulator — launched from fluxbox menu
     xterm
@@ -221,7 +225,7 @@
       fi
 
       log "Starting x11vnc on port 5900..."
-      gosu "$USER" x11vnc -display :''${DISPLAY_NUM} -forever -shared -passwd vnc -rfbport 5900 \
+      gosu "$USER" x11vnc -display :''${DISPLAY_NUM} -forever -passwd vnc -rfbport 5900 \
           -desktop "''${APP_NAME:-cell}" -pointer_mode 2 -repeat &>/dev/null &
 
       log "VNC server ready - connect to localhost:''${EXT_VNC_PORT:-5900}"
@@ -230,6 +234,9 @@
       # ── xrdp (RDP gateway to existing VNC session) ────────────────────────
       XRDP_BIN=$(command -v xrdp 2>/dev/null)
       if [ -n "$XRDP_BIN" ]; then
+          # Set user password so sesman PAM auth works for RDP login
+          echo "$USER:rdp" | chpasswd
+
           XRDP_CFG="/tmp/xrdp"
           mkdir -p "$XRDP_CFG"
           XRDP_PREFIX=$(dirname "$(dirname "$(readlink -f "$XRDP_BIN")")")
@@ -245,31 +252,42 @@
                   -days 365 -subj "/CN=devcell" 2>/dev/null
           fi
 
-          # Patch xrdp.ini: port, SSL, autorun to VNC proxy (no login screen)
+          # Patch xrdp.ini: port, SSL, autorun, log to file only
+          # DEVCELL_DEBUG=true → INFO logs; otherwise WARNING only
+          if [ "$DEVCELL_DEBUG" = "true" ]; then
+              XRDP_LOG_LEVEL="INFO"
+          else
+              XRDP_LOG_LEVEL="WARNING"
+          fi
           sed -i \
               -e "s|^port=.*|port=3389|" \
               -e "s|^certificate=.*|certificate=$XRDP_CFG/cert.pem|" \
               -e "s|^key_file=.*|key_file=$XRDP_CFG/key.pem|" \
               -e "s|^autorun=.*|autorun=vnc-any|" \
+              -e "s|^LogLevel=.*|LogLevel=$XRDP_LOG_LEVEL|" \
+              -e "s|^#*SyslogLevel=.*|SyslogLevel=DISABLED|" \
               "$XRDP_CFG/xrdp.ini"
 
-          # Append VNC proxy section — connects directly to x11vnc on :5900
+          # Remove stock [Xorg] section (has username=ask which forces login
+          # prompt even with autorun). Keep only our [vnc-any] with hardcoded
+          # creds so xrdp auto-connects without asking.
+          sed -i '/^\[Xorg\]/,/^\[/{ /^\[vnc-any\]/!d; }' "$XRDP_CFG/xrdp.ini"
+
+          # Replace [vnc-any] section — hardcoded creds skip login prompt
+          sed -i '/^\[vnc-any\]/,$d' "$XRDP_CFG/xrdp.ini"
           {
-              echo
               echo '[vnc-any]'
               echo 'name=VNC'
               echo 'lib=libvnc.so'
               echo 'ip=127.0.0.1'
               echo 'port=5900'
               echo "username=''${HOST_USER}"
-              echo 'password=rdp'
+              echo 'password=vnc'
           } >> "$XRDP_CFG/xrdp.ini"
 
-          # Minimal sesman.ini (needed by xrdp even if unused for VNC proxy)
+          # sesman.ini — needed by xrdp for PAM auth; logs to file only
           {
               echo '[Globals]'
-              echo 'ListenAddress=127.0.0.1'
-              echo 'ListenPort=3350'
               echo 'EnableUserWindowManager=false'
               echo 'DefaultWindowManager=startwm.sh'
               echo
@@ -285,11 +303,17 @@
               echo 'KillDisconnected=false'
               echo 'DisconnectedTimeLimit=0'
               echo 'IdleTimeLimit=0'
+              echo
+              echo '[Logging]'
+              echo 'LogFile=/var/log/xrdp-sesman.log'
+              echo "LogLevel=$XRDP_LOG_LEVEL"
+              echo 'SyslogLevel=DISABLED'
           } > "$XRDP_CFG/sesman.ini"
 
           log "Starting xrdp on port 3389 (RDP → VNC :''${DISPLAY_NUM})..."
-          xrdp --nodaemon --config "$XRDP_CFG/xrdp.ini" &>/dev/null &
-          xrdp-sesman --nodaemon --config "$XRDP_CFG/sesman.ini" &>/dev/null &
+          xrdp-sesman --nodaemon --config "$XRDP_CFG/sesman.ini" >>/var/log/xrdp-sesman.log 2>&1 &
+          sleep 1
+          xrdp --nodaemon --config "$XRDP_CFG/xrdp.ini" >>/var/log/xrdp.log 2>&1 &
 
           log "xrdp ready - connect to localhost:''${EXT_RDP_PORT:-3389}"
       else

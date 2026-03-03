@@ -28,8 +28,11 @@ type fullInspectResult struct {
 }
 
 // RDPUrl returns an RDP URL for the given port.
+// Uses percent-encoded format required by macOS Sonoma+ Windows App:
+//
+//	rdp://full%20address=s%3A127.0.0.1%3A<port>
 func RDPUrl(port string) string {
-	return "rdp://127.0.0.1:" + port
+	return "rdp://full%20address=s%3A127.0.0.1%3A" + port
 }
 
 // ParseDockerPS parses the output of:

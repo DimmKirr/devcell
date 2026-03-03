@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/DimmKirr/devcell/internal/config"
 	"github.com/DimmKirr/devcell/internal/scaffold"
@@ -27,6 +28,11 @@ func runInit(cmd *cobra.Command, _ []string) error {
 	}
 	applyOutputFlags()
 	yes, _ := cmd.Flags().GetBool("yes")
+
+	// Override base image tag for scaffold Dockerfile if --base-image is set.
+	if bi, _ := cmd.Flags().GetString("base-image"); bi != "" {
+		os.Setenv("DEVCELL_BASE_IMAGE", bi)
+	}
 
 	c, err := config.LoadFromOS()
 	if err != nil {
