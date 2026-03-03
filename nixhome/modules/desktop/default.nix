@@ -33,6 +33,7 @@
     # VNC/RDP server stack — used by entrypoint.sh when DEVCELL_GUI_ENABLED=true
     x11vnc # VNC server for X11
     xrdp   # RDP server — gateway to VNC session (entrypoint starts on port 3389)
+    freerdp # RDP client (use: xfreerdp /v:host:3389 /u:user /cert:ignore)
     xorg.xorgserver # X.Org server; provides Xvfb virtual framebuffer
 
     # X11 display utilities

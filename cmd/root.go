@@ -52,6 +52,7 @@ func init() {
 	rootCmd.PersistentFlags().Bool("macos", false, "use macOS VM via Vagrant (alias for --engine=vagrant)")
 	rootCmd.PersistentFlags().String("vagrant-provider", "utm", "Vagrant provider (e.g. utm)")
 	rootCmd.PersistentFlags().String("vagrant-box", "", "Vagrant box name override")
+	rootCmd.PersistentFlags().String("base-image", "", "base image for scaffold Dockerfile (default: ghcr.io/dimmkirr/devcell:base-local)")
 	rootCmd.AddCommand(
 		claudeCmd,
 		codexCmd,
@@ -99,6 +100,7 @@ var cellStringFlags = map[string]bool{
 	"--engine":           true,
 	"--vagrant-provider": true,
 	"--vagrant-box":      true,
+	"--base-image":       true,
 }
 
 // stripCellFlags removes devcell-specific flags (and their values) from args
@@ -141,6 +143,11 @@ func runAgent(binary string, defaultFlags, userArgs []string) error {
 	c, err := config.LoadFromOS()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
+	}
+
+	// Override base image tag for scaffold Dockerfile if --base-image is set.
+	if bi := scanStringFlag("--base-image"); bi != "" {
+		os.Setenv("DEVCELL_BASE_IMAGE", bi)
 	}
 
 	// First-run: scaffold if devcell.toml absent

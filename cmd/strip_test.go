@@ -70,6 +70,22 @@ func TestStripCellFlags_MultipleMixed(t *testing.T) {
 	}
 }
 
+func TestStripCellFlags_BaseImageStripped(t *testing.T) {
+	got := stripCellFlags([]string{"--base-image", "myregistry/img:v1", "--resume", "abc"})
+	want := []string{"--resume", "abc"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("--base-image should be stripped: want %v, got %v", want, got)
+	}
+}
+
+func TestStripCellFlags_BaseImageEqualsFormStripped(t *testing.T) {
+	got := stripCellFlags([]string{"--base-image=myregistry/img:v1", "--resume"})
+	want := []string{"--resume"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("--base-image=value should be stripped: want %v, got %v", want, got)
+	}
+}
+
 func TestStripCellFlags_UnknownFlagsPassThrough(t *testing.T) {
 	got := stripCellFlags([]string{"--conversation", "xyz", "--model", "gpt4"})
 	want := []string{"--conversation", "xyz", "--model", "gpt4"}

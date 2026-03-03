@@ -58,6 +58,19 @@ func TestScaffold_DockerfileStartsWithFROM(t *testing.T) {
 	}
 }
 
+func TestScaffold_BaseImageOverride(t *testing.T) {
+	t.Setenv("DEVCELL_BASE_IMAGE", "myregistry.io/devcell:test-v42")
+	dir := t.TempDir()
+	if err := scaffold.Scaffold(dir); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, "Dockerfile"))
+	want := "FROM myregistry.io/devcell:test-v42"
+	if !strings.HasPrefix(strings.TrimSpace(string(data)), want) {
+		t.Errorf("Dockerfile should start with %s, got: %s", want, string(data)[:80])
+	}
+}
+
 // TestScaffold_DockerfileDoesNotInstallHomeManager — home-manager is
 // pre-installed in the base image; scaffold must NOT duplicate it.
 func TestScaffold_DockerfileDoesNotInstallHomeManager(t *testing.T) {
