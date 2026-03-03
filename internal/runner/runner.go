@@ -211,7 +211,7 @@ func BuildImage(ctx context.Context, configDir string, noCache bool, verbose boo
 	}
 	args := []string{"build", "-t", UserImageTag(), progress}
 	if noCache {
-		args = append(args, "--no-cache")
+		args = append(args, "--no-cache", "--build-arg", "NIX_REFRESH=--refresh")
 	}
 	args = append(args, configDir)
 	cmd := exec.CommandContext(ctx, "docker", args...)

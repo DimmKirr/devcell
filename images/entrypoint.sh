@@ -549,108 +549,13 @@ merge_opencode_mcp "$HOME/.opencode.json"
 merge_codex_mcp "$HOME/.codex/config.toml"
 [ -d "$HOME/.codex" ] && chown -R "$HOST_USER" "$HOME/.codex"
 
-# ── GUI Setup (optional) ──────────────────────────────────────────────────────
-if [ "$DEVCELL_GUI_ENABLED" = "true" ]; then
-    DISPLAY_NUM=99
-    RESOLUTION=1920x1080x24
-
-    mkdir -p /tmp/.X11-unix
-    chmod 1777 /tmp/.X11-unix
-
-    log "Starting Xvfb on display :${DISPLAY_NUM}..."
-    gosu "$USER" Xvfb :${DISPLAY_NUM} -screen 0 ${RESOLUTION} 2>/dev/null &
-    sleep 1
-
-    export DISPLAY=:${DISPLAY_NUM}
-
-    if [ -f "$DEVCELL_HOME/.fluxbox/wallpaper.png" ]; then
-        gosu "$USER" feh --bg-fill "$DEVCELL_HOME/.fluxbox/wallpaper.png" 2>/dev/null || true
-    else
-        gosu "$USER" xsetroot -solid '#1e1e2e' 2>/dev/null || true
-    fi
-
-    FLUXBOX_RC=/tmp/fluxbox-init
-    cp "$DEVCELL_HOME/.fluxbox/init" "$FLUXBOX_RC"
-    chmod u+w "$FLUXBOX_RC"
-    WORKSPACE_NAME="${APP_NAME:-cell}"
-    if grep -q "session.screen0.workspaceNames" "$FLUXBOX_RC"; then
-        sed -i "s/^session.screen0.workspaceNames:.*/session.screen0.workspaceNames: ${WORKSPACE_NAME}/" "$FLUXBOX_RC"
-    else
-        echo "session.screen0.workspaceNames: ${WORKSPACE_NAME}" >> "$FLUXBOX_RC"
-    fi
-    log "Starting fluxbox (workspace: ${WORKSPACE_NAME})..."
-    gosu "$USER" fluxbox -rc "$FLUXBOX_RC" &>/dev/null &
-    sleep 1
-
-    if [ -f "$DEVCELL_HOME/.fluxbox/wallpaper.png" ]; then
-        gosu "$USER" feh --bg-fill "$DEVCELL_HOME/.fluxbox/wallpaper.png" 2>/dev/null || true
-    fi
-
-    log "Starting x11vnc on port 5900..."
-    gosu "$USER" x11vnc -display :${DISPLAY_NUM} -forever -shared -passwd vnc -rfbport 5900 \
-        -desktop "${APP_NAME:-cell}" -pointer_mode 2 -repeat &>/dev/null &
-
-    log "VNC server ready - connect to localhost:${EXT_VNC_PORT:-5900}"
-    log "DISPLAY=:${DISPLAY_NUM}"
-
-    # ── xrdp (RDP gateway to existing VNC session) ────────────────────────
-    XRDP_BIN=$(command -v xrdp 2>/dev/null)
-    if [ -n "$XRDP_BIN" ]; then
-        XRDP_CFG="/tmp/xrdp"
-        mkdir -p "$XRDP_CFG"
-        XRDP_PREFIX=$(dirname "$(dirname "$(readlink -f "$XRDP_BIN")")")
-
-        # Copy default configs from nix store (read-only) to writable dir
-        cp "$XRDP_PREFIX/etc/xrdp/"*.ini "$XRDP_CFG/" 2>/dev/null || true
-
-        # Generate self-signed SSL cert (xrdp refuses to start without one)
-        if [ ! -f "$XRDP_CFG/key.pem" ]; then
-            openssl req -x509 -newkey rsa:2048 -nodes \
-                -keyout "$XRDP_CFG/key.pem" -out "$XRDP_CFG/cert.pem" \
-                -days 365 -subj "/CN=devcell" 2>/dev/null
-        fi
-
-        # Patch xrdp.ini: port, SSL paths, auto-connect to VNC
-        sed -i \
-            -e "s|^port=.*|port=3389|" \
-            -e "s|^certificate=.*|certificate=$XRDP_CFG/cert.pem|" \
-            -e "s|^key_file=.*|key_file=$XRDP_CFG/key.pem|" \
-            "$XRDP_CFG/xrdp.ini"
-
-        # Minimal sesman.ini — auto-reconnect to existing VNC, no PAM login
-        cat > "$XRDP_CFG/sesman.ini" << 'SESMAN_EOF'
-[Globals]
-ListenAddress=127.0.0.1
-ListenPort=3350
-EnableUserWindowManager=false
-DefaultWindowManager=startwm.sh
-
-[Security]
-AllowRootLogin=true
-MaxLoginRetry=3
-TerminalServerUsers=tsusers
-TerminalServerAdmins=tsadmins
-
-[Sessions]
-X11DisplayOffset=10
-MaxSessions=1
-KillDisconnected=false
-DisconnectedTimeLimit=0
-IdleTimeLimit=0
-
-[Xvnc]
-param=-SecurityTypes
-param=None
-SESMAN_EOF
-
-        log "Starting xrdp on port 3389 (RDP → VNC :${DISPLAY_NUM})..."
-        xrdp --nodaemon --config "$XRDP_CFG/xrdp.ini" &>/dev/null &
-        xrdp-sesman --nodaemon --config "$XRDP_CFG/sesman.ini" &>/dev/null &
-
-        log "xrdp ready - connect to localhost:${EXT_RDP_PORT:-3389}"
-    else
-        log "xrdp not found — skipping RDP server"
-    fi
+# ── Module entrypoint fragments (nix-generated) ─────────────────────────────
+# Modules drop shell scripts into /etc/devcell/entrypoint.d/ via home-manager.
+# Each fragment guards its own preconditions (e.g. DEVCELL_GUI_ENABLED).
+if [ -d /etc/devcell/entrypoint.d ]; then
+    for f in /etc/devcell/entrypoint.d/*.sh; do
+        [ -x "$f" ] && . "$f"
+    done
 fi
 
 export CHROMIUM_PROFILE_PATH="${HOME}/.chrome-${APP_NAME:-cell}"
