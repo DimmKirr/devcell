@@ -20,6 +20,7 @@ type Config struct {
 	Hostname      string
 	PortPrefix    string
 	VNCPort       string
+	RDPPort       string
 	BaseDir       string
 	HostUser      string
 	HostHome      string
@@ -52,6 +53,7 @@ func Load(cwd string, getenv func(string) string) Config {
 		Hostname:      "cell-" + appName,
 		PortPrefix:    portPrefix,
 		VNCPort:       portPrefix + "50",
+		RDPPort:       portPrefix + "89",
 		BaseDir:       cwd,
 		HostUser:      getenv("USER"),
 		HostHome:      home,

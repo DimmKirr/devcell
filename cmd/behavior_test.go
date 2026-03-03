@@ -102,6 +102,31 @@ func hasConsecutive(argv []string, a, b string) bool {
 	return false
 }
 
+// Scenario: GUI=true publishes both VNC and RDP ports
+func TestScenarioA_RDPPortPublished(t *testing.T) {
+	guiCfg := cfg.CellConfig{Cell: cfg.CellSection{GUI: true}}
+	argv := buildBehaviourArgv("/tmp/myproject", []string{"TMUX_PANE", "%3"},
+		"claude", nil, nil, guiCfg)
+
+	if !hasConsecutive(argv, "-p", "389:3389") {
+		t.Errorf("expected -p 389:3389: %v", argv)
+	}
+	if !hasArg(argv, "EXT_RDP_PORT=389") {
+		t.Errorf("expected EXT_RDP_PORT=389 in argv: %v", argv)
+	}
+}
+
+func TestScenarioA_RDPPortNotPublishedWithoutGUI(t *testing.T) {
+	argv := buildBehaviourArgv("/tmp/myproject", []string{"TMUX_PANE", "%3"},
+		"claude", nil, nil, cfg.CellConfig{})
+
+	for i, a := range argv {
+		if a == "-p" && i+1 < len(argv) && strings.Contains(argv[i+1], "3389") {
+			t.Errorf("RDP port should not be published without GUI: %v", argv)
+		}
+	}
+}
+
 func findFlagVal(argv []string, flag string) string {
 	for i, a := range argv {
 		if a == flag && i+1 < len(argv) {

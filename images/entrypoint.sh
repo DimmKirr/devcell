@@ -549,49 +549,13 @@ merge_opencode_mcp "$HOME/.opencode.json"
 merge_codex_mcp "$HOME/.codex/config.toml"
 [ -d "$HOME/.codex" ] && chown -R "$HOST_USER" "$HOME/.codex"
 
-# ── GUI Setup (optional) ──────────────────────────────────────────────────────
-if [ "$DEVCELL_GUI_ENABLED" = "true" ]; then
-    DISPLAY_NUM=99
-    RESOLUTION=1920x1080x24
-
-    mkdir -p /tmp/.X11-unix
-    chmod 1777 /tmp/.X11-unix
-
-    log "Starting Xvfb on display :${DISPLAY_NUM}..."
-    gosu "$USER" Xvfb :${DISPLAY_NUM} -screen 0 ${RESOLUTION} 2>/dev/null &
-    sleep 1
-
-    export DISPLAY=:${DISPLAY_NUM}
-
-    if [ -f "$DEVCELL_HOME/.fluxbox/wallpaper.png" ]; then
-        gosu "$USER" feh --bg-fill "$DEVCELL_HOME/.fluxbox/wallpaper.png" 2>/dev/null || true
-    else
-        gosu "$USER" xsetroot -solid '#1e1e2e' 2>/dev/null || true
-    fi
-
-    FLUXBOX_RC=/tmp/fluxbox-init
-    cp "$DEVCELL_HOME/.fluxbox/init" "$FLUXBOX_RC"
-    chmod u+w "$FLUXBOX_RC"
-    WORKSPACE_NAME="${APP_NAME:-cell}"
-    if grep -q "session.screen0.workspaceNames" "$FLUXBOX_RC"; then
-        sed -i "s/^session.screen0.workspaceNames:.*/session.screen0.workspaceNames: ${WORKSPACE_NAME}/" "$FLUXBOX_RC"
-    else
-        echo "session.screen0.workspaceNames: ${WORKSPACE_NAME}" >> "$FLUXBOX_RC"
-    fi
-    log "Starting fluxbox (workspace: ${WORKSPACE_NAME})..."
-    gosu "$USER" fluxbox -rc "$FLUXBOX_RC" &>/dev/null &
-    sleep 1
-
-    if [ -f "$DEVCELL_HOME/.fluxbox/wallpaper.png" ]; then
-        gosu "$USER" feh --bg-fill "$DEVCELL_HOME/.fluxbox/wallpaper.png" 2>/dev/null || true
-    fi
-
-    log "Starting x11vnc on port 5900..."
-    gosu "$USER" x11vnc -display :${DISPLAY_NUM} -forever -shared -passwd vnc -rfbport 5900 \
-        -desktop "${APP_NAME:-cell}" -pointer_mode 2 -repeat &>/dev/null &
-
-    log "VNC server ready - connect to localhost:${EXT_VNC_PORT:-5900}"
-    log "DISPLAY=:${DISPLAY_NUM}"
+# ── Module entrypoint fragments (nix-generated) ─────────────────────────────
+# Modules drop shell scripts into /etc/devcell/entrypoint.d/ via home-manager.
+# Each fragment guards its own preconditions (e.g. DEVCELL_GUI_ENABLED).
+if [ -d /etc/devcell/entrypoint.d ]; then
+    for f in /etc/devcell/entrypoint.d/*.sh; do
+        [ -x "$f" ] && . "$f"
+    done
 fi
 
 export CHROMIUM_PROFILE_PATH="${HOME}/.chrome-${APP_NAME:-cell}"
