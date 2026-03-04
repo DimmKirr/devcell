@@ -130,6 +130,7 @@ jobs:
         env:
           DEVCELL_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:v0.0.0-${{ matrix.arch }}-${{ matrix.variant }}
           DEVCELL_BASE_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:v0.0.0-${{ matrix.arch }}-base
+          DEVCELL_TEST_BASE_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:v0.0.0-${{ matrix.arch }}-base
           DEVCELL_USER_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:v0.0.0-${{ matrix.arch }}-${{ matrix.variant }}
           MCP_SECRET_TEST_PASSWORD: fake-secret-ci-value
           MCP_SECRET_GITHUB_TOKEN: fake-token-ci-value
@@ -221,7 +222,7 @@ jobs:
   deploy-site:
     name: Deploy Site
     needs: secrets
-    if: contains(fromJSON('["refs/heads/main","refs/heads/feature/wip","refs/heads/feature/add-web","refs/heads/feature/web"]'), github.ref)
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment:
       name: github-pages

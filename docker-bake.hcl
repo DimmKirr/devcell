@@ -46,6 +46,7 @@ target "_base-args" {
     USER_UID  = USER_UID
     USER_GID  = USER_GID
   }
+
 }
 
 # ── Profile image targets ────────────────────────────────────────────────────
@@ -157,16 +158,18 @@ group "release" {
 
 # local-base: base tagged for local scaffold Dockerfile use (FROM ghcr.io/dimmkirr/devcell:base-local)
 target "local-base" {
-  inherits = ["base"]
-  tags = ["ghcr.io/dimmkirr/devcell:base-local"]
-  pull = false
+  inherits  = ["base"]
+  tags      = ["ghcr.io/dimmkirr/devcell:base-local"]
+  platforms = []
+  pull      = false
 }
 
 # local-ultimate: ultimate profile for local testing (uses local nixhome/)
 target "local-ultimate" {
-  inherits = ["ultimate"]
-  tags = ["ghcr.io/dimmkirr/devcell:ultimate-local"]
-  pull = false
+  inherits  = ["ultimate"]
+  tags      = ["ghcr.io/dimmkirr/devcell:ultimate-local"]
+  platforms = []
+  pull      = false
 }
 
 # local: load into local Docker daemon (no push, no multi-arch)

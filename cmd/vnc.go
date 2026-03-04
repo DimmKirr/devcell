@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/DimmKirr/devcell/internal/config"
+	internalrdp "github.com/DimmKirr/devcell/internal/rdp"
 	internalvnc "github.com/DimmKirr/devcell/internal/vnc"
 	"github.com/DimmKirr/devcell/internal/ux"
 	"github.com/spf13/cobra"
@@ -24,6 +25,7 @@ func init() {
 	vncCmd.Flags().Bool("list", false, "list all running cell containers and their VNC ports")
 	vncCmd.Flags().String("app", "", "open VNC to a named container (by AppName)")
 	vncCmd.Flags().Bool("verbose", false, "show debug info for VNC port lookup")
+	vncCmd.Flags().String("viewer", "", "VNC viewer: royaltsx, tigervnc, screensharing (macOS)")
 }
 
 func runVNC(cmd *cobra.Command, _ []string) error {
@@ -35,6 +37,7 @@ func runVNC(cmd *cobra.Command, _ []string) error {
 	}
 	list, _ := cmd.Flags().GetBool("list")
 	appName, _ := cmd.Flags().GetString("app")
+	vncViewer, _ = cmd.Flags().GetString("viewer")
 
 	if list {
 		return vncList()
@@ -45,13 +48,75 @@ func runVNC(cmd *cobra.Command, _ []string) error {
 	return vncDefault()
 }
 
+// vncViewer is set by the --viewer flag.
+var vncViewer string
+
+// openVNC dispatches to the selected VNC viewer.
+// Default: Royal TSX (darwin) → TigerVNC → macOS Screen Sharing (darwin).
+func openVNC(port string) error {
+	switch vncViewer {
+	case "royaltsx":
+		return openVNCRoyalTSX(port)
+	case "tigervnc":
+		return openVNCTigerVNC(port)
+	case "screensharing":
+		return openVNCScreenSharing(port)
+	case "":
+		// Auto: Royal TSX → TigerVNC → Screen Sharing
+		if runtime.GOOS == "darwin" && internalrdp.HasRoyalTSX() {
+			vncDebug("auto-detected Royal TSX")
+			return openVNCRoyalTSX(port)
+		}
+		if path, err := exec.LookPath("vncviewer"); err == nil {
+			vncDebug("auto-detected TigerVNC at %s", path)
+			return openVNCTigerVNC(port)
+		}
+		if runtime.GOOS == "darwin" {
+			vncDebug("falling back to macOS Screen Sharing")
+			fmt.Fprintf(os.Stderr, "Tip: for a better VNC experience, install one of:\n"+
+				"  1. Royal TSX  — https://royalapps.com/ts/mac\n"+
+				"  2. TigerVNC   — brew install tiger-vnc\n\n")
+			return openVNCScreenSharing(port)
+		}
+		return fmt.Errorf("no VNC viewer found — install one of:\n\n" +
+			"  TigerVNC:\n" +
+			"    Debian:  sudo apt install tigervnc-viewer\n" +
+			"    Fedora:  sudo dnf install tigervnc\n" +
+			"    Arch:    sudo pacman -S tigervnc\n")
+	default:
+		return fmt.Errorf("unknown viewer %q — use royaltsx, tigervnc, or screensharing", vncViewer)
+	}
+}
+
+func openVNCRoyalTSX(port string) error {
+	vncDebug("opening Royal TSX VNC for port %s", port)
+	return openURL(internalvnc.RoyalTSXVNCUrl(port))
+}
+
+func openVNCTigerVNC(port string) error {
+	vncDebug("opening TigerVNC for port %s", port)
+	cmd := exec.Command("vncviewer", "-passwd", internalvnc.VNCPasswdFile(), "127.0.0.1:"+port)
+	if runtime.GOOS == "darwin" {
+		return cmd.Start()
+	}
+	return cmd.Run()
+}
+
+func openVNCScreenSharing(port string) error {
+	if runtime.GOOS != "darwin" {
+		return fmt.Errorf("screensharing viewer is only available on macOS")
+	}
+	vncDebug("opening macOS Screen Sharing for port %s", port)
+	return openURL(internalvnc.VNCUrl(port))
+}
+
 func vncDefault() error {
 	// Fast path: EXT_VNC_PORT is injected at container start with the correct
 	// published host port. When set, we're inside a devcell container and can
 	// use it directly without any docker lookup.
 	if port := os.Getenv("EXT_VNC_PORT"); port != "" {
 		vncDebug("EXT_VNC_PORT=%s (fast path)", port)
-		return openURL(internalvnc.VNCUrl(port))
+		return openVNC(port)
 	}
 
 	c, err := config.LoadFromOS()
@@ -72,7 +137,7 @@ func vncDefault() error {
 		if m, _ := internalvnc.ParseDockerPS(string(bytes.TrimSpace(out))); len(m) > 0 {
 			for appName, port := range m {
 				vncDebug("label-exact match: %s → %s", appName, port)
-				return openURL(internalvnc.VNCUrl(port))
+				return openVNC(port)
 			}
 		}
 	}
@@ -87,7 +152,7 @@ func vncDefault() error {
 			if len(m) == 1 {
 				for appName, port := range m {
 					vncDebug("label-dir single match: %s → %s", appName, port)
-					return openURL(internalvnc.VNCUrl(port))
+					return openVNC(port)
 				}
 			}
 			// Multiple sessions — list options.
@@ -120,7 +185,7 @@ func vncDefault() error {
 	case 0:
 		return fmt.Errorf("no running container found for %q — run 'cell vnc --list' to see all", c.BaseDir)
 	case 1:
-		return openURL(internalvnc.VNCUrl(matches[0].Port))
+		return openVNC(matches[0].Port)
 	default:
 		var opts []string
 		for _, m := range matches {
@@ -169,7 +234,7 @@ func vncApp(appName string) error {
 	if err != nil {
 		return fmt.Errorf("VNC port not published for %q: %w", appName, err)
 	}
-	return openURL(internalvnc.VNCUrl(port))
+	return openVNC(port)
 }
 
 func openURL(url string) error {

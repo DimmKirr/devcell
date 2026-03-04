@@ -79,7 +79,11 @@ RUN export NIX_CONFIG="$(printf 'experimental-features = nix-command flakes\nsan
 ENV PATH="${HOME}/.nix-profile/bin:${PATH}"
 
 # Install home-manager and create nix per-user profile compat symlink.
-RUN nix profile install "nixpkgs/nixos-25.11#home-manager" && \
+# Pin nixpkgs to the exact commit from nixhome/flake.lock to avoid GitHub API
+# branch→commit resolution (anonymous rate limit is 60 req/hr per IP; shared
+# GHA runners exhaust this). Update this hash when bumping nixhome/flake.lock.
+ARG NIXPKGS_REV=c217913993d6c6f6805c3b1a3bda5e639adfde6d
+RUN nix profile install "github:NixOS/nixpkgs/${NIXPKGS_REV}#home-manager" && \
     mkdir -p /nix/var/nix/profiles/per-user/devcell && \
     ln -sfT "$(readlink -f $HOME/.nix-profile)" \
             /nix/var/nix/profiles/per-user/devcell/profile

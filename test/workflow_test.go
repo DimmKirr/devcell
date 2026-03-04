@@ -2,12 +2,12 @@ package container_test
 
 import (
 	"bytes"
-	"io"
 	"os"
 	osexec "os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/DimmKirr/devcell/internal/scaffold"
 	"github.com/creack/pty"
@@ -100,7 +100,19 @@ func TestCellShell(t *testing.T) {
 	}
 
 	// Scaffold config directory (cell shell needs devcell.toml).
-	configDir := t.TempDir()
+	// Use manual cleanup via docker because the container creates
+	// root-owned files (e.g. xrdp/cert.pem) that t.TempDir() can't remove.
+	configDir, err := os.MkdirTemp("", "celltest-config-*")
+	if err != nil {
+		t.Fatalf("mkdtemp config: %v", err)
+	}
+	t.Cleanup(func() {
+		osexec.Command("docker", "run", "--rm",
+			"-v", configDir+":"+configDir,
+			"alpine", "rm", "-rf", configDir,
+		).Run()
+		os.RemoveAll(configDir)
+	})
 	devcellConfigDir := filepath.Join(configDir, "devcell")
 	if err := scaffold.Scaffold(devcellConfigDir, ""); err != nil {
 		t.Fatalf("scaffold: %v", err)
@@ -139,17 +151,7 @@ func TestCellShell(t *testing.T) {
 			"DEVCELL_USER_IMAGE="+userImage,
 		)
 
-		ptmx, err := pty.Start(cmd)
-		if err != nil {
-			t.Fatalf("pty.Start cell shell: %v", err)
-		}
-		defer ptmx.Close()
-
-		var buf bytes.Buffer
-		io.Copy(&buf, ptmx)
-		cmd.Wait()
-
-		out := buf.String()
+		out := runPTY(t, cmd)
 		if !strings.Contains(out, "123") {
 			t.Errorf("expected cell shell output to contain '123', got: %s", out)
 		}
@@ -165,19 +167,39 @@ func TestCellShell(t *testing.T) {
 			"DEVCELL_USER_IMAGE="+userImage,
 		)
 
-		ptmx, err := pty.Start(cmd)
-		if err != nil {
-			t.Fatalf("pty.Start cell shell: %v", err)
-		}
-		defer ptmx.Close()
-
-		var buf bytes.Buffer
-		io.Copy(&buf, ptmx)
-		cmd.Wait()
-
-		out := strings.ToLower(buf.String())
+		out := strings.ToLower(runPTY(t, cmd))
 		if !strings.Contains(out, "nix") {
-			t.Errorf("expected cell shell output to contain 'nix', got: %s", buf.String())
+			t.Errorf("expected cell shell output to contain 'nix', got: %s", out)
 		}
 	})
+}
+
+// runPTY starts cmd in a PTY, collects output, and returns it.
+// It runs io.Copy in a goroutine so cmd.Wait() can proceed even if the
+// PTY slave side isn't closed yet (common with docker-backed commands).
+func runPTY(t *testing.T, cmd *osexec.Cmd) string {
+	t.Helper()
+	ptmx, err := pty.Start(cmd)
+	if err != nil {
+		t.Fatalf("pty.Start: %v", err)
+	}
+
+	var buf bytes.Buffer
+	done := make(chan struct{})
+	go func() {
+		buf.ReadFrom(ptmx)
+		close(done)
+	}()
+
+	if err := cmd.Wait(); err != nil {
+		t.Logf("cmd.Wait: %v (output so far: %s)", err, buf.String())
+	}
+	ptmx.Close()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Log("warning: PTY read didn't finish within 5s after process exit")
+	}
+	return buf.String()
 }
