@@ -225,8 +225,8 @@
       fi
 
       log "Starting x11vnc on port 5900..."
-      gosu "$USER" x11vnc -display :''${DISPLAY_NUM} -forever -passwd vnc -rfbport 5900 \
-          -desktop "''${APP_NAME:-cell}" -pointer_mode 2 -repeat &>/dev/null &
+      gosu "$USER" x11vnc -display :''${DISPLAY_NUM} -forever -nevershared -passwd vnc -rfbport 5900 \
+          -desktop "''${APP_NAME:-cell}" -pointer_mode 2 -repeat -xrandr &>/dev/null &
 
       log "VNC server ready - connect to localhost:''${EXT_VNC_PORT:-5900}"
       log "DISPLAY=:''${DISPLAY_NUM}"

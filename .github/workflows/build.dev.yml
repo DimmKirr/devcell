@@ -221,7 +221,7 @@ jobs:
   deploy-site:
     name: Deploy Site
     needs: secrets
-    if: contains(fromJSON('["refs/heads/main","refs/heads/feature/wip","refs/heads/feature/add-web","refs/heads/feature/web"]'), github.ref)
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment:
       name: github-pages

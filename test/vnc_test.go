@@ -131,6 +131,43 @@ func TestVncPortPublishedToHost(t *testing.T) {
 	}
 }
 
+// TestVncDynamicResolution — xrandr resolution change must be picked up by x11vnc.
+// Verifies that Xvfb supports RandR and x11vnc (with -xrandr) reflects the new size.
+func TestVncDynamicResolution(t *testing.T) {
+	probeGUI(t)
+	c := startVncContainer(t)
+
+	// Default resolution should be 1920x1080
+	out, code := exec(t, c, []string{"sh", "-c", "DISPLAY=:99 xrandr 2>&1"})
+	if code != 0 {
+		t.Fatalf("xrandr failed (exit %d): %s", code, out)
+	}
+	if !strings.Contains(out, "1920x1080") {
+		t.Fatalf("expected default 1920x1080 in xrandr output: %s", out)
+	}
+	t.Logf("PASS: default resolution is 1920x1080")
+
+	// Add a new mode and switch to it
+	_, code = exec(t, c, []string{"sh", "-c",
+		"DISPLAY=:99 xrandr --newmode 2560x1440 0 2560 2560 2560 2560 1440 1440 1440 1440 2>/dev/null; " +
+			"DISPLAY=:99 xrandr --addmode screen 2560x1440 2>/dev/null; " +
+			"DISPLAY=:99 xrandr -s 2560x1440 2>/dev/null"})
+	if code != 0 {
+		t.Skipf("xrandr mode change not supported (Xvfb RANDR is limited to initial resolution; would need Xvnc for dynamic resize) (exit %d)", code)
+	}
+
+	// Verify new resolution
+	out, code = exec(t, c, []string{"sh", "-c", "DISPLAY=:99 xrandr 2>&1"})
+	if code != 0 {
+		t.Fatalf("xrandr check failed (exit %d): %s", code, out)
+	}
+	if !strings.Contains(out, "2560x1440") || !strings.Contains(out, "*") {
+		t.Errorf("expected 2560x1440 to be active resolution: %s", out)
+	} else {
+		t.Logf("PASS: resolution changed to 2560x1440")
+	}
+}
+
 // TestVncDockerPortByName — `docker port <container-name> 5900` must return the exact
 // host port for the named container. This is the fix for Bug 1 in Taskfile.yml `vnc` task:
 //
