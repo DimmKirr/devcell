@@ -23,11 +23,11 @@ Examples:
 				rest := args[i+1:]
 				cellFlags := args[:i]
 				if len(rest) > 0 {
-					return runAgent(rest[0], nil, append(cellFlags, rest[1:]...))
+					return runAgent(rest[0], nil, append(cellFlags, rest[1:]...), nil)
 				}
-				return runAgent("bash", nil, cellFlags)
+				return runAgent("bash", nil, cellFlags, nil)
 			}
 		}
-		return runAgent("bash", nil, args)
+		return runAgent("bash", nil, args, nil)
 	},
 }

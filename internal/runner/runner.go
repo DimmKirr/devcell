@@ -16,14 +16,15 @@ import (
 )
 
 const (
-	// defaultBaseImageTag is the base image tag used in scaffold FROM.
-	defaultBaseImageTag = "ghcr.io/dimmkirr/devcell:base-local"
+	// defaultBaseImageTag is the remote registry base image for new users.
+	// Override with DEVCELL_BASE_IMAGE for local dev (e.g. "ghcr.io/dimmkirr/devcell:base-local").
+	defaultBaseImageTag = "ghcr.io/dimmkirr/devcell:latest-base"
 	// defaultUserImageTag is the user-built image tag produced by cell build.
 	defaultUserImageTag = "ghcr.io/dimmkirr/devcell:user-local"
 )
 
 // BaseImageTag returns the base image tag used in scaffold FROM,
-// allowing override via DEVCELL_BASE_IMAGE env var (used by CI).
+// allowing override via DEVCELL_BASE_IMAGE env var (local dev, CI, tests).
 func BaseImageTag() string {
 	if tag := os.Getenv("DEVCELL_BASE_IMAGE"); tag != "" {
 		return tag
@@ -63,8 +64,9 @@ type RunSpec struct {
 	Binary       string
 	DefaultFlags []string
 	UserArgs     []string
-	Debug        bool   // pass DEVCELL_DEBUG=true into the container
-	Image        string // image ID or tag to run; defaults to UserImageTag
+	Debug        bool              // pass DEVCELL_DEBUG=true into the container
+	Image        string            // image ID or tag to run; defaults to UserImageTag
+	ExtraEnv     map[string]string // additional env vars injected by the command handler
 }
 
 // BuildArgv constructs the full docker run argv for the given spec.
@@ -130,6 +132,11 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 		argv = append(argv, "-e", k+"="+v)
 	}
 
+	// Command-specific extra env vars (e.g. OPENCODE_CONFIG_CONTENT)
+	for k, v := range spec.ExtraEnv {
+		argv = append(argv, "-e", k+"="+v)
+	}
+
 	// Standard volumes
 	v := func(mount string) { argv = append(argv, "-v", mount) }
 	v(c.BaseDir + ":" + c.BaseDir)
@@ -145,8 +152,9 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 		argv = append(argv, "-v", vol.Mount)
 	}
 
-	// Port mapping — only when GUI is enabled
+	// GUI volumes and port mapping
 	if spec.CellCfg.Cell.GUI {
+		v(c.ConfigDir + "/xrdp:/etc/devcell/xrdp")
 		argv = append(argv, "-p", c.VNCPort+":5900")
 		argv = append(argv, "-p", c.RDPPort+":3389")
 	}

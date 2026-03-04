@@ -23,8 +23,9 @@ import (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "cell",
-	Short: "Run AI coding agents in a devcell container",
+	Use:          "cell",
+	SilenceUsage: true, // don't dump usage after handled errors
+	Short:        "Run AI coding agents in a devcell container",
 	Long: `cell launches AI coding agents (claude, codex, opencode) and utility
 tools inside a consistent Docker dev environment.`,
 	Args: cobra.ArbitraryArgs,
@@ -63,6 +64,7 @@ func init() {
 		vncCmd,
 		rdpCmd,
 		chromeCmd,
+		modelsCmd,
 	)
 }
 
@@ -137,7 +139,9 @@ func stripCellFlags(args []string) []string {
 }
 
 // runAgent is the shared pre-exec sequence for all agent and shell commands.
-func runAgent(binary string, defaultFlags, userArgs []string) error {
+// extraEnv is an optional map of additional env vars injected into the container
+// (e.g. OPENCODE_CONFIG_CONTENT). Pass nil when not needed.
+func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[string]string) error {
 	userArgs = stripCellFlags(userArgs)
 	applyOutputFlags()
 	c, err := config.LoadFromOS()
@@ -153,7 +157,7 @@ func runAgent(binary string, defaultFlags, userArgs []string) error {
 	// First-run: scaffold if devcell.toml absent
 	if !scaffold.IsInitialized(c.ConfigDir) {
 		fmt.Printf(" First run — scaffolding %s\n", c.ConfigDir)
-		if err := scaffold.Scaffold(c.ConfigDir); err != nil {
+		if err := scaffold.Scaffold(c.ConfigDir, ""); err != nil {
 			return fmt.Errorf("scaffold: %w", err)
 		}
 		ok, promptErr := ux.GetConfirmation("Build image now? (~5 min first time)")
@@ -228,6 +232,7 @@ func runAgent(binary string, defaultFlags, userArgs []string) error {
 		UserArgs:     userArgs,
 		Debug:        ux.Verbose,
 		Image:        imageID,
+		ExtraEnv:     extraEnv,
 	}
 	argv := runner.BuildArgv(spec, runner.OsFS, exec.LookPath)
 

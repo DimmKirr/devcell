@@ -1,4 +1,5 @@
 .workspaces
+.worktrees
 nixhome/user.nix
 .venv
 .env

@@ -18,7 +18,7 @@ Examples:
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runAgent("codex",
 			[]string{"--dangerously-bypass-approvals-and-sandbox", "--oss", "-p", "lms"},
-			args)
+			args, nil)
 	},
 }
 
@@ -34,7 +34,7 @@ Examples:
     cell codex resume`,
 	DisableFlagParsing: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runAgent("codex", nil, append([]string{"resume"}, args...))
+		return runAgent("codex", nil, append([]string{"resume"}, args...), nil)
 	},
 }
 

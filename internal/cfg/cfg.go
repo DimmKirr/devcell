@@ -23,12 +23,26 @@ type PackagesSection struct {
 	Python map[string]string `toml:"python"`
 }
 
+// LLMProvider holds a single provider entry under [models.providers.<name>].
+type LLMProvider struct {
+	BaseURL string   `toml:"base_url"`
+	Models  []string `toml:"models"`
+}
+
+// ModelsSection holds [models] config — generic LLM provider/model declarations
+// denormalized into agent-specific config files (opencode.json, etc.) at scaffold time.
+type ModelsSection struct {
+	Default   string                  `toml:"default"`
+	Providers map[string]LLMProvider  `toml:"providers"`
+}
+
 // CellConfig is the merged configuration from all TOML layers.
 type CellConfig struct {
 	Cell     CellSection
 	Env      map[string]string
 	Volumes  []VolumeMount
 	Packages PackagesSection
+	Models   ModelsSection `toml:"models"`
 }
 
 // LoadFile parses a TOML file into CellConfig.
@@ -75,6 +89,21 @@ func Merge(global, project CellConfig) CellConfig {
 
 	// Slices accumulate: global first, then project
 	out.Volumes = append(global.Volumes, project.Volumes...)
+
+	// Models: project default wins, providers accumulate (project wins on key conflict)
+	out.Models = global.Models
+	if project.Models.Default != "" {
+		out.Models.Default = project.Models.Default
+	}
+	if len(global.Models.Providers) > 0 || len(project.Models.Providers) > 0 {
+		out.Models.Providers = make(map[string]LLMProvider)
+		for k, v := range global.Models.Providers {
+			out.Models.Providers[k] = v
+		}
+		for k, v := range project.Models.Providers {
+			out.Models.Providers[k] = v
+		}
+	}
 
 	return out
 }

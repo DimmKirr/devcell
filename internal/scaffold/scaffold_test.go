@@ -13,7 +13,7 @@ import (
 
 func TestScaffold_CreatesAllFiles(t *testing.T) {
 	dir := t.TempDir()
-	if err := scaffold.Scaffold(dir); err != nil {
+	if err := scaffold.Scaffold(dir, ""); err != nil {
 		t.Fatalf("Scaffold failed: %v", err)
 	}
 	for _, name := range []string{"Dockerfile", "flake.nix", "devcell.toml"} {
@@ -25,7 +25,7 @@ func TestScaffold_CreatesAllFiles(t *testing.T) {
 
 func TestScaffold_Idempotent(t *testing.T) {
 	dir := t.TempDir()
-	if err := scaffold.Scaffold(dir); err != nil {
+	if err := scaffold.Scaffold(dir, ""); err != nil {
 		t.Fatal(err)
 	}
 	// Overwrite Dockerfile with sentinel content
@@ -34,7 +34,7 @@ func TestScaffold_Idempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Scaffold again — must not overwrite
-	if err := scaffold.Scaffold(dir); err != nil {
+	if err := scaffold.Scaffold(dir, ""); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(filepath.Join(dir, "Dockerfile"))
@@ -48,7 +48,7 @@ func TestScaffold_Idempotent(t *testing.T) {
 
 func TestScaffold_DockerfileStartsWithFROM(t *testing.T) {
 	dir := t.TempDir()
-	if err := scaffold.Scaffold(dir); err != nil {
+	if err := scaffold.Scaffold(dir, ""); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(filepath.Join(dir, "Dockerfile"))
@@ -58,10 +58,23 @@ func TestScaffold_DockerfileStartsWithFROM(t *testing.T) {
 	}
 }
 
+// TestScaffold_DefaultBaseImageIsRemote — without DEVCELL_BASE_IMAGE, new users
+// must get the remote registry tag (not base-local which requires local build).
+func TestScaffold_DefaultBaseImageIsRemote(t *testing.T) {
+	t.Setenv("DEVCELL_BASE_IMAGE", "") // clear any override
+	tag := runner.BaseImageTag()
+	if strings.Contains(tag, "-local") {
+		t.Errorf("default base image must not be a local tag: %s", tag)
+	}
+	if !strings.HasPrefix(tag, "ghcr.io/dimmkirr/devcell:") {
+		t.Errorf("default base image must be from ghcr.io registry: %s", tag)
+	}
+}
+
 func TestScaffold_BaseImageOverride(t *testing.T) {
 	t.Setenv("DEVCELL_BASE_IMAGE", "myregistry.io/devcell:test-v42")
 	dir := t.TempDir()
-	if err := scaffold.Scaffold(dir); err != nil {
+	if err := scaffold.Scaffold(dir, ""); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(filepath.Join(dir, "Dockerfile"))
@@ -75,7 +88,7 @@ func TestScaffold_BaseImageOverride(t *testing.T) {
 // pre-installed in the base image; scaffold must NOT duplicate it.
 func TestScaffold_DockerfileDoesNotInstallHomeManager(t *testing.T) {
 	dir := t.TempDir()
-	if err := scaffold.Scaffold(dir); err != nil {
+	if err := scaffold.Scaffold(dir, ""); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(filepath.Join(dir, "Dockerfile"))
@@ -89,7 +102,7 @@ func TestScaffold_DockerfileDoesNotInstallHomeManager(t *testing.T) {
 // home-manager switch to activate the profile from the user flake.
 func TestScaffold_DockerfileRunsHomeManagerSwitch(t *testing.T) {
 	dir := t.TempDir()
-	if err := scaffold.Scaffold(dir); err != nil {
+	if err := scaffold.Scaffold(dir, ""); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(filepath.Join(dir, "Dockerfile"))
@@ -102,7 +115,7 @@ func TestScaffold_DockerfileRunsHomeManagerSwitch(t *testing.T) {
 // GitHub (not path:/opt/nixhome), so users can point to any nixhome source.
 func TestScaffold_FlakeNixUsesGitHubURL(t *testing.T) {
 	dir := t.TempDir()
-	if err := scaffold.Scaffold(dir); err != nil {
+	if err := scaffold.Scaffold(dir, ""); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(filepath.Join(dir, "flake.nix"))
@@ -117,7 +130,7 @@ func TestScaffold_FlakeNixUsesGitHubURL(t *testing.T) {
 
 func TestScaffold_DevcellTomlIsValidTOML(t *testing.T) {
 	dir := t.TempDir()
-	if err := scaffold.Scaffold(dir); err != nil {
+	if err := scaffold.Scaffold(dir, ""); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(filepath.Join(dir, "devcell.toml"))
@@ -129,7 +142,7 @@ func TestScaffold_DevcellTomlIsValidTOML(t *testing.T) {
 
 func TestScaffold_FlakeNixContainsUpstreamURL(t *testing.T) {
 	dir := t.TempDir()
-	if err := scaffold.Scaffold(dir); err != nil {
+	if err := scaffold.Scaffold(dir, ""); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(filepath.Join(dir, "flake.nix"))
@@ -140,7 +153,7 @@ func TestScaffold_FlakeNixContainsUpstreamURL(t *testing.T) {
 
 func TestScaffold_FlakeNixVersionSubstituted(t *testing.T) {
 	dir := t.TempDir()
-	if err := scaffold.Scaffold(dir); err != nil {
+	if err := scaffold.Scaffold(dir, ""); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(filepath.Join(dir, "flake.nix"))
@@ -204,6 +217,50 @@ func TestScaffoldVagrantfile_Idempotent(t *testing.T) {
 	data, _ := os.ReadFile(filepath.Join(dir, "Vagrantfile"))
 	if !strings.Contains(string(data), "first-box") {
 		t.Error("ScaffoldVagrantfile overwrote existing Vagrantfile — should be idempotent")
+	}
+}
+
+// --- Scaffold with models snippet ---
+
+func TestScaffold_WithModelsSnippet_InjectsIntoToml(t *testing.T) {
+	dir := t.TempDir()
+	snippet := "# [models]\n# default = \"ollama/deepseek-r1:70b\"\n# [models.providers.ollama]\n# models = [\"deepseek-r1:70b\", \"qwen3:32b\"]\n"
+	if err := scaffold.Scaffold(dir, snippet); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, "devcell.toml"))
+	s := string(data)
+	if !strings.Contains(s, "deepseek-r1:70b") {
+		t.Errorf("expected detected models in devcell.toml, got:\n%s", s)
+	}
+	if !strings.Contains(s, "qwen3:32b") {
+		t.Errorf("expected qwen3:32b in devcell.toml, got:\n%s", s)
+	}
+}
+
+func TestScaffold_EmptySnippet_UsesDefaultModelsSection(t *testing.T) {
+	dir := t.TempDir()
+	if err := scaffold.Scaffold(dir, ""); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, "devcell.toml"))
+	s := string(data)
+	// Default template has the generic commented example
+	if !strings.Contains(s, "# [models]") {
+		t.Errorf("expected default models section in devcell.toml, got:\n%s", s)
+	}
+}
+
+func TestScaffold_WithSnippet_StillValidTOML(t *testing.T) {
+	dir := t.TempDir()
+	snippet := "# [models]\n# default = \"ollama/deepseek-r1:70b\"\n# [models.providers.ollama]\n# models = [\"deepseek-r1:70b\"]\n"
+	if err := scaffold.Scaffold(dir, snippet); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, "devcell.toml"))
+	var v interface{}
+	if _, err := toml.Decode(string(data), &v); err != nil {
+		t.Errorf("devcell.toml is not valid TOML: %v\ncontent:\n%s", err, string(data))
 	}
 }
 
