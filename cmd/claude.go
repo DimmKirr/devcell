@@ -16,6 +16,6 @@ Examples:
     cell claude --resume`,
 	DisableFlagParsing: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runAgent("claude", []string{"--dangerously-skip-permissions"}, args)
+		return runAgent("claude", []string{"--dangerously-skip-permissions"}, args, nil)
 	},
 }

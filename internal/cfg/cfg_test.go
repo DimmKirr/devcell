@@ -206,3 +206,92 @@ mount = "~/work/secrets:/run/secrets:ro"
 		t.Errorf("volume mount not passed through: %q", c.Volumes[0].Mount)
 	}
 }
+
+// --- Models section ---
+
+func TestLoadFile_ModelsSection(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[models]
+default = "ollama/deepseek-r1:32b"
+
+[models.providers.ollama]
+models = ["deepseek-r1:32b", "qwen3:8b"]
+
+[models.providers.lmstudio]
+base_url = "http://host.docker.internal:1235/v1"
+models = ["deepseek-r1:32b"]
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Models.Default != "ollama/deepseek-r1:32b" {
+		t.Errorf("default: want ollama/deepseek-r1:32b, got %q", c.Models.Default)
+	}
+	ollama, ok := c.Models.Providers["ollama"]
+	if !ok {
+		t.Fatal("ollama provider not found")
+	}
+	if len(ollama.Models) != 2 || ollama.Models[0] != "deepseek-r1:32b" {
+		t.Errorf("ollama models: %v", ollama.Models)
+	}
+	if ollama.BaseURL != "" {
+		t.Errorf("ollama base_url should be empty (use default), got %q", ollama.BaseURL)
+	}
+	lms, ok := c.Models.Providers["lmstudio"]
+	if !ok {
+		t.Fatal("lmstudio provider not found")
+	}
+	if lms.BaseURL != "http://host.docker.internal:1235/v1" {
+		t.Errorf("lmstudio base_url: got %q", lms.BaseURL)
+	}
+	if len(lms.Models) != 1 {
+		t.Errorf("lmstudio models: %v", lms.Models)
+	}
+}
+
+func TestLoadFile_ModelsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `[cell]`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Models.Default != "" {
+		t.Errorf("expected empty default, got %q", c.Models.Default)
+	}
+	if len(c.Models.Providers) != 0 {
+		t.Errorf("expected no providers, got %v", c.Models.Providers)
+	}
+}
+
+func TestMerge_ModelsProjectWins(t *testing.T) {
+	global := cfg.CellConfig{
+		Models: cfg.ModelsSection{
+			Default: "ollama/qwen3:8b",
+			Providers: map[string]cfg.LLMProvider{
+				"ollama": {Models: []string{"qwen3:8b"}},
+			},
+		},
+	}
+	project := cfg.CellConfig{
+		Models: cfg.ModelsSection{
+			Default: "ollama/deepseek-r1:32b",
+			Providers: map[string]cfg.LLMProvider{
+				"ollama":   {Models: []string{"deepseek-r1:32b"}},
+				"lmstudio": {Models: []string{"deepseek-r1:32b"}},
+			},
+		},
+	}
+	merged := cfg.Merge(global, project)
+	if merged.Models.Default != "ollama/deepseek-r1:32b" {
+		t.Errorf("default: project should win, got %q", merged.Models.Default)
+	}
+	if len(merged.Models.Providers) != 2 {
+		t.Errorf("want 2 providers, got %d", len(merged.Models.Providers))
+	}
+	if merged.Models.Providers["ollama"].Models[0] != "deepseek-r1:32b" {
+		t.Errorf("ollama models should be project's, got %v", merged.Models.Providers["ollama"].Models)
+	}
+}

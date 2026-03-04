@@ -49,9 +49,13 @@ func TestVersion(t *testing.T) {
 
 func TestUnknownSubcommand(t *testing.T) {
 	cmd := exec.Command(binaryPath, "definitely-not-a-command")
-	err := cmd.Run()
+	out, err := cmd.CombinedOutput()
 	if err == nil {
 		t.Error("expected non-zero exit for unknown subcommand")
+	}
+	// SilenceUsage: handled errors must NOT dump usage/help text
+	if strings.Contains(string(out), "Usage:") {
+		t.Errorf("handled error should not show Usage: block (SilenceUsage):\n%s", out)
 	}
 }
 

@@ -32,13 +32,31 @@ type scaffoldFile struct {
 	content []byte
 }
 
-func scaffoldFiles() []scaffoldFile {
+// defaultModelsSection is the generic commented example used when no
+// ollama models are detected.
+const defaultModelsSection = `# [models]
+# Default LLM model (format: provider/model). Used by opencode and other agents.
+# default = "ollama/deepseek-r1:32b"
+
+# [models.providers.ollama]
+# models = ["deepseek-r1:32b", "qwen3:8b"]
+
+# [models.providers.lmstudio]
+# base_url = "http://host.docker.internal:1234/v1"
+# models = ["deepseek-r1:32b"]`
+
+func scaffoldFiles(modelsSnippet string) []scaffoldFile {
 	dockerfile := bytes.ReplaceAll(dockerfileContent, []byte("{{BASE_IMAGE}}"), []byte(runner.BaseImageTag()))
 	flake := bytes.ReplaceAll(flakeNixContent, []byte("{{VERSION}}"), []byte(version.Version))
+	models := modelsSnippet
+	if models == "" {
+		models = defaultModelsSection
+	}
+	tomlContent := bytes.ReplaceAll(devcellTomlContent, []byte("{{MODELS_SECTION}}"), []byte(models))
 	return []scaffoldFile{
 		{"Dockerfile", dockerfile},
 		{"flake.nix", flake},
-		{"devcell.toml", devcellTomlContent},
+		{"devcell.toml", tomlContent},
 	}
 }
 
@@ -86,11 +104,13 @@ func generatePyprojectTOML(pkgs map[string]string) []byte {
 // Scaffold writes scaffold files to dir, then generates package.json and
 // pyproject.toml from the [packages] section in devcell.toml.
 // Files that already exist are skipped (idempotent).
-func Scaffold(dir string) error {
+// modelsSnippet is an optional commented-out [models] section for devcell.toml;
+// pass "" to use the default generic example.
+func Scaffold(dir string, modelsSnippet string) error {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", dir, err)
 	}
-	for _, f := range scaffoldFiles() {
+	for _, f := range scaffoldFiles(modelsSnippet) {
 		dest := filepath.Join(dir, f.name)
 		if _, err := os.Stat(dest); err == nil {
 			continue

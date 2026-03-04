@@ -93,7 +93,7 @@ func TestEntrypointFragments(t *testing.T) {
 	// 2. Scaffold config dir with this base image.
 	configDir := t.TempDir()
 	t.Setenv("DEVCELL_BASE_IMAGE", baseImage)
-	if err := scaffold.Scaffold(configDir); err != nil {
+	if err := scaffold.Scaffold(configDir, ""); err != nil {
 		t.Fatalf("scaffold: %v", err)
 	}
 

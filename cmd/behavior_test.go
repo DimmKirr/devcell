@@ -116,6 +116,24 @@ func TestScenarioA_RDPPortPublished(t *testing.T) {
 	}
 }
 
+// GUI=true mounts xrdp cert dir from global config
+func TestScenarioA_XrdpCertVolume(t *testing.T) {
+	guiCfg := cfg.CellConfig{Cell: cfg.CellSection{GUI: true}}
+	argv := buildBehaviourArgv("/tmp/myproject", []string{"TMUX_PANE", "%3"},
+		"claude", nil, nil, guiCfg)
+
+	found := false
+	for _, a := range argv {
+		if strings.Contains(a, "/xrdp:/etc/devcell/xrdp") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected xrdp cert volume mount: %v", argv)
+	}
+}
+
 func TestScenarioA_RDPPortNotPublishedWithoutGUI(t *testing.T) {
 	argv := buildBehaviourArgv("/tmp/myproject", []string{"TMUX_PANE", "%3"},
 		"claude", nil, nil, cfg.CellConfig{})
@@ -124,6 +142,37 @@ func TestScenarioA_RDPPortNotPublishedWithoutGUI(t *testing.T) {
 		if a == "-p" && i+1 < len(argv) && strings.Contains(argv[i+1], "3389") {
 			t.Errorf("RDP port should not be published without GUI: %v", argv)
 		}
+	}
+}
+
+// TestDebugEnvNotSetWithoutFlag — DEVCELL_DEBUG must NOT appear in argv
+// unless Debug=true in the RunSpec.
+func TestDebugEnvNotSetWithoutFlag(t *testing.T) {
+	argv := buildBehaviourArgv("/tmp/myproject", nil,
+		"claude", nil, nil, cfg.CellConfig{})
+	for _, a := range argv {
+		if strings.Contains(a, "DEVCELL_DEBUG") {
+			t.Errorf("DEVCELL_DEBUG should not be in argv without --debug: %v", argv)
+		}
+	}
+}
+
+// TestDebugEnvSetWithFlag — DEVCELL_DEBUG=true must appear when Debug=true.
+func TestDebugEnvSetWithFlag(t *testing.T) {
+	e := makeEnv()
+	c := config.Load("/tmp/myproject", e)
+	spec := runner.RunSpec{
+		Config:  c,
+		CellCfg: cfg.CellConfig{},
+		Binary:  "claude",
+		Debug:   true,
+	}
+	argv := runner.BuildArgv(spec,
+		runner.FSFunc(func(string) error { return os.ErrNotExist }),
+		func(string) (string, error) { return "", os.ErrNotExist },
+	)
+	if !hasArg(argv, "DEVCELL_DEBUG=true") {
+		t.Errorf("expected DEVCELL_DEBUG=true in argv: %v", argv)
 	}
 }
 

@@ -253,13 +253,36 @@ func TestRdpLogsToFile(t *testing.T) {
 	if code != 0 || !strings.Contains(out, "OK") {
 		t.Fatalf("FAIL: xrdp log files not found in /var/log/")
 	}
+	// xrdp.ini must have LogFile pointing to /var/log and syslog disabled
 	out, _ = exec(t, c, []string{"sh", "-c",
-		"grep SyslogLevel /tmp/xrdp/xrdp.ini /tmp/xrdp/sesman.ini 2>/dev/null"})
-	if !strings.Contains(out, "DISABLED") {
-		t.Errorf("FAIL: SyslogLevel should be DISABLED:\n%s", out)
-	} else {
-		t.Logf("PASS: xrdp logs to /var/log/, SyslogLevel=DISABLED\n%s", out)
+		"grep -E '^LogFile=|^EnableSyslog=' /tmp/xrdp/xrdp.ini 2>/dev/null"})
+	if !strings.Contains(out, "LogFile=/var/log/xrdp.log") {
+		t.Errorf("FAIL: xrdp.ini LogFile not set to /var/log/xrdp.log:\n%s", out)
 	}
+	if !strings.Contains(out, "EnableSyslog=false") {
+		t.Errorf("FAIL: xrdp.ini EnableSyslog should be false:\n%s", out)
+	}
+	// sesman.ini must also have syslog disabled
+	out, _ = exec(t, c, []string{"sh", "-c",
+		"grep -E '^EnableSyslog=' /tmp/xrdp/sesman.ini 2>/dev/null"})
+	if !strings.Contains(out, "EnableSyslog=false") {
+		t.Errorf("FAIL: sesman.ini EnableSyslog should be false:\n%s", out)
+	} else {
+		t.Logf("PASS: xrdp logs to /var/log/, syslog disabled\n%s", out)
+	}
+}
+
+// TestRdpCertPersisted — SSL cert should be in /etc/devcell/xrdp/ (global config).
+func TestRdpCertPersisted(t *testing.T) {
+	probeGUI(t)
+	c := startRdpContainer(t)
+	certDir := "/etc/devcell/xrdp"
+	out, code := exec(t, c, []string{"sh", "-c",
+		"test -f " + certDir + "/key.pem && test -f " + certDir + "/cert.pem && echo OK"})
+	if code != 0 || !strings.Contains(out, "OK") {
+		t.Fatalf("FAIL: RDP cert not found in %s", certDir)
+	}
+	t.Logf("PASS: RDP cert persisted in %s", certDir)
 }
 
 // TestRdpNoXorgSection — [Xorg] section must be removed from xrdp.ini.

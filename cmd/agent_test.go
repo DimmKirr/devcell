@@ -108,14 +108,25 @@ func TestCodex_ResumeWithArgs(t *testing.T) {
 
 // --- opencode ---
 
-func TestOpencode_DefaultFlags(t *testing.T) {
-	argv := buildTestArgv("opencode", []string{"--dangerously-bypass-approvals-and-sandbox"}, nil)
+func TestOpencode_NoDefaultFlags(t *testing.T) {
+	argv := buildTestArgv("opencode", nil, []string{"."})
 	tail := trailingAfterImage(argv)
 	if tail[0] != "opencode" {
 		t.Errorf("expected opencode binary, got: %v", tail)
 	}
-	if !hasArg(tail, "--dangerously-bypass-approvals-and-sandbox") {
-		t.Errorf("missing flag, tail: %v", tail)
+	if hasArg(tail, "--dangerously-bypass-approvals-and-sandbox") {
+		t.Errorf("unexpected codex flag in opencode tail: %v", tail)
+	}
+	if tail[len(tail)-1] != "." {
+		t.Errorf("expected '.' as last arg, got: %v", tail)
+	}
+}
+
+func TestOpencode_DebugFlags(t *testing.T) {
+	argv := buildTestArgv("opencode", []string{"--log-level", "DEBUG"}, []string{"."})
+	tail := trailingAfterImage(argv)
+	if !hasArg(tail, "--log-level") || !hasArg(tail, "DEBUG") {
+		t.Errorf("expected --log-level DEBUG in tail: %v", tail)
 	}
 }
 

@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 
 	"github.com/DimmKirr/devcell/internal/config"
+	"github.com/DimmKirr/devcell/internal/ollama"
 	"github.com/DimmKirr/devcell/internal/scaffold"
 	"github.com/DimmKirr/devcell/internal/ux"
 	"github.com/spf13/cobra"
@@ -39,8 +41,12 @@ func runInit(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
+	// Detect ollama and generate commented-out models snippet for devcell.toml.
+	// If ollama is not reachable, modelsSnippet is "" and the default example is used.
+	modelsSnippet := detectOllamaModels()
+
 	fmt.Printf(" Scaffolding %s\n", c.ConfigDir)
-	if err := scaffold.Scaffold(c.ConfigDir); err != nil {
+	if err := scaffold.Scaffold(c.ConfigDir, modelsSnippet); err != nil {
 		return fmt.Errorf("scaffold: %w", err)
 	}
 	fmt.Printf(" Config dir ready: %s\n", c.ConfigDir)
@@ -57,4 +63,23 @@ func runInit(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	return nil
+}
+
+// detectOllamaModels tries to detect ollama and returns a commented-out
+// TOML snippet for devcell.toml. Returns "" if ollama is not reachable.
+func detectOllamaModels() string {
+	ctx := context.Background()
+	if !ollama.Detect(ctx, ollama.DefaultBaseURL) {
+		return ""
+	}
+	models, err := ollama.FetchModels(ctx, ollama.DefaultBaseURL)
+	if err != nil || len(models) == 0 {
+		return ""
+	}
+	ranked := ollama.RankModels(models, 10, nil, nil)
+	snippet := ollama.FormatTOMLSnippet(ranked)
+	if snippet != "" {
+		fmt.Printf(" Detected ollama with %d models\n", len(ranked))
+	}
+	return snippet
 }

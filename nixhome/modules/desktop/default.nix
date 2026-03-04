@@ -245,14 +245,17 @@
           cp -a "$XRDP_PREFIX/etc/xrdp/"* "$XRDP_CFG/" 2>/dev/null || true
           chmod u+w "$XRDP_CFG/"* 2>/dev/null || true
 
-          # Generate self-signed SSL cert (xrdp refuses to start without one)
-          if [ ! -f "$XRDP_CFG/key.pem" ]; then
+          # Generate self-signed SSL cert in global config dir
+          # (survives container restarts via ~/.config/devcell/xrdp/ bind mount)
+          XRDP_CERT_DIR="/etc/devcell/xrdp"
+          mkdir -p "$XRDP_CERT_DIR"
+          if [ ! -f "$XRDP_CERT_DIR/key.pem" ]; then
               openssl req -x509 -newkey rsa:2048 -nodes \
-                  -keyout "$XRDP_CFG/key.pem" -out "$XRDP_CFG/cert.pem" \
+                  -keyout "$XRDP_CERT_DIR/key.pem" -out "$XRDP_CERT_DIR/cert.pem" \
                   -days 365 -subj "/CN=devcell" 2>/dev/null
           fi
 
-          # Patch xrdp.ini: port, SSL, autorun, log to file only
+          # Patch xrdp.ini: port, SSL, autorun, logging to file only
           # DEVCELL_DEBUG=true → INFO logs; otherwise WARNING only
           if [ "$DEVCELL_DEBUG" = "true" ]; then
               XRDP_LOG_LEVEL="INFO"
@@ -261,11 +264,12 @@
           fi
           sed -i \
               -e "s|^port=.*|port=3389|" \
-              -e "s|^certificate=.*|certificate=$XRDP_CFG/cert.pem|" \
-              -e "s|^key_file=.*|key_file=$XRDP_CFG/key.pem|" \
+              -e "s|^certificate=.*|certificate=$XRDP_CERT_DIR/cert.pem|" \
+              -e "s|^key_file=.*|key_file=$XRDP_CERT_DIR/key.pem|" \
               -e "s|^autorun=.*|autorun=vnc-any|" \
+              -e "s|^LogFile=.*|LogFile=/var/log/xrdp.log|" \
               -e "s|^LogLevel=.*|LogLevel=$XRDP_LOG_LEVEL|" \
-              -e "s|^#*SyslogLevel=.*|SyslogLevel=DISABLED|" \
+              -e "s|^#*EnableSyslog=.*|EnableSyslog=false|" \
               "$XRDP_CFG/xrdp.ini"
 
           # Remove stock [Xorg] section (has username=ask which forces login
@@ -307,7 +311,7 @@
               echo '[Logging]'
               echo 'LogFile=/var/log/xrdp-sesman.log'
               echo "LogLevel=$XRDP_LOG_LEVEL"
-              echo 'SyslogLevel=DISABLED'
+              echo 'EnableSyslog=false'
           } > "$XRDP_CFG/sesman.ini"
 
           log "Starting xrdp on port 3389 (RDP → VNC :''${DISPLAY_NUM})..."
