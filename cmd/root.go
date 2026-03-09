@@ -94,6 +94,7 @@ var cellBoolFlags = map[string]bool{
 	"--plain-text": true,
 	"--debug":      true,
 	"--macos":      true,
+	"--ollama":     true,
 }
 
 // cellStringFlags are string flags consumed by devcell: strip the flag token
@@ -196,6 +197,15 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 		}
 	}
 
+	if ux.Verbose {
+		fmt.Printf(" APP_NAME: %s | VNC: localhost:%s | RDP: localhost:%s | HOME: %s\n",
+			c.AppName, c.VNCPort, c.RDPPort, c.CellHome)
+	}
+
+	if !ux.Verbose {
+		ux.Println(fmt.Sprintf("Opening Cell %s ...", c.AppName))
+	}
+
 	// Ensure network
 	if err := runner.EnsureNetwork(context.Background()); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: network setup failed: %v\n", err)
@@ -209,11 +219,6 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 	// Backup .claude.json (non-fatal)
 	if err := backup.Backup(c.CellHome, time.Now()); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: backup failed: %v\n", err)
-	}
-
-	if ux.Verbose {
-		fmt.Printf(" APP_NAME: %s | VNC: localhost:%s | RDP: localhost:%s | HOME: %s\n",
-			c.AppName, c.VNCPort, c.RDPPort, c.CellHome)
 	}
 
 	// Pin the container to the exact image ID just built so a concurrent
@@ -241,12 +246,31 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 		return nil
 	}
 
-	// Replace process with docker (or op if prefix present)
-	execBin, err := exec.LookPath(argv[0])
-	if err != nil {
-		return fmt.Errorf("binary not found %q: %w", argv[0], err)
+	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start %q: %w", argv[0], err)
 	}
-	return syscall.Exec(execBin, argv, os.Environ())
+
+	// Forward signals to the child process.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		for sig := range sigCh {
+			_ = cmd.Process.Signal(sig)
+		}
+	}()
+
+	if err := cmd.Wait(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			os.Exit(exitErr.ExitCode())
+		}
+		return err
+	}
+	return nil
 }
 
 // osArgs is the argument source for flag scanning. Overridable in tests.

@@ -29,6 +29,7 @@ func NewProgressSpinner(message string) *ProgressSpinner {
 		s.Sequence = []string{" ⠋ ", " ⠙ ", " ⠹ ", " ⠸ ", " ⠼ ", " ⠴ ", " ⠦ ", " ⠧ ", " ⠇ ", " ⠏ "}
 		s.Style = pterm.NewStyle(pterm.FgLightBlue)
 		s.Delay = 80 * time.Millisecond
+		s.ShowTimer = true
 		ps.spinner, _ = s.Start(message)
 	} else {
 		pterm.Info.Println(message)
@@ -60,8 +61,8 @@ func (ps *ProgressSpinner) Success(message string) *ProgressSpinner {
 func (ps *ProgressSpinner) Stop() {
 	if ps.spinner != nil && ps.spinner.IsActive {
 		ps.spinner.Stop()
-		// Clear the spinner line
-		fmt.Print("\r\033[K")
+		// pterm Stop() may print a final frame; erase it and move cursor up.
+		fmt.Print("\r\033[K\033[A\r\033[K")
 	}
 }
 
@@ -81,6 +82,15 @@ func GetConfirmation(message string) (bool, error) {
 	return pterm.DefaultInteractiveConfirm.
 		WithDefaultText(prefixed).
 		WithDefaultValue(true).
+		Show()
+}
+
+// GetSelection shows an interactive selection prompt and returns the chosen option.
+func GetSelection(message string, options []string) (string, error) {
+	prefixed := fmt.Sprintf(" %s  %s", pterm.LightBlue("?"), message)
+	return pterm.DefaultInteractiveSelect.
+		WithDefaultText(prefixed).
+		WithOptions(options).
 		Show()
 }
 

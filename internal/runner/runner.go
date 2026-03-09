@@ -132,6 +132,11 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 		argv = append(argv, "-e", k+"="+v)
 	}
 
+	// cfg [asdf] entries → ASDF_<UPPER_KEY>=value
+	for k, v := range spec.CellCfg.Asdf {
+		argv = append(argv, "-e", "ASDF_"+strings.ToUpper(k)+"="+v)
+	}
+
 	// Command-specific extra env vars (e.g. OPENCODE_CONFIG_CONTENT)
 	for k, v := range spec.ExtraEnv {
 		argv = append(argv, "-e", k+"="+v)

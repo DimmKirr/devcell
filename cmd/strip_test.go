@@ -70,6 +70,14 @@ func TestStripCellFlags_MultipleMixed(t *testing.T) {
 	}
 }
 
+func TestStripCellFlags_OllamaStripped(t *testing.T) {
+	got := stripCellFlags([]string{"--ollama", "--resume"})
+	want := []string{"--resume"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("want %v, got %v", want, got)
+	}
+}
+
 func TestStripCellFlags_BaseImageStripped(t *testing.T) {
 	got := stripCellFlags([]string{"--base-image", "myregistry/img:v1", "--resume", "abc"})
 	want := []string{"--resume", "abc"}

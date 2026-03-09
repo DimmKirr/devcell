@@ -36,10 +36,17 @@ type ModelsSection struct {
 	Providers map[string]LLMProvider  `toml:"providers"`
 }
 
+// ClaudeSection holds [claude] config.
+type ClaudeSection struct {
+	UseOllama bool `toml:"use_ollama"`
+}
+
 // CellConfig is the merged configuration from all TOML layers.
 type CellConfig struct {
 	Cell     CellSection
+	Claude   ClaudeSection
 	Env      map[string]string
+	Asdf     map[string]string // [asdf] — keys map to ASDF_<UPPER_KEY> env vars
 	Volumes  []VolumeMount
 	Packages PackagesSection
 	Models   ModelsSection `toml:"models"`
@@ -68,6 +75,7 @@ func Merge(global, project CellConfig) CellConfig {
 	out := CellConfig{
 		Cell: global.Cell,
 		Env:  make(map[string]string),
+		Asdf: make(map[string]string),
 	}
 
 	// Copy global env
@@ -79,12 +87,26 @@ func Merge(global, project CellConfig) CellConfig {
 		out.Env[k] = v
 	}
 
+	// Asdf: same accumulate semantics as Env
+	for k, v := range global.Asdf {
+		out.Asdf[k] = v
+	}
+	for k, v := range project.Asdf {
+		out.Asdf[k] = v
+	}
+
 	// Scalars: project wins when non-zero
 	if project.Cell.ImageTag != "" {
 		out.Cell.ImageTag = project.Cell.ImageTag
 	}
 	if project.Cell.GUI {
 		out.Cell.GUI = true
+	}
+
+	// Claude: project wins when true
+	out.Claude = global.Claude
+	if project.Claude.UseOllama {
+		out.Claude.UseOllama = true
 	}
 
 	// Slices accumulate: global first, then project

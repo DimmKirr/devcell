@@ -148,6 +148,42 @@ EXTRA = "yes"
 	}
 }
 
+// --- Asdf section ---
+
+func TestLoadFile_AsdfSection(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[asdf]
+golang_mod_version_enabled = "true"
+legacy_version_file = "yes"
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Asdf["golang_mod_version_enabled"] != "true" {
+		t.Errorf("golang_mod_version_enabled: want true, got %q", c.Asdf["golang_mod_version_enabled"])
+	}
+	if c.Asdf["legacy_version_file"] != "yes" {
+		t.Errorf("legacy_version_file: want yes, got %q", c.Asdf["legacy_version_file"])
+	}
+}
+
+func TestMerge_AsdfAccumulates(t *testing.T) {
+	global := cfg.CellConfig{Asdf: map[string]string{"A": "1", "B": "global"}}
+	project := cfg.CellConfig{Asdf: map[string]string{"B": "project", "C": "3"}}
+	merged := cfg.Merge(global, project)
+	if merged.Asdf["A"] != "1" {
+		t.Errorf("A should be 1, got %q", merged.Asdf["A"])
+	}
+	if merged.Asdf["B"] != "project" {
+		t.Errorf("B: project should win, got %q", merged.Asdf["B"])
+	}
+	if merged.Asdf["C"] != "3" {
+		t.Errorf("C should be 3, got %q", merged.Asdf["C"])
+	}
+}
+
 // --- GUI field ---
 
 func TestLoadFile_GUITrue(t *testing.T) {
@@ -293,5 +329,52 @@ func TestMerge_ModelsProjectWins(t *testing.T) {
 	}
 	if merged.Models.Providers["ollama"].Models[0] != "deepseek-r1:32b" {
 		t.Errorf("ollama models should be project's, got %v", merged.Models.Providers["ollama"].Models)
+	}
+}
+
+// --- Claude section ---
+
+func TestLoadFile_ClaudeUseOllama(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[claude]
+use_ollama = true
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.Claude.UseOllama {
+		t.Error("expected UseOllama=true after parsing use_ollama=true")
+	}
+}
+
+func TestLoadFile_ClaudeDefaultsFalse(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `[cell]`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Claude.UseOllama {
+		t.Error("expected UseOllama=false when not set")
+	}
+}
+
+func TestMerge_ClaudeProjectEnablesOverGlobal(t *testing.T) {
+	global := cfg.CellConfig{Claude: cfg.ClaudeSection{UseOllama: false}}
+	project := cfg.CellConfig{Claude: cfg.ClaudeSection{UseOllama: true}}
+	merged := cfg.Merge(global, project)
+	if !merged.Claude.UseOllama {
+		t.Error("expected project use_ollama=true to win over global false")
+	}
+}
+
+func TestMerge_ClaudeGlobalKeptWhenProjectUnset(t *testing.T) {
+	global := cfg.CellConfig{Claude: cfg.ClaudeSection{UseOllama: true}}
+	project := cfg.CellConfig{}
+	merged := cfg.Merge(global, project)
+	if !merged.Claude.UseOllama {
+		t.Error("expected global use_ollama=true to be preserved when project unset")
 	}
 }

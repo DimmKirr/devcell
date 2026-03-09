@@ -301,6 +301,46 @@ func TestFormatTOMLSnippet_ProducesCommentedConfig(t *testing.T) {
 	}
 }
 
+func TestFormatActiveTOMLSnippet_ProducesUncommentedConfig(t *testing.T) {
+	ranked := []ollama.RankedModel{
+		{Model: ollama.Model{Name: "deepseek-r1:70b"}, SWEScore: 43.8, Rank: 1},
+		{Model: ollama.Model{Name: "qwen3:32b"}, SWEScore: 38.2, Rank: 2},
+	}
+
+	snippet := ollama.FormatActiveTOMLSnippet(ranked)
+
+	if len(snippet) == 0 {
+		t.Fatal("expected non-empty snippet")
+	}
+	// Should start with active TOML (no comment prefix)
+	if snippet[0] == '#' {
+		t.Error("expected snippet to NOT start with comment")
+	}
+	// Should have the default model set to #1 ranked
+	if !contains(snippet, `default = "ollama/deepseek-r1:70b"`) {
+		t.Error("expected default model to be #1 ranked")
+	}
+	// Should list both models
+	if !contains(snippet, "deepseek-r1:70b") || !contains(snippet, "qwen3:32b") {
+		t.Error("expected both models in snippet")
+	}
+	// Should have [models] header
+	if !contains(snippet, "[models]") {
+		t.Error("expected [models] section header")
+	}
+	// Should have [models.providers.ollama] header
+	if !contains(snippet, "[models.providers.ollama]") {
+		t.Error("expected [models.providers.ollama] section header")
+	}
+}
+
+func TestFormatActiveTOMLSnippet_Empty(t *testing.T) {
+	snippet := ollama.FormatActiveTOMLSnippet(nil)
+	if snippet != "" {
+		t.Errorf("expected empty string for nil ranked, got: %q", snippet)
+	}
+}
+
 func contains(s, sub string) bool {
 	return len(s) > 0 && len(sub) > 0 && indexOf(s, sub) >= 0
 }

@@ -7,10 +7,19 @@
 # Enable GUI (Xvfb + VNC + browser). Injects DEVCELL_GUI_ENABLED=true.
 gui = true
 
+[claude]
+# Route Claude Code through a local ollama instance (Anthropic API compat).
+# Equivalent to: cell claude --ollama
+# use_ollama = true
+
 [env]
 # Extra environment variables forwarded into the container.
-# ANTHROPIC_BASE_URL = "http://host.docker.internal:8080"
 # MY_TOKEN = "abc123"
+
+[asdf]
+# ASDF runtime settings forwarded as ASDF_<UPPER_KEY> env vars.
+# See: https://asdf-vm.com/manage/configuration.html
+golang_mod_version_enabled = "true"
 
 # [[volumes]]
 # Extra volume mounts appended to docker run.

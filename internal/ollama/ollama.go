@@ -134,8 +134,14 @@ func resolveScore(m Model, sweScores map[string]float64, hfInfoMap map[string]HF
 		}
 	}
 
-	// Strategy 3: hardcoded fallback.
+	// Strategy 3: hardcoded fallback (exact name match).
 	if s := sweBenchRatings[m.Name]; s > 0 {
+		return s, "est"
+	}
+
+	// Strategy 4: loose fallback — match by family:size prefix.
+	// e.g. "qwen3-coder:30b-128k" matches "qwen3-coder:30b"
+	if s := matchFallbackScore(m.Name); s > 0 {
 		return s, "est"
 	}
 
@@ -159,6 +165,27 @@ func FormatTOMLSnippet(ranked []RankedModel) string {
 	b.WriteString(fmt.Sprintf("# default = \"ollama/%s\"\n", ranked[0].Name))
 	b.WriteString("# [models.providers.ollama]\n")
 	b.WriteString(fmt.Sprintf("# models = [%s]\n", strings.Join(names, ", ")))
+
+	return b.String()
+}
+
+// FormatActiveTOMLSnippet generates an active (uncommented) TOML snippet
+// for devcell.toml from ranked models. The #1 ranked model becomes the default.
+func FormatActiveTOMLSnippet(ranked []RankedModel) string {
+	if len(ranked) == 0 {
+		return ""
+	}
+
+	var names []string
+	for _, r := range ranked {
+		names = append(names, fmt.Sprintf("%q", r.Name))
+	}
+
+	var b strings.Builder
+	b.WriteString("[models]\n")
+	b.WriteString(fmt.Sprintf("default = \"ollama/%s\"\n", ranked[0].Name))
+	b.WriteString("\n[models.providers.ollama]\n")
+	b.WriteString(fmt.Sprintf("models = [%s]\n", strings.Join(names, ", ")))
 
 	return b.String()
 }
