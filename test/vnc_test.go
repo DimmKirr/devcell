@@ -10,7 +10,7 @@ package container_test
 //          PORT_PREFIX is a small digit (TMUX_PANE %0–%9, no SESSION_PORT_PREFIX).
 //
 // Run against the GUI-capable image (base-gui or ultimate):
-//   DEVCELL_IMAGE=ghcr.io/dimmkirr/devcell:latest-ultimate go test -v -run TestVnc ./...
+//   DEVCELL_TEST_IMAGE=ghcr.io/dimmkirr/devcell:latest-ultimate go test -v -run TestVnc ./...
 
 import (
 	"context"

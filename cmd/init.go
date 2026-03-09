@@ -77,7 +77,7 @@ func detectOllamaModels() string {
 		return ""
 	}
 	ranked := ollama.RankModels(models, 10, nil, nil)
-	snippet := ollama.FormatTOMLSnippet(ranked)
+	snippet := ollama.FormatActiveTOMLSnippet(ranked)
 	if snippet != "" {
 		fmt.Printf(" Detected ollama with %d models\n", len(ranked))
 	}

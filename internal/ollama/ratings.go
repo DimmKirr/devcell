@@ -18,77 +18,88 @@ package ollama
 //   - CodeLlama paper:    https://arxiv.org/abs/2308.12950
 //   - DeepSeek-Coder-V2:  https://arxiv.org/abs/2406.11931
 var sweBenchRatings = map[string]float64{
+	// Qwen 3 Coder Next (MoE 80B/A3B, Feb 2026)
+	// SWE-bench Verified: 70.6% (SWE-Agent), Aider: 66.2%
+	// Near Sonnet 4.5 level despite only 3B active params
+	"qwen3-coder-next:latest": 58.0,
+
+	// Qwen 3 Coder (MoE 30B/A3B, agentic coding model)
+	// SWE-bench Verified: 67-69.6% (OpenHands), Aider: ~60%
+	"qwen3-coder:30b": 55.0,
+
+	// GLM-4.7 Flash (THUDM, 30B)
+	// SWE-bench Verified: 74.2% (full-precision 358B)
+	// Flash variant is distilled, Q4 discount applied
+	"glm-4.7-flash:latest": 35.0,
+
 	// DeepSeek-R1 distilled (NOT on SWE-bench Verified)
-	// Full R1 671B: LiveCodeBench 65.9%, Aider Polyglot 57-71%, Codeforces 2029
-	// Distilled: LiveCodeBench 70B=65.2%, 32B=62.1%, 14B=59.1%, 7B=49.1%, 1.5B=33.8%
-	// Codeforces: 70B=1633, 32B=1691, 14B=1481, 7B=1189, 1.5B=954
+	// Full R1 671B: LiveCodeBench 65.9%, Aider Polyglot 57-71%
+	// Distilled: LiveCodeBench 70B=65.2%, 32B=62.1%, 14B=59.1%
 	// Q4 quantization discount applied (~15-20%)
-	"deepseek-r1:70b":  32.0, // LiveCodeBench 65.2%, Codeforces 1633
-	"deepseek-r1:32b":  30.0, // LiveCodeBench 62.1%, Codeforces 1691 (close to 70B!)
-	"deepseek-r1:14b":  22.0, // LiveCodeBench 59.1%, Codeforces 1481
-	"deepseek-r1:8b":   12.0, // LiveCodeBench ~49% (7B=49.1, 8B=Llama-8B similar)
-	"deepseek-r1:7b":   11.0, // LiveCodeBench 49.1%, Codeforces 1189
-	"deepseek-r1:1.5b": 3.0,  // LiveCodeBench 33.8%, Codeforces 954
+	"deepseek-r1:70b":  32.0,
+	"deepseek-r1:32b":  30.0,
+	"deepseek-r1:14b":  22.0,
+	"deepseek-r1:8b":   12.0,
+	"deepseek-r1:7b":   11.0,
+	"deepseek-r1:1.5b": 3.0,
+
+	// Devstral (Mistral code models)
+	// SWE-bench mini-agent: small=56.4%, full=53.8%
+	"devstral:latest":       24.0,
+	"devstral-small:latest": 45.0, // devstral-small-2, SWE-bench 56.4%
+
+	// Qwen 3.5 (March 2026, multimodal, 262K context)
+	// Beats qwen3-30B on reasoning despite 9B size
+	"qwen3.5:9b":  20.0,
+	"qwen3.5:32b": 30.0,
 
 	// Qwen 3 (base chat model, not code-specialized)
 	// Aider Polyglot: 235B=59.6%, 32B=40.0%
-	// Qwen3-Coder-480B/A35B scores 55.4% SWE-bench (mini-agent), 69.6% (OpenHands)
-	"qwen3:235b": 40.0, // Aider 59.6%, MoE A22B active params
-	"qwen3:32b":  26.0, // Aider 40.0%
-	"qwen3:30b":  25.0, // MoE variant (A3B), similar to 32B
-	"qwen3:8b":   14.0, // extrapolated from 32B scaling
+	"qwen3:235b": 40.0,
+	"qwen3:32b":  26.0,
+	"qwen3:30b":  25.0,
+	"qwen3:8b":   14.0,
 	"qwen3:4b":   7.0,
 	"qwen3:1.7b": 4.0,
 	"qwen3:0.6b": 1.0,
 
 	// Qwen 2.5 Coder (code-specific fine-tune)
-	// SWE-bench: 47% best (Skywork+TTS), 38% (Skywork), 9% (mini-agent)
-	// Aider Edit: 32B=72.9%, 14B=61.7%, 7B=57.9%
-	// Aider Polyglot: 32B=16.4% (polyglot is much harder than edit benchmark)
-	"qwen2.5-coder:32b":  22.0, // strong at code editing; weaker at multi-step
-	"qwen2.5-coder:14b":  15.0, // Aider Edit 61.7%
-	"qwen2.5-coder:7b":   10.0, // Aider Edit 57.9%
+	// SWE-bench: 47% best (Skywork+TTS), Aider Edit: 32B=72.9%
+	"qwen2.5-coder:32b":  22.0,
+	"qwen2.5-coder:14b":  15.0,
+	"qwen2.5-coder:7b":   10.0,
 	"qwen2.5-coder:3b":   5.0,
 	"qwen2.5-coder:1.5b": 3.0,
 
-	// CodeLlama (2023-era models, significantly weaker than modern alternatives)
-	// HumanEval: 70B=67%, 34B=54%, 13B~47%, 7B~33%
-	// Not on Aider Polyglot or SWE-bench; scaled relative to modern models
-	"codellama:70b": 10.0, // HumanEval 67% but weak at multi-step tasks
-	"codellama:34b": 7.0,  // HumanEval 54%
-	"codellama:13b": 4.0,  // HumanEval ~47%
-	"codellama:7b":  2.0,  // HumanEval ~33%
+	// CodeLlama (2023-era, significantly weaker than modern alternatives)
+	"codellama:70b": 10.0,
+	"codellama:34b": 7.0,
+	"codellama:13b": 4.0,
+	"codellama:7b":  2.0,
 
-	// DeepSeek Coder V2 (2024, strong for its era)
-	// V2-16B: HumanEval 81.1%
-	// V1-33B: HumanEval ~70%
-	"deepseek-coder-v2:16b": 18.0, // HumanEval 81.1%, MoE architecture
+	// DeepSeek Coder V2 (2024)
+	"deepseek-coder-v2:16b": 18.0,
 	"deepseek-coder:33b":    12.0,
 	"deepseek-coder:6.7b":   7.0,
 
-	// Devstral (Mistral code model)
-	// SWE-bench mini-agent: small=56.4%, full=53.8%
-	"devstral:latest": 24.0,
-
-	// Llama 3.1 (general purpose, not code-specialized)
-	// Aider Edit: 70B=58.6%, 8B=37.6%
+	// Llama 3.1 (general purpose)
 	"llama3.1:70b": 16.0,
 	"llama3.1:8b":  5.0,
 
-	// Phi-4 (Microsoft, compact reasoning model)
+	// Phi-4 (Microsoft, compact reasoning)
 	"phi4:14b": 14.0,
 
-	// Gemma 3 (Google, Aider Polyglot: 27B=4.9%)
+	// Gemma 3 (Google)
 	"gemma3:27b": 4.0,
 	"gemma3:12b": 2.0,
 
-	// Codestral (Mistral code model, Aider Polyglot: 11.1%)
+	// Codestral (Mistral code model)
 	"codestral:latest": 8.0,
 
 	// Mistral general
 	"mistral:7b": 3.0,
 
-	// Llama 4 (Meta, Aider Polyglot: Maverick=15.6%)
+	// Llama 4 (Meta)
 	"llama4:maverick": 12.0,
 	"llama4:scout":    6.0,
 }

@@ -19,7 +19,13 @@
 #   libglu1-mesa / -dev        → pkgs.libGLU
 #   libtiff5-dev               → pkgs.libtiff
 #   libwxgtk3.2-1, libwxgtk-webview3.2-1 → pkgs.wxGTK32 (pname="wxwidgets" 3.2.x)
-{pkgs, ...}: {
+{pkgs, lib, ...}:
+let
+  # Import theme — palette (c), fonts (f), and generated fluxbox cfg.
+  theme = import ./theme.nix { inherit lib; };
+  inherit (theme) c f cfg init xresources wallpaper pixmaps;
+in
+{
   # Contribute playwright MCP server to the system-level managed-mcp.json.
   # \${VAR} in string values → literal ${VAR} in JSON → Claude Code expands at runtime.
   devcell.managedMcp.servers.playwright = {
@@ -40,6 +46,7 @@
     xorg.xrandr # display configuration (from x11-apps)
     xorg.xset # X server settings utility
     xorg.xsetroot # solid color / background setter
+    xorg.xrdb     # X resource database — loads .Xresources (xterm colors, fonts)
 
     # Background image setter — sets wallpaper before/after fluxbox starts
     feh
@@ -49,6 +56,9 @@
 
     # Screenshot capture — used by tests to verify desktop renders
     imagemagick # provides `import` CLI for X11 screen capture
+
+    # X11 automation — simulate keyboard/mouse input, query windows
+    xdotool # (use: xdotool key ctrl+c, xdotool search --name "Firefox")
 
     # Terminal emulator — launched from fluxbox menu
     xterm
@@ -74,6 +84,8 @@
     # Fonts — required for Chromium and other GUI apps
     noto-fonts
     dejavu_fonts
+    jetbrains-mono # neobrutalist UI font — used by fluxbox theme and xterm
+    inter          # geometric sans — fallback UI font
 
     # Playwright MCP wrapper — sets per-app user-data-dir and forwards secrets
     # from $USER_WORKING_DIR/.env to playwright-mcp via --secrets.
@@ -116,10 +128,7 @@
   xsession.windowManager.fluxbox = {
     enable = true;
 
-    # Point menuFile at /opt/devcell so fluxbox reads it regardless of session $HOME.
-    init = ''
-      session.menuFile:	/opt/devcell/.fluxbox/menu
-    '';
+    inherit init;
 
     # Full keybindings. home-manager replaces the entire default keys file,
     # so we must include useful defaults here. Scroll-to-cycle-workspaces
@@ -164,8 +173,8 @@
     # so the compat link /nix/var/nix/profiles/per-user/$USER/profile is used correctly
     # regardless of which username the container runs as.
     menu = ''
-      [begin] (DevcCell)
-        [submenu] (Applications)
+      [begin] (  [*.] devcell  )
+        [submenu] (  Applications  )
           [exec] (Chromium) {sh -c 'chromium &'}
         [end]
         [exec] (Terminal) {${pkgs.xterm}/bin/xterm}
@@ -175,12 +184,21 @@
     '';
   };
 
-  home.file.".fluxbox/wallpaper.png".source = ./wallpaper.png;
-
-  # ── Entrypoint fragment: GUI service startup ──────────────────────────────
-  # Sourced by entrypoint.sh from /etc/devcell/entrypoint.d/ at container start.
-  # Staged there by the activation script in entrypoint.nix.
-  home.file.".config/devcell/entrypoint.d/50-gui.sh" = {
+  # ── Theme file deployment ─────────────────────────────────────────────────
+  # All visual assets: wallpaper, Xresources, fluxbox style + overlay, button pixmaps.
+  home.file = {
+    ".fluxbox/wallpaper.png".source = wallpaper;
+    ".Xresources".text = xresources;
+    ".fluxbox/styles/devcell-ocean/theme.cfg".text = cfg;
+    ".fluxbox/overlay".text = cfg;
+    ".fluxbox/apps".text = ''
+      [app] (name=.*)
+        [Tab] {no}
+      [end]
+    '';
+    # ── Entrypoint fragment: GUI service startup ────────────────────────────
+    # Sourced by entrypoint.sh from /etc/devcell/entrypoint.d/ at container start.
+    ".config/devcell/entrypoint.d/50-gui.sh" = {
     executable = true;
     text = ''
       #!/bin/bash
@@ -197,9 +215,18 @@
 
       log "Starting Xvfb on display :''${DISPLAY_NUM}..."
       gosu "$USER" Xvfb :''${DISPLAY_NUM} -screen 0 ''${RESOLUTION} 2>/dev/null &
-      sleep 1
-
       export DISPLAY=:''${DISPLAY_NUM}
+      # Wait for X server to accept connections (socket file appears before server is ready)
+      for i in $(seq 1 40); do
+          xset -display :''${DISPLAY_NUM} q >/dev/null 2>&1 && break
+          sleep 0.05
+      done
+
+      # Load X resources (xterm dark theme, cursor color, fonts)
+      # Run as root — X resource database is per-display, not per-user.
+      if [ -f "$DEVCELL_HOME/.Xresources" ]; then
+          xrdb -display :''${DISPLAY_NUM} -merge "$DEVCELL_HOME/.Xresources" 2>/dev/null || true
+      fi
 
       if [ -f "$DEVCELL_HOME/.fluxbox/wallpaper.png" ]; then
           gosu "$USER" feh --bg-fill "$DEVCELL_HOME/.fluxbox/wallpaper.png" 2>/dev/null || true
@@ -210,7 +237,7 @@
       FLUXBOX_RC=/tmp/fluxbox-init
       cp "$DEVCELL_HOME/.fluxbox/init" "$FLUXBOX_RC"
       chmod u+w "$FLUXBOX_RC"
-      WORKSPACE_NAME="''${APP_NAME:-cell}"
+      WORKSPACE_NAME=" ''${APP_NAME:-cell} "
       if grep -q "session.screen0.workspaceNames" "$FLUXBOX_RC"; then
           sed -i "s/^session.screen0.workspaceNames:.*/session.screen0.workspaceNames: ''${WORKSPACE_NAME}/" "$FLUXBOX_RC"
       else
@@ -218,7 +245,11 @@
       fi
       log "Starting fluxbox (workspace: ''${WORKSPACE_NAME})..."
       gosu "$USER" fluxbox -rc "$FLUXBOX_RC" &>/dev/null &
-      sleep 1
+      # Poll for fluxbox process instead of fixed sleep 1
+      for i in $(seq 1 20); do
+          pgrep -u "$USER" fluxbox >/dev/null 2>&1 && break
+          sleep 0.05
+      done
 
       if [ -f "$DEVCELL_HOME/.fluxbox/wallpaper.png" ]; then
           gosu "$USER" feh --bg-fill "$DEVCELL_HOME/.fluxbox/wallpaper.png" 2>/dev/null || true
@@ -234,9 +265,6 @@
       # ── xrdp (RDP gateway to existing VNC session) ────────────────────────
       XRDP_BIN=$(command -v xrdp 2>/dev/null)
       if [ -n "$XRDP_BIN" ]; then
-          # Set user password so sesman PAM auth works for RDP login
-          echo "$USER:rdp" | chpasswd
-
           XRDP_CFG="/tmp/xrdp"
           mkdir -p "$XRDP_CFG"
           XRDP_PREFIX=$(dirname "$(dirname "$(readlink -f "$XRDP_BIN")")")
@@ -289,34 +317,7 @@
               echo 'password=vnc'
           } >> "$XRDP_CFG/xrdp.ini"
 
-          # sesman.ini — needed by xrdp for PAM auth; logs to file only
-          {
-              echo '[Globals]'
-              echo 'EnableUserWindowManager=false'
-              echo 'DefaultWindowManager=startwm.sh'
-              echo
-              echo '[Security]'
-              echo 'AllowRootLogin=true'
-              echo 'MaxLoginRetry=3'
-              echo 'TerminalServerUsers=tsusers'
-              echo 'TerminalServerAdmins=tsadmins'
-              echo
-              echo '[Sessions]'
-              echo 'X11DisplayOffset=10'
-              echo 'MaxSessions=1'
-              echo 'KillDisconnected=false'
-              echo 'DisconnectedTimeLimit=0'
-              echo 'IdleTimeLimit=0'
-              echo
-              echo '[Logging]'
-              echo 'LogFile=/var/log/xrdp-sesman.log'
-              echo "LogLevel=$XRDP_LOG_LEVEL"
-              echo 'EnableSyslog=false'
-          } > "$XRDP_CFG/sesman.ini"
-
           log "Starting xrdp on port 3389 (RDP → VNC :''${DISPLAY_NUM})..."
-          xrdp-sesman --nodaemon --config "$XRDP_CFG/sesman.ini" >>/var/log/xrdp-sesman.log 2>&1 &
-          sleep 1
           xrdp --nodaemon --config "$XRDP_CFG/xrdp.ini" >>/var/log/xrdp.log 2>&1 &
 
           log "xrdp ready - connect to localhost:''${EXT_RDP_PORT:-3389}"
@@ -324,5 +325,6 @@
           log "xrdp not found — skipping RDP server"
       fi
     '';
-  };
+    };
+  } // pixmaps;
 }

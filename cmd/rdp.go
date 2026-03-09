@@ -15,20 +15,28 @@ import (
 )
 
 var rdpCmd = &cobra.Command{
-	Use:   "rdp",
+	Use:   "rdp [app-name or suffix]",
 	Short: "Open RDP connection to the running devcell container",
-	RunE:  runRDP,
+	Long: `Open an RDP connection to a running devcell container.
+
+When multiple containers are running, specify which one by app name or
+just the numeric suffix:
+
+    cell rdp devcell-271
+    cell rdp 271`,
+	Args:              cobra.MaximumNArgs(1),
+	RunE:              runRDP,
+	ValidArgsFunction: completeRunningApps,
 }
 
 func init() {
 	rdpCmd.Flags().Bool("list", false, "list all running cell containers and their RDP ports")
-	rdpCmd.Flags().String("app", "", "open RDP to a named container (by AppName)")
 	rdpCmd.Flags().Bool("verbose", false, "show debug info for RDP port lookup")
 	rdpCmd.Flags().Bool("fullscreen", false, "open RDP session in fullscreen mode")
 	rdpCmd.Flags().String("viewer", "", "RDP viewer: freerdp (default), macrdp, royaltsx")
 }
 
-func runRDP(cmd *cobra.Command, _ []string) error {
+func runRDP(cmd *cobra.Command, args []string) error {
 	applyOutputFlags()
 	verbose, _ := cmd.Flags().GetBool("verbose")
 	if verbose {
@@ -36,15 +44,14 @@ func runRDP(cmd *cobra.Command, _ []string) error {
 		ux.LogPlainText = true
 	}
 	list, _ := cmd.Flags().GetBool("list")
-	appName, _ := cmd.Flags().GetString("app")
 	rdpFullscreen, _ = cmd.Flags().GetBool("fullscreen")
 	rdpViewer, _ = cmd.Flags().GetString("viewer")
 
 	if list {
 		return rdpList()
 	}
-	if appName != "" {
-		return rdpApp(appName)
+	if len(args) > 0 {
+		return rdpApp(resolveAppArg(args[0]))
 	}
 	return rdpDefault()
 }
@@ -177,11 +184,11 @@ func rdpDefault() error {
 					return openRDP(c, port)
 				}
 			}
-			var opts []string
-			for appName := range m {
-				opts = append(opts, "  cell rdp --app "+appName)
+			selected, err := selectCell(m)
+			if err != nil {
+				return err
 			}
-			return fmt.Errorf("multiple containers for this directory — pick one:\n%s", strings.Join(opts, "\n"))
+			return openRDP(c, m[selected])
 		}
 	}
 
@@ -189,7 +196,7 @@ func rdpDefault() error {
 	rdpDebug("no label match; falling back to bind-mount inspect")
 	allOut, err := exec.Command("docker", "ps", "-q", "--filter", "name=cell-").Output()
 	if err != nil || len(bytes.TrimSpace(allOut)) == 0 {
-		return fmt.Errorf("no running container found for %q — run 'cell rdp --list' to see all", c.BaseDir)
+		return fmt.Errorf("no running cell found for %q — run 'cell rdp --list' to see all", c.BaseDir)
 	}
 	ids := strings.Fields(string(bytes.TrimSpace(allOut)))
 	rdpDebug("inspecting %d containers: %v", len(ids), ids)
@@ -204,15 +211,19 @@ func rdpDefault() error {
 	rdpDebug("bind-mount matches: %+v", matches)
 	switch len(matches) {
 	case 0:
-		return fmt.Errorf("no running container found for %q — run 'cell rdp --list' to see all", c.BaseDir)
+		return fmt.Errorf("no running cell found for %q — run 'cell rdp --list' to see all", c.BaseDir)
 	case 1:
 		return openRDP(c, matches[0].Port)
 	default:
-		var opts []string
+		bindM := make(map[string]string, len(matches))
 		for _, m := range matches {
-			opts = append(opts, "  cell rdp --app "+m.AppName)
+			bindM[m.AppName] = m.Port
 		}
-		return fmt.Errorf("multiple containers for this directory — pick one:\n%s", strings.Join(opts, "\n"))
+		selected, err := selectCell(bindM)
+		if err != nil {
+			return err
+		}
+		return openRDP(c, bindM[selected])
 	}
 }
 

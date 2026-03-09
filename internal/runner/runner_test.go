@@ -241,6 +241,17 @@ func TestArgv_ReadonlyVolume(t *testing.T) {
 	}
 }
 
+// --- cfg asdf ---
+
+func TestArgv_AsdfEnvVars(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.CellCfg.Asdf = map[string]string{"golang_mod_version_enabled": "true"}
+	})
+	if !hasArg(argv, "ASDF_GOLANG_MOD_VERSION_ENABLED=true") {
+		t.Errorf("expected ASDF_GOLANG_MOD_VERSION_ENABLED=true in argv: %v", argv)
+	}
+}
+
 // --- Network and port ---
 
 func TestArgv_VNCPort(t *testing.T) {

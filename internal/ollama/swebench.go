@@ -189,3 +189,31 @@ func modelFamily(name string) string {
 	}
 	return name
 }
+
+// matchFallbackScore finds a fallback rating for a model by checking if any
+// rated model name is a prefix of the given name, or if they share the same
+// family. Handles variants like "qwen3-coder:30b-128k" matching
+// "qwen3-coder:30b".
+func matchFallbackScore(name string) float64 {
+	// Prefix match: "qwen3-coder:30b-128k" starts with "qwen3-coder:30b"
+	var bestScore float64
+	var bestLen int
+	for rated, score := range sweBenchRatings {
+		if strings.HasPrefix(name, rated) && len(rated) > bestLen {
+			bestScore = score
+			bestLen = len(rated)
+		}
+	}
+	if bestScore > 0 {
+		return bestScore
+	}
+
+	// Family match: pick the best score for the same family.
+	family := modelFamily(name)
+	for rated, score := range sweBenchRatings {
+		if modelFamily(rated) == family && score > bestScore {
+			bestScore = score
+		}
+	}
+	return bestScore
+}

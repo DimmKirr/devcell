@@ -193,6 +193,117 @@ func TestOpencode_ConfigContentNoModels(t *testing.T) {
 	}
 }
 
+// TestOpencode_ExistingConfigMergesModels verifies that when .opencode.json
+// already exists, models are merged in while preserving existing keys (e.g. mcp).
+func TestOpencode_ExistingConfigMergesModels(t *testing.T) {
+	home := scaffoldedHome(t)
+
+	cellHome := filepath.Join(home, ".devcell", "main")
+	if err := os.MkdirAll(cellHome, 0755); err != nil {
+		t.Fatal(err)
+	}
+	// Pre-existing .opencode.json with MCP servers and a custom key.
+	if err := os.WriteFile(
+		filepath.Join(cellHome, ".opencode.json"),
+		[]byte(`{"mcp":{"my-server":{"command":"node","args":["server.js"]}},"customKey":"preserved"}`),
+		0644,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	// Write devcell.toml with [models] so models get injected.
+	cfgDir := filepath.Join(home, ".config", "devcell")
+	tomlContent := `[cell]
+[models]
+default = "ollama/qwen3:8b"
+[models.providers.ollama]
+models = ["qwen3:8b"]
+`
+	if err := os.WriteFile(filepath.Join(cfgDir, "devcell.toml"), []byte(tomlContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(binaryPath, "opencode", "--dry-run")
+	cmd.Env = append(os.Environ(), "CELL_ID=1", "HOME="+home)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("opencode --dry-run failed: %v\noutput: %s", err, out)
+	}
+
+	// OPENCODE_CONFIG_CONTENT should be injected (merge always injects).
+	argv := string(out)
+	if !strings.Contains(argv, "OPENCODE_CONFIG_CONTENT=") {
+		t.Fatalf("OPENCODE_CONFIG_CONTENT not found in argv:\n%s", argv)
+	}
+
+	// Read the merged file from disk.
+	data, err := os.ReadFile(filepath.Join(cellHome, ".opencode.json"))
+	if err != nil {
+		t.Fatalf("expected .opencode.json: %v", err)
+	}
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+
+	// Models should be injected.
+	if parsed["model"] != "ollama/qwen3:8b" {
+		t.Errorf("expected model ollama/qwen3:8b, got: %v", parsed["model"])
+	}
+	// MCP servers should be preserved.
+	if _, ok := parsed["mcp"]; !ok {
+		t.Errorf("mcp key should be preserved after merge, got: %v", parsed)
+	}
+	// Custom keys should be preserved.
+	if parsed["customKey"] != "preserved" {
+		t.Errorf("customKey should be preserved after merge, got: %v", parsed["customKey"])
+	}
+}
+
+// TestOpencode_WritesConfigToDisk verifies that when no opencode config
+// exists, one is created at $CellHome/.config/opencode/opencode.json.
+func TestOpencode_WritesConfigToDisk(t *testing.T) {
+	home := scaffoldedHome(t)
+
+	// Write devcell.toml with [models] section
+	cfgDir := filepath.Join(home, ".config", "devcell")
+	tomlContent := `[cell]
+[models]
+default = "ollama/deepseek-r1:32b"
+[models.providers.ollama]
+models = ["deepseek-r1:32b"]
+`
+	if err := os.WriteFile(filepath.Join(cfgDir, "devcell.toml"), []byte(tomlContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(binaryPath, "opencode", "--dry-run")
+	cmd.Env = append(os.Environ(), "CELL_ID=1", "HOME="+home)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("opencode --dry-run failed: %v\noutput: %s", err, out)
+	}
+
+	// Check that .opencode.json was written to disk
+	cellHome := filepath.Join(home, ".devcell", "main")
+	configPath := filepath.Join(cellHome, ".opencode.json")
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("expected opencode.json to be written at %s: %v", configPath, err)
+	}
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("written opencode.json is not valid JSON: %v", err)
+	}
+	if parsed["permission"] != "allow" {
+		t.Errorf("expected permission:allow in written config, got: %v", parsed["permission"])
+	}
+	if parsed["model"] != "ollama/deepseek-r1:32b" {
+		t.Errorf("expected model ollama/deepseek-r1:32b, got: %v", parsed["model"])
+	}
+}
+
 // extractEnvFromArgv finds -e KEY=VALUE in a shell-joined argv string and
 // returns VALUE. shellJoin wraps the whole "-e" arg in single quotes when it
 // contains special chars, producing: 'KEY=VALUE'

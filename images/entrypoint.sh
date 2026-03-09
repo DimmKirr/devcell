@@ -12,11 +12,19 @@ export HOME="/home/$HOST_USER"
 
 # ── Verbose logging — only active when DEVCELL_DEBUG=true ─────────────────────
 # Default is silent so containers launched without the flag stay quiet.
+# Debug mode includes elapsed time since entrypoint start for profiling.
+_ENTRYPOINT_T0=$(($(date +%s%N) / 1000000))
 if [ "${DEVCELL_DEBUG:-false}" = "true" ]; then
-    log() { echo "$@"; }
+    log() {
+        local _ms=$(( $(date +%s%N) / 1000000 - _ENTRYPOINT_T0 ))
+        printf '[%d.%03ds] %s\n' $((_ms/1000)) $((_ms%1000)) "$*"
+    }
 else
     log() { :; }
 fi
+
+
+log "Entrypoint start (user=$HOST_USER app=${APP_NAME:-})"
 
 # ── Create session user if needed ─────────────────────────────────────────────
 if ! id "$HOST_USER" &>/dev/null; then
@@ -118,23 +126,37 @@ setup_asdf_home() {
     ASDF_DATA_DIR="$user_asdf" HOME="$HOME" "$asdf_bin" reshim 2>/dev/null || true
 
     # Install any versions listed in ~/.tool-versions that aren't baked.
-    # Runs on first start (or after user edits the file); subsequent starts are
-    # instant because installed versions persist in the cell home.
+    # Skips if the file hasn't changed since the last successful install
+    # (checksum stored in ~/.asdf). First start or edits trigger a full check.
     if [ -f "$HOME/.tool-versions" ]; then
-        log "Installing global tool versions from ~/.tool-versions..."
-        (cd "$HOME" && ASDF_DATA_DIR="$user_asdf" HOME="$HOME" USER="$HOST_USER" \
-            "$asdf_bin" install 2>&1) | while IFS= read -r line; do log "$line"; done || true
-        chown -R "$HOST_USER" "$user_asdf"
+        local tv_sha
+        tv_sha=$(sha256sum "$HOME/.tool-versions" 2>/dev/null | cut -d' ' -f1)
+        if [ -f "$user_asdf/.tv-global.sha" ] && [ "$(cat "$user_asdf/.tv-global.sha" 2>/dev/null)" = "$tv_sha" ]; then
+            log "Global .tool-versions unchanged, skipping install"
+        else
+            log "Installing global tool versions from ~/.tool-versions..."
+            (cd "$HOME" && ASDF_DATA_DIR="$user_asdf" HOME="$HOME" USER="$HOST_USER" \
+                "$asdf_bin" install 2>&1) | while IFS= read -r line; do log "$line"; done || true
+            chown -R "$HOST_USER" "$user_asdf"
+            echo "$tv_sha" > "$user_asdf/.tv-global.sha"
+        fi
     fi
 
     # If the workspace has a .tool-versions, install any missing versions now so
     # they land in ~/.asdf (CellHome) and persist — no re-download on next start.
     local workspace="/${APP_NAME:-}"
     if [ -n "$APP_NAME" ] && [ -f "$workspace/.tool-versions" ]; then
-        log "Installing workspace tool versions from $workspace/.tool-versions..."
-        (cd "$workspace" && ASDF_DATA_DIR="$user_asdf" HOME="$HOME" USER="$HOST_USER" \
-            "$asdf_bin" install 2>&1) | while IFS= read -r line; do log "$line"; done || true
-        chown -R "$HOST_USER" "$user_asdf"
+        local ws_sha
+        ws_sha=$(sha256sum "$workspace/.tool-versions" 2>/dev/null | cut -d' ' -f1)
+        if [ -f "$user_asdf/.tv-workspace.sha" ] && [ "$(cat "$user_asdf/.tv-workspace.sha" 2>/dev/null)" = "$ws_sha" ]; then
+            log "Workspace .tool-versions unchanged, skipping install"
+        else
+            log "Installing workspace tool versions from $workspace/.tool-versions..."
+            (cd "$workspace" && ASDF_DATA_DIR="$user_asdf" HOME="$HOME" USER="$HOST_USER" \
+                "$asdf_bin" install 2>&1) | while IFS= read -r line; do log "$line"; done || true
+            chown -R "$HOST_USER" "$user_asdf"
+            echo "$ws_sha" > "$user_asdf/.tv-workspace.sha"
+        fi
     fi
 }
 setup_asdf_home
@@ -566,5 +588,7 @@ export PLAYWRIGHT_MCP_USER_DATA_DIR="${HOME}/.playwright-${APP_NAME:-cell}"
 # which still points at the ephemeral /opt/asdf.
 export ASDF_DATA_DIR="${HOME}/.asdf"
 export PATH="${HOME}/.asdf/shims:${PATH}"
+
+log "Entrypoint ready — exec $*"
 
 exec gosu "$USER" "$@"

@@ -14,7 +14,7 @@ import (
 )
 
 // TestBaseImage validates base image capabilities via direct docker run.
-// CI runs this with DEVCELL_IMAGE pointing to the base image.
+// CI runs this with DEVCELL_TEST_IMAGE pointing to the base image.
 func TestBaseImage(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping in short mode")
@@ -83,7 +83,7 @@ func TestBaseImage(t *testing.T) {
 }
 
 // TestCellShell validates the cell shell command end-to-end via PTY.
-// CI runs this with DEVCELL_IMAGE pointing to the ultimate image.
+// CI runs this with DEVCELL_TEST_IMAGE pointing to the ultimate image.
 func TestCellShell(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping in short mode")
@@ -119,9 +119,10 @@ func TestCellShell(t *testing.T) {
 	}
 
 	projectDir := t.TempDir()
-	userImage := image() // pre-built image from DEVCELL_IMAGE
+	userImage := image() // pre-built image from DEVCELL_TEST_IMAGE
 
-	// cellShellHome creates a manually-managed HOME directory.
+	// cellShellHome creates a manually-managed HOME directory with the
+	// subdirectories that BuildArgv bind-mounts into the container.
 	// cell shell bind-mounts CellHome into the container, and the container
 	// creates files owned by its internal user. t.TempDir() cleanup can't
 	// remove those files (permission denied), so we clean up via docker.
@@ -130,6 +131,12 @@ func TestCellShell(t *testing.T) {
 		home, err := os.MkdirTemp("", "celltest-home-*")
 		if err != nil {
 			t.Fatalf("mkdtemp: %v", err)
+		}
+		// Create directories that BuildArgv mounts from $HOME.
+		for _, sub := range []string{".claude/commands", ".claude/agents", ".claude/skills"} {
+			if err := os.MkdirAll(filepath.Join(home, sub), 0o755); err != nil {
+				t.Fatalf("mkdir %s: %v", sub, err)
+			}
 		}
 		t.Cleanup(func() {
 			osexec.Command("docker", "run", "--rm",
@@ -170,6 +177,36 @@ func TestCellShell(t *testing.T) {
 		out := strings.ToLower(runPTY(t, cmd))
 		if !strings.Contains(out, "nix") {
 			t.Errorf("expected cell shell output to contain 'nix', got: %s", out)
+		}
+	})
+
+	t.Run("spinner_visible", func(t *testing.T) {
+		home := cellShellHome(t)
+		// No --debug flag, so the Go spinner should render in PTY output.
+		cmd := osexec.Command(cellBin, "shell", "--", "echo", "done")
+		cmd.Dir = projectDir
+		cmd.Env = append(os.Environ(),
+			"XDG_CONFIG_HOME="+configDir,
+			"HOME="+home,
+			"DEVCELL_USER_IMAGE="+userImage,
+		)
+
+		out := runPTY(t, cmd)
+		t.Logf("PTY output (raw): %q", out)
+
+		// Check for the "Opening Cell" status line.
+		if !strings.Contains(out, "Opening Cell") {
+			t.Fatalf("'Opening Cell' text not found in PTY output")
+		}
+		t.Logf("PASS: 'Opening Cell' rendered in PTY output")
+
+		// If Docker successfully started the container, verify command output.
+		// Docker may refuse the mount when TMPDIR is not in shared paths
+		// (e.g. Docker Desktop file sharing). The spinner still renders.
+		if strings.Contains(out, "mounts denied") {
+			t.Logf("SKIP: Docker mount denied (TMPDIR not in Docker shared paths) — spinner verified")
+		} else if !strings.Contains(out, "done") {
+			t.Errorf("expected command output 'done' in PTY output")
 		}
 	})
 }
