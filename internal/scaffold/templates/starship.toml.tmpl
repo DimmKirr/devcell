@@ -1,0 +1,30 @@
+# Starship prompt configuration — https://starship.rs/config/
+# This file is scaffolded by `cell init` into homedir/.config/starship.toml
+# and copied into the container at ~/.config/starship.toml by the entrypoint.
+# Edit to customize your prompt per-project; run `cell build` is NOT needed.
+
+format = "$directory$git_branch$git_status$character"
+right_format = "$cmd_duration"
+add_newline = false
+
+[character]
+success_symbol = "[•](bold green)"
+error_symbol = "[•](bold red)"
+
+[directory]
+style = "bold cyan"
+truncation_length = 3
+truncate_to_repo = true
+
+[git_branch]
+format = "[$branch]($style) "
+style = "bold purple"
+
+[git_status]
+format = "([$all_status$ahead_behind]($style) )"
+style = "bold yellow"
+
+[cmd_duration]
+min_time = 2_000
+format = "[$duration]($style)"
+style = "bold yellow"

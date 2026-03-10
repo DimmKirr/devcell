@@ -24,6 +24,9 @@ var flakeNixContent []byte
 //go:embed templates/devcell.toml.tmpl
 var devcellTomlContent []byte
 
+//go:embed templates/starship.toml.tmpl
+var starshipTomlContent []byte
+
 //go:embed templates/Vagrantfile.tmpl
 var vagrantfileContent []byte
 
@@ -117,6 +120,18 @@ func Scaffold(dir string, modelsSnippet string) error {
 		}
 		if err := os.WriteFile(dest, f.content, 0644); err != nil {
 			return fmt.Errorf("write %s: %w", f.name, err)
+		}
+	}
+
+	// Scaffold homedir/.config/starship.toml for per-project prompt customization.
+	starshipDir := filepath.Join(dir, "homedir", ".config")
+	starshipDest := filepath.Join(starshipDir, "starship.toml")
+	if _, err := os.Stat(starshipDest); err != nil {
+		if err := os.MkdirAll(starshipDir, 0755); err != nil {
+			return fmt.Errorf("mkdir %s: %w", starshipDir, err)
+		}
+		if err := os.WriteFile(starshipDest, starshipTomlContent, 0644); err != nil {
+			return fmt.Errorf("write homedir starship.toml: %w", err)
 		}
 	}
 

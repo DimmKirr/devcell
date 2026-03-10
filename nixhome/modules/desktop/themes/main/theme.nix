@@ -2,7 +2,7 @@
 # Single source of truth for palette, fonts, and fluxbox theme generation.
 # Imported by default.nix; palette (c) and fonts (f) are reusable across
 # fluxbox theme, Xresources, and any future GUI config.
-{ lib }:
+{ lib, pkgs }:
 let
   # ── Design tokens ────────────────────────────────────────────────────────
   c = {
@@ -14,10 +14,19 @@ let
     raised    = "#1a1a2e";   # focused iconbar, tab bg — slightly lighter than surface
     text      = "#f0f0f0";   # active window title text
     textBright = "#ffffff";  # clock, menu body text
+    # macOS traffic-light button colors
+    close     = "#E85D26";   closeDark = "#5C2510";
+    min       = "#1858a8";   minDark   = "#0A2444";
+    max       = "#c8ff00";   maxDark   = "#4A5C00";
+  };
+
+  # ── Sizing tokens ──────────────────────────────────────────────────────
+  s = {
+    toolbarHeight = 35;
   };
 
   f = rec {
-    family = "JetBrains Mono";
+    family = "JetBrainsMono Nerd Font";
     sm     = "${family}-9";
     smB    = "${family}-9:bold";
     md     = "${family}-10";
@@ -49,7 +58,7 @@ let
         "toolbar.clock.font" = f.smB;
         "toolbar.clock.textColor" = c.textBright;
         "toolbar.color" = c.border;
-        "toolbar.height" = 28;
+        "toolbar.height" = s.toolbarHeight;
         "toolbar.iconbar.empty" = "flat";
         "toolbar.iconbar.empty.color" = c.border;
         "toolbar.iconbar.focused" = "flat";
@@ -80,10 +89,10 @@ let
         "window.close.pressed.pixmap" = "pixmaps/close.xpm";
         "window.close.unfocus.pixmap" = "pixmaps/close_unfocus.xpm";
         "window.grip.focus" = "flat";
-        "window.grip.focus.color" = c.highlight;
+        "window.grip.focus.color" = c.accent;
         "window.handle.focus" = "flat";
-        "window.handle.focus.color" = c.accent;
-        "window.handleWidth" = 6;
+        "window.handle.focus.color" = c.highlight;
+        "window.handleWidth" = 10;
         "window.iconify.pixmap" = "pixmaps/min.xpm";
         "window.iconify.pressed.pixmap" = "pixmaps/min.xpm";
         "window.iconify.unfocus.pixmap" = "pixmaps/min_unfocus.xpm";
@@ -132,6 +141,7 @@ let
         "menu.frame.color" = c.surface;
         "menu.frame.disableColor" = c.inactive;
         "menu.frame.font" = f.lg;
+        "menu.frame.justify" = "left";
         "menu.frame.textColor" = c.textBright;
         "menu.hilite" = "flat";
         "menu.hilite.color" = c.highlight;
@@ -176,7 +186,7 @@ let
     session.screen0.tab.placement: TopLeft
     session.screen0.tab.width: 64
     session.screen0.iconbar.usePixmap: false
-    session.screen0.iconbar.iconTextPadding: 8
+    session.screen0.iconbar.iconTextPadding: 10
     session.screen0.titlebar.left: Stick
     session.screen0.titlebar.right: Minimize Maximize Close
   '';
@@ -188,7 +198,7 @@ let
     XTerm*cursorColor:      ${c.accent}
     XTerm*faceName:         ${f.family}
     XTerm*faceSize:         11
-    XTerm*internalBorder:   4
+    XTerm*internalBorder:   8
     XTerm*scrollBar:        False
     XTerm*saveLines:        4096
     XTerm*color0:           ${c.surface}
@@ -209,18 +219,37 @@ let
     XTerm*color15:          ${c.textBright}
   '';
 
-  # ── Window button pixmaps (macOS-inspired neobrutalist circles) ───────────
-  # close=orange, maximize=teal, minimize=yellow-green; unfocused=grey
+  # ── Window button pixmaps (macOS traffic-light circles, AA edges) ────────
+  # SVG sources in ./svg/, converted to XPM at nix build time.
+  # Pipeline: SVG → PNG (rsvg-convert) → flatten on titlebar color → XPM.
+  xpmDir = pkgs.runCommand "fluxbox-pixmaps" {
+    nativeBuildInputs = [ pkgs.librsvg pkgs.imagemagick ];
+  } ''
+    mkdir -p $out
+    for svg in ${./svg}/close.svg ${./svg}/close_unfocus.svg \
+               ${./svg}/max.svg ${./svg}/max_unfocus.svg \
+               ${./svg}/min.svg ${./svg}/min_unfocus.svg; do
+      name=$(basename "$svg" .svg)
+      rsvg-convert -w 30 -h 30 "$svg" -o "$name.png"
+      magick "$name.png" -background '${c.border}' -flatten \
+        -fuzz 1% -transparent '${c.border}' "$out/$name.xpm"
+    done
+  '';
+
   pixmaps = {
-    ".fluxbox/styles/devcell-ocean/pixmaps/close.xpm".source = ./pixmaps/close.xpm;
-    ".fluxbox/styles/devcell-ocean/pixmaps/close_unfocus.xpm".source = ./pixmaps/close_unfocus.xpm;
-    ".fluxbox/styles/devcell-ocean/pixmaps/max.xpm".source = ./pixmaps/max.xpm;
-    ".fluxbox/styles/devcell-ocean/pixmaps/max_unfocus.xpm".source = ./pixmaps/max_unfocus.xpm;
-    ".fluxbox/styles/devcell-ocean/pixmaps/min.xpm".source = ./pixmaps/min.xpm;
-    ".fluxbox/styles/devcell-ocean/pixmaps/min_unfocus.xpm".source = ./pixmaps/min_unfocus.xpm;
+    ".fluxbox/styles/devcell-ocean/pixmaps/close.xpm".source = "${xpmDir}/close.xpm";
+    ".fluxbox/styles/devcell-ocean/pixmaps/close_unfocus.xpm".source = "${xpmDir}/close_unfocus.xpm";
+    ".fluxbox/styles/devcell-ocean/pixmaps/max.xpm".source = "${xpmDir}/max.xpm";
+    ".fluxbox/styles/devcell-ocean/pixmaps/max_unfocus.xpm".source = "${xpmDir}/max_unfocus.xpm";
+    ".fluxbox/styles/devcell-ocean/pixmaps/min.xpm".source = "${xpmDir}/min.xpm";
+    ".fluxbox/styles/devcell-ocean/pixmaps/min_unfocus.xpm".source = "${xpmDir}/min_unfocus.xpm";
   };
 
-  # Default wallpaper — ocean waves with devcell logo.
-  wallpaper = ./wallpaper.png;
+  # ── Wallpaper — SVG → PNG at build time ──────────────────────────────────
+  wallpaper = pkgs.runCommand "devcell-wallpaper" {
+    nativeBuildInputs = [ pkgs.librsvg ];
+  } ''
+    rsvg-convert -w 3840 -h 2160 ${./svg/wallpaper.svg} -o $out
+  '';
 
 in { inherit c f cfg init xresources pixmaps wallpaper; }

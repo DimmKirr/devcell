@@ -41,10 +41,41 @@ type ClaudeSection struct {
 	UseOllama bool `toml:"use_ollama"`
 }
 
+// GitSection holds [git] config for git identity inside the container.
+type GitSection struct {
+	AuthorName     string `toml:"author_name"`
+	AuthorEmail    string `toml:"author_email"`
+	CommitterName  string `toml:"committer_name"`
+	CommitterEmail string `toml:"committer_email"`
+}
+
+// HasIdentity reports whether any git identity field is set.
+func (g GitSection) HasIdentity() bool {
+	return g.AuthorName != "" || g.AuthorEmail != "" ||
+		g.CommitterName != "" || g.CommitterEmail != ""
+}
+
+// ResolvedCommitterName returns CommitterName if set, else falls back to AuthorName.
+func (g GitSection) ResolvedCommitterName() string {
+	if g.CommitterName != "" {
+		return g.CommitterName
+	}
+	return g.AuthorName
+}
+
+// ResolvedCommitterEmail returns CommitterEmail if set, else falls back to AuthorEmail.
+func (g GitSection) ResolvedCommitterEmail() string {
+	if g.CommitterEmail != "" {
+		return g.CommitterEmail
+	}
+	return g.AuthorEmail
+}
+
 // CellConfig is the merged configuration from all TOML layers.
 type CellConfig struct {
 	Cell     CellSection
 	Claude   ClaudeSection
+	Git      GitSection `toml:"git"`
 	Env      map[string]string
 	Asdf     map[string]string // [asdf] — keys map to ASDF_<UPPER_KEY> env vars
 	Volumes  []VolumeMount
@@ -107,6 +138,21 @@ func Merge(global, project CellConfig) CellConfig {
 	out.Claude = global.Claude
 	if project.Claude.UseOllama {
 		out.Claude.UseOllama = true
+	}
+
+	// Git: project wins when non-zero
+	out.Git = global.Git
+	if project.Git.AuthorName != "" {
+		out.Git.AuthorName = project.Git.AuthorName
+	}
+	if project.Git.AuthorEmail != "" {
+		out.Git.AuthorEmail = project.Git.AuthorEmail
+	}
+	if project.Git.CommitterName != "" {
+		out.Git.CommitterName = project.Git.CommitterName
+	}
+	if project.Git.CommitterEmail != "" {
+		out.Git.CommitterEmail = project.Git.CommitterEmail
 	}
 
 	// Slices accumulate: global first, then project

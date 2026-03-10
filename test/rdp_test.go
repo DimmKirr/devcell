@@ -249,7 +249,7 @@ func TestRdpLogsToFile(t *testing.T) {
 	probeGUI(t)
 	c := startRdpContainer(t)
 	out, code := exec(t, c, []string{"sh", "-c",
-		"test -f /var/log/xrdp.log && test -f /var/log/xrdp-sesman.log && echo OK"})
+		"test -f /var/log/xrdp.log && echo OK"})
 	if code != 0 || !strings.Contains(out, "OK") {
 		t.Fatalf("FAIL: xrdp log files not found in /var/log/")
 	}
@@ -261,22 +261,16 @@ func TestRdpLogsToFile(t *testing.T) {
 	}
 	if !strings.Contains(out, "EnableSyslog=false") {
 		t.Errorf("FAIL: xrdp.ini EnableSyslog should be false:\n%s", out)
-	}
-	// sesman.ini must also have syslog disabled
-	out, _ = exec(t, c, []string{"sh", "-c",
-		"grep -E '^EnableSyslog=' /tmp/xrdp/sesman.ini 2>/dev/null"})
-	if !strings.Contains(out, "EnableSyslog=false") {
-		t.Errorf("FAIL: sesman.ini EnableSyslog should be false:\n%s", out)
 	} else {
 		t.Logf("PASS: xrdp logs to /var/log/, syslog disabled\n%s", out)
 	}
 }
 
-// TestRdpCertPersisted — SSL cert should be in /etc/devcell/xrdp/ (global config).
+// TestRdpCertPersisted — SSL cert should be in /etc/devcell/config/xrdp/ (global config).
 func TestRdpCertPersisted(t *testing.T) {
 	probeGUI(t)
 	c := startRdpContainer(t)
-	certDir := "/etc/devcell/xrdp"
+	certDir := "/etc/devcell/config/xrdp"
 	out, code := exec(t, c, []string{"sh", "-c",
 		"test -f " + certDir + "/key.pem && test -f " + certDir + "/cert.pem && echo OK"})
 	if code != 0 || !strings.Contains(out, "OK") {
@@ -299,19 +293,20 @@ func TestRdpNoXorgSection(t *testing.T) {
 	}
 }
 
-// TestRdpUserPasswordSet — user must have a password for sesman PAM auth.
-func TestRdpUserPasswordSet(t *testing.T) {
+// TestRdpUserExists — session user must exist for xrdp VNC proxy.
+// Note: no PAM password needed — xrdp uses [vnc-any] with hardcoded VNC creds.
+func TestRdpUserExists(t *testing.T) {
 	probeGUI(t)
 	c := startRdpContainer(t)
 	out, code := exec(t, c, []string{"sh", "-c",
-		"getent shadow " + hostUser + " | cut -d: -f2 | head -c3"})
+		"id " + hostUser + " && getent passwd " + hostUser + " | cut -d: -f7"})
 	if code != 0 {
-		t.Fatalf("FAIL: could not read shadow entry (exit %d)", code)
+		t.Fatalf("FAIL: user %s does not exist (exit %d)", hostUser, code)
 	}
-	if strings.HasPrefix(out, "$") {
-		t.Logf("PASS: user %s has a password set (hash prefix: %s...)", hostUser, out)
+	if strings.Contains(out, "/bin/zsh") || strings.Contains(out, "/bin/bash") {
+		t.Logf("PASS: user %s exists with valid shell:\n%s", hostUser, out)
 	} else {
-		t.Errorf("FAIL: user %s password appears locked or empty: %q", hostUser, out)
+		t.Errorf("FAIL: user %s has unexpected shell:\n%s", hostUser, out)
 	}
 }
 
