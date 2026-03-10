@@ -132,10 +132,43 @@ image_tag = "latest-go"
 - [Slidev](https://sli.dev/) — Markdown presentations
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp)
 
+### Shell
+- **zsh** with autosuggestions and syntax highlighting
+- [Starship](https://starship.rs/) — cross-shell prompt (Rust, fast)
+
 ### Electronics *(electronics / ultimate profiles)*
 - [KiCad](https://www.kicad.org/) — PCB design
 - ngspice — circuit simulation
 - OpenSCAD — parametric CAD
+
+## Components
+
+The image is built from composable Nix home-manager modules (`nixhome/modules/`), assembled into profiles (`nixhome/profiles/`).
+
+| Module | Description |
+|--------|-------------|
+| `shell.nix` | zsh + Starship prompt, autosuggestions, syntax highlighting |
+| `base.nix` | Universal utilities (git, ripgrep, tmux, jq, fonts) |
+| `build.nix` | Native build toolchain (clang, cmake, lld) |
+| `go.nix` | Go runtime (asdf) + tooling (golangci-lint, gopls) |
+| `node.nix` | Node.js runtime (asdf) + yarn |
+| `python.nix` | Python3 + uv package manager |
+| `infra.nix` | Terraform, OpenTofu, packer |
+| `web.nix` | Chromium + Hugo + Playwright |
+| `desktop/` | X11/VNC desktop (fluxbox, x11vnc, xrdp, xterm) |
+| `electronics.nix` | KiCad, ngspice, wokwi-cli |
+| `graphics.nix` | Inkscape + inkscape-mcp |
+| `nixos.nix` | Nix dev tools (deadnix, statix, nix-tree) |
+
+Modules are composed into profiles that map 1:1 to image tags:
+
+```
+base → base.nix
+go   → base + build + go + apple + infra
+node → base + node + web
+fullstack → go + node + python + web
+ultimate  → fullstack + desktop + electronics + graphics + nixos
+```
 
 ## VNC
 

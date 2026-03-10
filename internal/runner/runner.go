@@ -67,6 +67,14 @@ type RunSpec struct {
 	Debug        bool              // pass DEVCELL_DEBUG=true into the container
 	Image        string            // image ID or tag to run; defaults to UserImageTag
 	ExtraEnv     map[string]string // additional env vars injected by the command handler
+	Getenv       func(string) string // env lookup; defaults to os.Getenv when nil
+}
+
+func (s RunSpec) getenv(key string) string {
+	if s.Getenv != nil {
+		return s.Getenv(key)
+	}
+	return os.Getenv(key)
 }
 
 // BuildArgv constructs the full docker run argv for the given spec.
@@ -104,10 +112,40 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 	e("HISTFILE", "/home/"+c.HostUser+"/zsh_history_"+c.AppName)
 	e("TMPDIR", "/home/"+c.HostUser+"/tmp")
 	e("CODEX_OSS_BASE_URL", envOrDefault("CODEX_OSS_BASE_URL", "http://host.docker.internal:1234/v1"))
-	e("GIT_AUTHOR_NAME", envOrDefault("GIT_AUTHOR_NAME", "DevCell"))
-	e("GIT_AUTHOR_EMAIL", envOrDefault("GIT_AUTHOR_EMAIL", "devcell@devcell.io"))
-	e("GIT_COMMITTER_NAME", envOrDefault("GIT_COMMITTER_NAME", "DevCell"))
-	e("GIT_COMMITTER_EMAIL", envOrDefault("GIT_COMMITTER_EMAIL", "devcell@devcell.io"))
+
+	// Volume mount helper (defined early for use in git identity fallback)
+	v := func(mount string) { argv = append(argv, "-v", mount) }
+
+	// Git identity: host env > [git] toml > mount ~/.config/git/config:ro > hardcoded defaults
+	gitCfg := spec.CellCfg.Git
+	hostGitEnv := spec.getenv("GIT_AUTHOR_NAME") != "" ||
+		spec.getenv("GIT_AUTHOR_EMAIL") != "" ||
+		spec.getenv("GIT_COMMITTER_NAME") != "" ||
+		spec.getenv("GIT_COMMITTER_EMAIL") != ""
+
+	if hostGitEnv {
+		e("GIT_AUTHOR_NAME", envOrDefaultFn(spec.getenv, "GIT_AUTHOR_NAME", "DevCell"))
+		e("GIT_AUTHOR_EMAIL", envOrDefaultFn(spec.getenv, "GIT_AUTHOR_EMAIL", "devcell@devcell.io"))
+		e("GIT_COMMITTER_NAME", envOrDefaultFn(spec.getenv, "GIT_COMMITTER_NAME", "DevCell"))
+		e("GIT_COMMITTER_EMAIL", envOrDefaultFn(spec.getenv, "GIT_COMMITTER_EMAIL", "devcell@devcell.io"))
+	} else if gitCfg.HasIdentity() {
+		e("GIT_AUTHOR_NAME", gitCfg.AuthorName)
+		e("GIT_AUTHOR_EMAIL", gitCfg.AuthorEmail)
+		e("GIT_COMMITTER_NAME", gitCfg.ResolvedCommitterName())
+		e("GIT_COMMITTER_EMAIL", gitCfg.ResolvedCommitterEmail())
+	} else {
+		gitConfigDir := filepath.Join(c.HostHome, ".config", "git")
+		gitConfigFile := filepath.Join(gitConfigDir, "config")
+		if err := fs.Stat(gitConfigFile); err == nil {
+			v(gitConfigDir + ":/etc/devcell/git:ro")
+			e("GIT_CONFIG_GLOBAL", "/etc/devcell/git/config")
+		} else {
+			e("GIT_AUTHOR_NAME", "DevCell")
+			e("GIT_AUTHOR_EMAIL", "devcell@devcell.io")
+			e("GIT_COMMITTER_NAME", "DevCell")
+			e("GIT_COMMITTER_EMAIL", "devcell@devcell.io")
+		}
+	}
 
 	// Optional .env file
 	envFile := filepath.Join(c.BaseDir, ".env")
@@ -143,7 +181,6 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 	}
 
 	// Standard volumes
-	v := func(mount string) { argv = append(argv, "-v", mount) }
 	v(c.BaseDir + ":" + c.BaseDir)
 	v(c.BaseDir + ":/" + c.AppName)
 	v(c.CellHome + ":/home/" + c.HostUser)
@@ -151,15 +188,15 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 	v(c.HostHome + "/.claude/commands:/home/" + c.HostUser + "/.claude/commands:ro")
 	v(c.HostHome + "/.claude/agents:/home/" + c.HostUser + "/.claude/agents:ro")
 	v(c.HostHome + "/.claude/skills:/home/" + c.HostUser + "/.claude/skills")
+	v(c.ConfigDir + ":/etc/devcell/config")
 
 	// cfg [[volumes]] entries
 	for _, vol := range spec.CellCfg.Volumes {
 		argv = append(argv, "-v", vol.Mount)
 	}
 
-	// GUI volumes and port mapping
+	// GUI port mapping
 	if spec.CellCfg.Cell.GUI {
-		v(c.ConfigDir + "/xrdp:/etc/devcell/xrdp")
 		argv = append(argv, "-p", c.VNCPort+":5900")
 		argv = append(argv, "-p", c.RDPPort+":3389")
 	}
@@ -302,6 +339,13 @@ func LocalImageID(ctx context.Context) (string, error) {
 
 func envOrDefault(key, def string) string {
 	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
+
+func envOrDefaultFn(getenv func(string) string, key, def string) string {
+	if v := getenv(key); v != "" {
 		return v
 	}
 	return def

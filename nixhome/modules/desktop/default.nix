@@ -22,7 +22,7 @@
 {pkgs, lib, ...}:
 let
   # Import theme — palette (c), fonts (f), and generated fluxbox cfg.
-  theme = import ./theme.nix { inherit lib; };
+  theme = import ./themes/main/theme.nix { inherit lib pkgs; };
   inherit (theme) c f cfg init xresources wallpaper pixmaps;
 in
 {
@@ -84,7 +84,16 @@ in
     # Fonts — required for Chromium and other GUI apps
     noto-fonts
     dejavu_fonts
-    jetbrains-mono # neobrutalist UI font — used by fluxbox theme and xterm
+    nerd-fonts.jetbrains-mono  # neobrutalist UI font — fluxbox theme and xterm
+    nerd-fonts.fira-code       # popular ligature font
+    nerd-fonts.hack            # clean monospace
+    nerd-fonts.meslo-lg        # macOS Terminal default derivative
+    nerd-fonts.caskaydia-cove  # Cascadia Code Nerd Font
+    nerd-fonts.sauce-code-pro  # Source Code Pro Nerd Font
+    nerd-fonts.ubuntu-mono     # Ubuntu monospace
+    nerd-fonts.roboto-mono     # Google monospace
+    nerd-fonts.iosevka         # narrow monospace
+    nerd-fonts.victor-mono     # cursive italic monospace
     inter          # geometric sans — fallback UI font
 
     # Playwright MCP wrapper — sets per-app user-data-dir and forwards secrets
@@ -173,15 +182,67 @@ in
     # so the compat link /nix/var/nix/profiles/per-user/$USER/profile is used correctly
     # regardless of which username the container runs as.
     menu = ''
-      [begin] (  [*.] devcell  )
-        [submenu] (  Applications  )
+      [begin] ([*.] devcell)
+        [submenu] (Applications)
           [exec] (Chromium) {sh -c 'chromium &'}
         [end]
-        [exec] (Terminal) {${pkgs.xterm}/bin/xterm}
+        [exec] (Terminal) {${pkgs.kitty}/bin/kitty}
+        [exec] (XTerm) {${pkgs.xterm}/bin/xterm}
         [separator]
         [exit] (Exit Fluxbox)
       [end]
     '';
+  };
+
+  # ── Kitty terminal — GPU-accelerated with software fallback ───────────
+  programs.kitty = {
+    enable = true;
+    font = {
+      name = "JetBrainsMono Nerd Font";
+      size = 11;
+    };
+    settings = {
+      # Colors — match neobrutalist theme palette
+      background = c.surface;
+      foreground = "#e0f0ff";
+      cursor = c.accent;
+      selection_background = "#334455";
+      selection_foreground = "#ffffff";
+      # Window chrome
+      window_padding_width = 8;
+      hide_window_decorations = false;
+      # Rendering — software fallback for containers without GPU
+      linux_display_server = "x11";
+      # Bell
+      enable_audio_bell = false;
+      visual_bell_duration = 0;
+      # Scrollback
+      scrollback_lines = 10000;
+      # Tab bar
+      tab_bar_style = "powerline";
+      tab_powerline_style = "slanted";
+      active_tab_background = c.accent;
+      active_tab_foreground = c.border;
+      inactive_tab_background = c.raised;
+      inactive_tab_foreground = c.inactive;
+      # Terminal colors (same as Xresources)
+      color0  = c.surface;
+      color1  = "#ff5555";
+      color2  = c.highlight;
+      color3  = "#f1fa8c";
+      color4  = "#2e86c1";
+      color5  = "#bd93f9";
+      color6  = c.accent;
+      color7  = "#bfbfbf";
+      color8  = "#555577";
+      color9  = "#ff6e6e";
+      color10 = "#c8f346";
+      color11 = "#ffffa5";
+      color12 = "#5dade2";
+      color13 = "#d6bcfa";
+      color14 = "#48d1b5";
+      color15 = c.textBright;
+    };
   };
 
   # ── Theme file deployment ─────────────────────────────────────────────────
@@ -194,6 +255,7 @@ in
     ".fluxbox/apps".text = ''
       [app] (name=.*)
         [Tab] {no}
+        [Deco] {1087}
       [end]
     '';
     # ── Entrypoint fragment: GUI service startup ────────────────────────────
@@ -274,8 +336,8 @@ in
           chmod u+w "$XRDP_CFG/"* 2>/dev/null || true
 
           # Generate self-signed SSL cert in global config dir
-          # (survives container restarts via ~/.config/devcell/xrdp/ bind mount)
-          XRDP_CERT_DIR="/etc/devcell/xrdp"
+          # (survives container restarts via ~/.config/devcell/ bind mount at /etc/devcell/config/)
+          XRDP_CERT_DIR="/etc/devcell/config/xrdp"
           mkdir -p "$XRDP_CERT_DIR"
           if [ ! -f "$XRDP_CERT_DIR/key.pem" ]; then
               openssl req -x509 -newkey rsa:2048 -nodes \

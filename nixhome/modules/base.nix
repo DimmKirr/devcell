@@ -1,6 +1,7 @@
 # base.nix — utilities present in every profile
 {pkgs, ...}: {
   imports = [
+    ./shell.nix
     ./entrypoint.nix
     ./managed-mcp.nix
     ./managed-claude.nix

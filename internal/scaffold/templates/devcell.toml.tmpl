@@ -2,7 +2,9 @@
 # Global DevCell configuration. Project-level overrides go in <project>/.devcell.toml
 
 [cell]
-# Override the default image tag (default: latest-ultimate)
+# Override the default image tag.
+# Available tags: latest-base, latest-go, latest-node, latest-python,
+#   latest-electronics, latest-fullstack, latest-ultimate (default)
 # image_tag = "latest-go"
 # Enable GUI (Xvfb + VNC + browser). Injects DEVCELL_GUI_ENABLED=true.
 gui = true
@@ -10,20 +12,33 @@ gui = true
 [claude]
 # Route Claude Code through a local ollama instance (Anthropic API compat).
 # Equivalent to: cell claude --ollama
-# use_ollama = true
+# use_ollama = false
+
+# [git]
+# Git identity forwarded into the container.
+# If omitted and no GIT_AUTHOR_* env vars are set, ~/.config/git/config is mounted read-only instead.
+# author_name = "Your Name"
+# author_email = "you@example.com"
+# committer_name = "Your Name"   # defaults to author_name if omitted
+# committer_email = "you@example.com"  # defaults to author_email if omitted
 
 [env]
 # Extra environment variables forwarded into the container.
-# MY_TOKEN = "abc123"
+# GITHUB_TOKEN = "ghp_xxx"
+# ANTHROPIC_API_KEY = "sk-ant-xxx"
 
 [asdf]
 # ASDF runtime settings forwarded as ASDF_<UPPER_KEY> env vars.
 # See: https://asdf-vm.com/manage/configuration.html
-golang_mod_version_enabled = "true"
+# golang_mod_version_enabled = "true"
+# default_tool_versions_filename = ".tool-versions"
 
 # [[volumes]]
 # Extra volume mounts appended to docker run.
 # mount = "~/work/secrets:/run/secrets:ro"
+#
+# [[volumes]]
+# mount = "~/.ssh:/home/user/.ssh:ro"
 
 {{MODELS_SECTION}}
 
@@ -40,3 +55,5 @@ golang_mod_version_enabled = "true"
 [packages.python]
 # Python packages installed in the container. Edit and run 'cell build'.
 "pre-commit" = "*"
+# "httpie" = "*"
+# "pipx" = "*"

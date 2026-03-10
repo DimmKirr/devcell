@@ -10,10 +10,10 @@ import (
 // --- shell ---
 
 func TestShell_NoBinaryArgs(t *testing.T) {
-	argv := buildTestArgv("bash", nil, nil)
+	argv := buildTestArgv("zsh", nil, nil)
 	tail := trailingAfterImage(argv)
-	if len(tail) == 0 || tail[0] != "bash" {
-		t.Errorf("expected bash at end, got: %v", tail)
+	if len(tail) == 0 || tail[0] != "zsh" {
+		t.Errorf("expected zsh at end, got: %v", tail)
 	}
 	if len(tail) != 1 {
 		t.Errorf("expected no extra args for plain shell, got: %v", tail)
@@ -21,27 +21,27 @@ func TestShell_NoBinaryArgs(t *testing.T) {
 }
 
 func TestShell_WithPassthroughArgs(t *testing.T) {
-	argv := buildTestArgv("bash", nil, []string{"ls", "-la"})
+	argv := buildTestArgv("zsh", nil, []string{"ls", "-la"})
 	tail := trailingAfterImage(argv)
 	joined := strings.Join(tail, " ")
-	if joined != "bash ls -la" {
-		t.Errorf("expected 'bash ls -la', got: %q", joined)
+	if joined != "zsh ls -la" {
+		t.Errorf("expected 'zsh ls -la', got: %q", joined)
 	}
 }
 
 func TestShell_WithPythonScript(t *testing.T) {
-	argv := buildTestArgv("bash", nil, []string{"python3", "script.py"})
+	argv := buildTestArgv("zsh", nil, []string{"python3", "script.py"})
 	tail := trailingAfterImage(argv)
 	joined := strings.Join(tail, " ")
-	if joined != "bash python3 script.py" {
-		t.Errorf("expected 'bash python3 script.py', got: %q", joined)
+	if joined != "zsh python3 script.py" {
+		t.Errorf("expected 'zsh python3 script.py', got: %q", joined)
 	}
 }
 
 func TestShell_NoDefaultFlags(t *testing.T) {
-	argv := buildTestArgv("bash", nil, nil)
+	argv := buildTestArgv("zsh", nil, nil)
 	tail := trailingAfterImage(argv)
-	// bash must be the only item (no injected flags)
+	// zsh must be the only item (no injected flags)
 	if len(tail) != 1 {
 		t.Errorf("shell should have no default flags, got tail: %v", tail)
 	}

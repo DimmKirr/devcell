@@ -116,21 +116,20 @@ func TestScenarioA_RDPPortPublished(t *testing.T) {
 	}
 }
 
-// GUI=true mounts xrdp cert dir from global config
-func TestScenarioA_XrdpCertVolume(t *testing.T) {
-	guiCfg := cfg.CellConfig{Cell: cfg.CellSection{GUI: true}}
+// Config dir is always mounted at /etc/devcell/config
+func TestScenarioA_ConfigDirVolume(t *testing.T) {
 	argv := buildBehaviourArgv("/tmp/myproject", []string{"TMUX_PANE", "%3"},
-		"claude", nil, nil, guiCfg)
+		"claude", nil, nil, cfg.CellConfig{})
 
 	found := false
 	for _, a := range argv {
-		if strings.Contains(a, "/xrdp:/etc/devcell/xrdp") {
+		if strings.Contains(a, ":/etc/devcell/config") {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Errorf("expected xrdp cert volume mount: %v", argv)
+		t.Errorf("expected config dir volume mount: %v", argv)
 	}
 }
 

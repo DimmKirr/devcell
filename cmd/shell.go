@@ -5,7 +5,7 @@ import "github.com/spf13/cobra"
 var shellCmd = &cobra.Command{
 	Use:   "shell [-- command [args...]]",
 	Short: "Open an interactive shell in a devcell container",
-	Long: `Opens an interactive bash shell inside a devcell container.
+	Long: `Opens an interactive zsh shell inside a devcell container.
 
 The current working directory is mounted as /workspace. Optionally pass a
 command after -- to run it non-interactively instead of starting a shell.
@@ -25,9 +25,9 @@ Examples:
 				if len(rest) > 0 {
 					return runAgent(rest[0], nil, append(cellFlags, rest[1:]...), nil)
 				}
-				return runAgent("bash", nil, cellFlags, nil)
+				return runAgent("zsh", nil, cellFlags, nil)
 			}
 		}
-		return runAgent("bash", nil, args, nil)
+		return runAgent("zsh", nil, args, nil)
 	},
 }

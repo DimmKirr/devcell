@@ -272,11 +272,11 @@ func TestRdpLogsToFile(t *testing.T) {
 	}
 }
 
-// TestRdpCertPersisted — SSL cert should be in /etc/devcell/xrdp/ (global config).
+// TestRdpCertPersisted — SSL cert should be in /etc/devcell/config/xrdp/ (global config).
 func TestRdpCertPersisted(t *testing.T) {
 	probeGUI(t)
 	c := startRdpContainer(t)
-	certDir := "/etc/devcell/xrdp"
+	certDir := "/etc/devcell/config/xrdp"
 	out, code := exec(t, c, []string{"sh", "-c",
 		"test -f " + certDir + "/key.pem && test -f " + certDir + "/cert.pem && echo OK"})
 	if code != 0 || !strings.Contains(out, "OK") {
