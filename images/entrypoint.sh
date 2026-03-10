@@ -167,6 +167,17 @@ if [ -d "$DEVCELL_HOME/.config/nix" ] && [ ! -d "$HOME/.config/nix" ]; then
     chown -R "$HOST_USER" "$HOME/.config/nix"
 fi
 
+# ── Copy starship config — project homedir wins over nix default ─────────────
+if [ -f "$REPO_HOMEDIR/.config/starship.toml" ]; then
+    mkdir -p "$HOME/.config"
+    cp "$REPO_HOMEDIR/.config/starship.toml" "$HOME/.config/"
+    chown "$HOST_USER" "$HOME/.config/starship.toml"
+elif [ -f "$DEVCELL_HOME/.config/starship.toml" ]; then
+    mkdir -p "$HOME/.config"
+    cp "$DEVCELL_HOME/.config/starship.toml" "$HOME/.config/"
+    chown "$HOST_USER" "$HOME/.config/starship.toml"
+fi
+
 # ── Copy from repo's homedir/ (project-specific overrides) ───────────────────
 merge_claude_settings() {
     local template_file="$1" target_file="$2"

@@ -74,13 +74,13 @@ func TestDesktopWallpaperExists(t *testing.T) {
 
 // ── Toolbar styling ─────────────────────────────────────────────────────────
 
-// TestDesktopToolbarHeight — toolbar must be 40px.
+// TestDesktopToolbarHeight — toolbar must be 35px.
 func TestDesktopToolbarHeight(t *testing.T) {
 	c := startEnvContainer(t)
 	skipIfNoGUI(t, c)
 
 	theme, _ := exec(t, c, []string{"cat", themePath})
-	assertContains(t, "toolbar.height", theme, "toolbar.height:  28")
+	assertContains(t, "toolbar.height", theme, "toolbar.height:  35")
 }
 
 // TestDesktopToolbarColors — toolbar uses the correct palette colors.
@@ -102,19 +102,19 @@ func TestDesktopToolbarColors(t *testing.T) {
 	assertContains(t, "toolbar.iconbar.unfocused.textColor", theme, "toolbar.iconbar.unfocused.textColor:  #667788")
 }
 
-// TestDesktopToolbarFonts — toolbar uses JetBrains Mono at correct sizes.
+// TestDesktopToolbarFonts — toolbar uses JetBrainsMono Nerd Font at correct sizes.
 func TestDesktopToolbarFonts(t *testing.T) {
 	c := startEnvContainer(t)
 	skipIfNoGUI(t, c)
 
 	theme, _ := exec(t, c, []string{"cat", themePath})
 
-	// Clock font = JetBrains Mono-9:bold
-	assertContains(t, "toolbar.clock.font", theme, "toolbar.clock.font:  JetBrains Mono-9:bold")
-	// Workspace font = JetBrains Mono-9:bold
-	assertContains(t, "toolbar.workspace.font", theme, "toolbar.workspace.font:  JetBrains Mono-9:bold")
-	// Focused iconbar font = JetBrains Mono-9:bold (same size as unfocused for baseline alignment)
-	assertContains(t, "toolbar.iconbar.focused.font", theme, "toolbar.iconbar.focused.font:  JetBrains Mono-9:bold")
+	// Clock font = JetBrainsMono Nerd Font-9:bold
+	assertContains(t, "toolbar.clock.font", theme, "toolbar.clock.font:  JetBrainsMono Nerd Font-9:bold")
+	// Workspace font = JetBrainsMono Nerd Font-9:bold
+	assertContains(t, "toolbar.workspace.font", theme, "toolbar.workspace.font:  JetBrainsMono Nerd Font-9:bold")
+	// Focused iconbar font = JetBrainsMono Nerd Font-9:bold (same size as unfocused for baseline alignment)
+	assertContains(t, "toolbar.iconbar.focused.font", theme, "toolbar.iconbar.focused.font:  JetBrainsMono Nerd Font-9:bold")
 }
 
 // ── Menu styling ────────────────────────────────────────────────────────────
@@ -130,8 +130,8 @@ func TestDesktopMenuTitle(t *testing.T) {
 	assertContains(t, "menu.title.color", theme, "menu.title.color:  #b8e336")
 	// Title text = border (#000000)
 	assertContains(t, "menu.title.textColor", theme, "menu.title.textColor:  #000000")
-	// Title font = JetBrains Mono-13:bold
-	assertContains(t, "menu.title.font", theme, "menu.title.font:  JetBrains Mono-13:bold")
+	// Title font = JetBrainsMono Nerd Font-13:bold
+	assertContains(t, "menu.title.font", theme, "menu.title.font:  JetBrainsMono Nerd Font-13:bold")
 	// Title justify = left
 	assertContains(t, "menu.title.justify", theme, "menu.title.justify:  left")
 	// Title height = 32
@@ -149,8 +149,8 @@ func TestDesktopMenuBody(t *testing.T) {
 	assertContains(t, "menu.frame.color", theme, "menu.frame.color:  #0a0a18")
 	// Body text = textBright (#ffffff)
 	assertContains(t, "menu.frame.textColor", theme, "menu.frame.textColor:  #ffffff")
-	// Body font = JetBrains Mono-11
-	assertContains(t, "menu.frame.font", theme, "menu.frame.font:  JetBrains Mono-11")
+	// Body font = JetBrainsMono Nerd Font-11
+	assertContains(t, "menu.frame.font", theme, "menu.frame.font:  JetBrainsMono Nerd Font-11")
 	// Item height = 28
 	assertContains(t, "menu.itemHeight", theme, "menu.itemHeight:  28")
 	// Highlight = highlight (#b8e336)
@@ -183,21 +183,21 @@ func TestDesktopWindowTitle(t *testing.T) {
 	assertContains(t, "window.title.height", theme, "window.title.height:  30")
 	assertContains(t, "window.title.focus", theme, "window.title.focus:  flat")
 	assertContains(t, "window.title.focus.color", theme, "window.title.focus.color:  #000000")
-	// Title text font = JetBrains Mono-10:bold
-	assertContains(t, "window.label.focus.font", theme, "window.label.focus.font:  JetBrains Mono-10:bold")
+	// Title text font = JetBrainsMono Nerd Font-10:bold
+	assertContains(t, "window.label.focus.font", theme, "window.label.focus.font:  JetBrainsMono Nerd Font-10:bold")
 	// Title text color = text (#f0f0f0)
 	assertContains(t, "window.label.focus.textColor", theme, "window.label.focus.textColor:  #f0f0f0")
 }
 
-// TestDesktopWindowHandle — focused handle = accent teal, 6px width.
+// TestDesktopWindowHandle — focused handle = highlight green, 10px width.
 func TestDesktopWindowHandle(t *testing.T) {
 	c := startEnvContainer(t)
 	skipIfNoGUI(t, c)
 
 	theme, _ := exec(t, c, []string{"cat", themePath})
 
-	assertContains(t, "window.handleWidth", theme, "window.handleWidth:  6")
-	assertContains(t, "window.handle.focus.color", theme, "window.handle.focus.color:  #1abc9c")
+	assertContains(t, "window.handleWidth", theme, "window.handleWidth:  10")
+	assertContains(t, "window.handle.focus.color", theme, "window.handle.focus.color:  #b8e336")
 }
 
 // ── Pixmaps ─────────────────────────────────────────────────────────────────
@@ -281,8 +281,8 @@ func TestDesktopXresources(t *testing.T) {
 	assertContains(t, "XTerm*background", xres, "XTerm*background:       #0a0a18")
 	// Cursor = accent (#1abc9c)
 	assertContains(t, "XTerm*cursorColor", xres, "XTerm*cursorColor:      #1abc9c")
-	// Font = JetBrains Mono
-	assertContains(t, "XTerm*faceName", xres, "XTerm*faceName:         JetBrains Mono")
+	// Font = JetBrainsMono Nerd Font
+	assertContains(t, "XTerm*faceName", xres, "XTerm*faceName:         JetBrainsMono Nerd Font")
 	// Font size = 11
 	assertContains(t, "XTerm*faceSize", xres, "XTerm*faceSize:         11")
 }
@@ -320,13 +320,23 @@ func startDesktopGUIContainer(t *testing.T) testcontainers.Container {
 
 // TestDesktopXresourcesLoaded — with GUI enabled, xrdb must have loaded the
 // Xresources into the X server's resource database at startup.
-// This catches the bug where gosu + xrdb race condition leaves resources empty.
+// xrdb loading is deferred (background process after entrypoint exec gosu)
+// so we retry for up to 5 seconds.
 func TestDesktopXresourcesLoaded(t *testing.T) {
 	probeGUI(t)
 	c := startDesktopGUIContainer(t)
 
-	// Query the X server's resource database via xrdb
-	out, code := exec(t, c, []string{"sh", "-c", "DISPLAY=:99 xrdb -query"})
+	// xrdb is loaded by a deferred background process (~1s after entrypoint);
+	// retry for up to 5 seconds to allow it to complete.
+	var out string
+	var code int
+	for i := 0; i < 10; i++ {
+		out, code = exec(t, c, []string{"sh", "-c", "DISPLAY=:99 xrdb -query"})
+		if code == 0 && out != "" {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
 	if code != 0 {
 		t.Fatalf("xrdb -query failed (exit %d): %s", code, out)
 	}
@@ -337,7 +347,7 @@ func TestDesktopXresourcesLoaded(t *testing.T) {
 	// Verify key resources from theme.nix palette
 	assertContains(t, "XTerm*background", out, "XTerm*background:\t#0a0a18")
 	assertContains(t, "XTerm*cursorColor", out, "XTerm*cursorColor:\t#1abc9c")
-	assertContains(t, "XTerm*faceName", out, "XTerm*faceName:\tJetBrains Mono")
+	assertContains(t, "XTerm*faceName", out, "XTerm*faceName:\tJetBrainsMono Nerd Font")
 	assertContains(t, "XTerm*faceSize", out, "XTerm*faceSize:\t11")
 	t.Logf("PASS: Xresources loaded into X server (%d lines)", strings.Count(out, "\n")+1)
 }

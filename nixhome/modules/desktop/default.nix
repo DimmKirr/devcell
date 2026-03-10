@@ -74,6 +74,7 @@ in
     fontconfig # font configuration (libfontconfig)
     freetype # font rendering (libfreetype6)
     libGL # OpenGL (libegl1-mesa / libgl1-mesa)
+    mesa  # Mesa 3D — provides llvmpipe software rasterizer for GLX on Xvfb
     glew # OpenGL extension library (libglew2.2)
     libGLU # OpenGL utility library (libglu1-mesa)
     libtiff # TIFF image library (libtiff5)
@@ -186,7 +187,7 @@ in
         [submenu] (Applications)
           [exec] (Chromium) {sh -c 'chromium &'}
         [end]
-        [exec] (Terminal) {${pkgs.kitty}/bin/kitty}
+        [exec] (Kitty) {${pkgs.kitty}/bin/kitty}
         [exec] (XTerm) {${pkgs.xterm}/bin/xterm}
         [separator]
         [exit] (Exit Fluxbox)
@@ -202,30 +203,62 @@ in
       size = 11;
     };
     settings = {
-      # Colors — match neobrutalist theme palette
+      # ── Colors — neobrutalist palette from theme.nix ──
       background = c.surface;
       foreground = "#e0f0ff";
       cursor = c.accent;
+      cursor_text_color = c.surface;
       selection_background = "#334455";
       selection_foreground = "#ffffff";
-      # Window chrome
+      url_color = c.accent;
+      url_style = "curly";
+
+      # ── Window borders (kitty splits, not WM) ──
+      active_border_color = c.accent;
+      inactive_border_color = c.inactive;
+      bell_border_color = c.close;
+      window_border_width = "1px";
+
+      # ── Window chrome ──
       window_padding_width = 8;
       hide_window_decorations = false;
-      # Rendering — software fallback for containers without GPU
+
+      # ── Rendering — software fallback for containers without GPU ──
       linux_display_server = "x11";
-      # Bell
+
+      # ── Bell ──
       enable_audio_bell = false;
-      visual_bell_duration = 0;
-      # Scrollback
+      visual_bell_duration = "0.15";
+      visual_bell_color = c.raised;
+
+      # ── Scrollback ──
       scrollback_lines = 10000;
-      # Tab bar
+
+      # ── Opacity ──
+      dim_opacity = "0.7";
+      inactive_text_alpha = "0.8";
+
+      # ── Tab bar — powerline style matching toolbar ──
+      tab_bar_edge = "bottom";
       tab_bar_style = "powerline";
       tab_powerline_style = "slanted";
+      tab_bar_background = c.border;
       active_tab_background = c.accent;
       active_tab_foreground = c.border;
+      active_tab_font_style = "bold";
       inactive_tab_background = c.raised;
       inactive_tab_foreground = c.inactive;
-      # Terminal colors (same as Xresources)
+      inactive_tab_font_style = "normal";
+
+      # ── Marks (ctrl+shift+1/2/3 to highlight patterns) ──
+      mark1_background = c.accent;
+      mark1_foreground = c.border;
+      mark2_background = c.highlight;
+      mark2_foreground = c.border;
+      mark3_background = c.close;
+      mark3_foreground = c.textBright;
+
+      # ── Terminal colors (same as Xresources) ──
       color0  = c.surface;
       color1  = "#ff5555";
       color2  = c.highlight;
@@ -269,14 +302,23 @@ in
 
       [ "$DEVCELL_GUI_ENABLED" = "true" ] || return 0
 
+      # Ensure DBUS machine-id exists (Kitty/GTK apps need it)
+      [ -f /etc/machine-id ] || dbus-uuidgen > /etc/machine-id 2>/dev/null || true
+
       DISPLAY_NUM=99
       RESOLUTION=1920x1080x24
 
       mkdir -p /tmp/.X11-unix
       chmod 1777 /tmp/.X11-unix
 
-      log "Starting Xvfb on display :''${DISPLAY_NUM}..."
-      gosu "$USER" Xvfb :''${DISPLAY_NUM} -screen 0 ''${RESOLUTION} 2>/dev/null &
+      # Mesa llvmpipe software rendering — enables GLX for GPU terminals (Kitty etc.)
+      export LIBGL_ALWAYS_SOFTWARE=1
+      export GALLIUM_DRIVER=llvmpipe
+      export LIBGL_DRIVERS_PATH=${pkgs.mesa}/lib/dri
+      export LD_LIBRARY_PATH=${pkgs.mesa}/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+
+      log "Starting Xvfb on display :''${DISPLAY_NUM} (+GLX, Mesa llvmpipe)..."
+      gosu "$USER" Xvfb :''${DISPLAY_NUM} -screen 0 ''${RESOLUTION} +extension GLX +render +iglx 2>/dev/null &
       export DISPLAY=:''${DISPLAY_NUM}
       # Wait for X server to accept connections (socket file appears before server is ready)
       for i in $(seq 1 40); do
@@ -285,9 +327,12 @@ in
       done
 
       # Load X resources (xterm dark theme, cursor color, fonts)
-      # Run as root — X resource database is per-display, not per-user.
+      # Deferred via background process: xrdb ChangeProperty requests sent from
+      # the entrypoint's PID 1 context are silently dropped by Xvfb. Running
+      # xrdb from a detached process after exec gosu replaces PID 1 works.
       if [ -f "$DEVCELL_HOME/.Xresources" ]; then
-          xrdb -display :''${DISPLAY_NUM} -merge "$DEVCELL_HOME/.Xresources" 2>/dev/null || true
+          (sleep 1; xrdb -display :''${DISPLAY_NUM} -merge "$DEVCELL_HOME/.Xresources" 2>/dev/null) &
+          disown
       fi
 
       if [ -f "$DEVCELL_HOME/.fluxbox/wallpaper.png" ]; then
