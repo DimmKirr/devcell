@@ -47,7 +47,7 @@ if [ -S /var/run/docker.sock ]; then
 fi
 
 mkdir -p "$HOME/.local/bin" "$HOME/tmp"
-chown "$HOST_USER" "$HOME/.local/bin" "$HOME/tmp"
+chown "$HOST_USER" "$HOME/.local" "$HOME/.local/bin" "$HOME/tmp"
 
 # ── Give session user access to devcell's nix environment ─────────────────────
 # nix.sh resolves $HOME/.nix-profile to find nix tools. Create a symlink so
@@ -164,7 +164,7 @@ setup_asdf_home
 if [ -d "$DEVCELL_HOME/.config/nix" ] && [ ! -d "$HOME/.config/nix" ]; then
     mkdir -p "$HOME/.config"
     cp -r "$DEVCELL_HOME/.config/nix" "$HOME/.config/"
-    chown -R "$HOST_USER" "$HOME/.config/nix"
+    chown -R "$HOST_USER" "$HOME/.config"
 fi
 
 # ── Copy starship config — project homedir wins over nix default ─────────────
@@ -218,6 +218,7 @@ merge_claude_nix() {
         mkdir -p "$HOME/.claude/hooks"
         cp -r "$nix_hooks_dir/"* "$HOME/.claude/hooks/" 2>/dev/null || true
         find "$HOME/.claude/hooks" -type f -name "*.sh" -exec chmod +x {} \; 2>/dev/null || true
+        chown -R "$HOST_USER" "$HOME/.claude"
         log "✓ Claude hooks installed from nix"
     fi
     if [ -f "$nix_settings" ]; then
