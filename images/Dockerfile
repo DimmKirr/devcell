@@ -42,9 +42,9 @@ RUN \
     chown -R ${USER_UID}:${USER_GID} /opt/devcell && \
     echo "${USER_NAME} ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 
-RUN mkdir -p /config /data /opt/asdf /opt/npm-tools /opt/python-tools \
-             /opt/devcell/.config/home-manager && \
-    chown -R ${USER_UID}:${USER_GID} /config /data /opt/asdf /opt/npm-tools /opt/python-tools \
+RUN mkdir -p /config /data /opt/mise /opt/npm-tools /opt/python-tools \
+             /opt/devcell/.config/devcell && \
+    chown -R ${USER_UID}:${USER_GID} /config /data /opt/mise /opt/npm-tools /opt/python-tools \
              /opt/devcell/.config
 
 # System-level nix.conf (read by any nix binary regardless of user).
@@ -88,8 +88,12 @@ RUN nix profile install "github:NixOS/nixpkgs/${NIXPKGS_REV}#home-manager" && \
     ln -sfT "$(readlink -f $HOME/.nix-profile)" \
             /nix/var/nix/profiles/per-user/devcell/profile
 
-ENV ASDF_DATA_DIR=/opt/asdf
-ENV PATH="/opt/asdf/shims:/nix/var/nix/profiles/per-user/devcell/profile/bin:${PATH}"
+ENV MISE_DATA_DIR=/opt/mise
+# Mise installs go to /opt/mise/installs/<tool>/<ver>/bin. Child stages create
+# stable symlinks (/opt/mise/<tool> → installs/<tool>/<ver>) and append to PATH
+# so that tools are available without shims (shims need `mise exec` resolution
+# which fails in plain /bin/sh RUN steps).
+ENV PATH="/nix/var/nix/profiles/per-user/devcell/profile/bin:${PATH}"
 
 # Entrypoint last — changes here don't bust the nix/home-manager cache above
 COPY --chmod=755 images/entrypoint.sh /usr/local/bin/entrypoint.sh
@@ -112,7 +116,13 @@ RUN ARCH=$(uname -m) && \
     [ "$ARCH" = "aarch64" ] && ARCH_SUFFIX="-aarch64" || ARCH_SUFFIX="" && \
     home-manager switch --flake "/opt/nixhome#devcell-go${ARCH_SUFFIX}" && \
     ln -sfT "$(readlink -f $HOME/.nix-profile)" \
-            /nix/var/nix/profiles/per-user/devcell/profile
+            /nix/var/nix/profiles/per-user/devcell/profile && \
+    cd "$HOME" && MISE_DATA_DIR=/opt/mise MISE_YES=1 mise install && \
+    for tool_dir in /opt/mise/installs/*/; do \
+      tool=$(basename "$tool_dir"); \
+      version_dir=$(ls -1d "${tool_dir}"*/ 2>/dev/null | head -1); \
+      if [ -n "$version_dir" ]; then ln -sfT "$version_dir" "/opt/mise/$tool"; fi; \
+    done
 
 ENV DEVCELL_PROFILE=devcell-go
 
@@ -130,7 +140,12 @@ RUN ARCH=$(uname -m) && \
     home-manager switch --flake "/opt/nixhome#devcell-node${ARCH_SUFFIX}" && \
     ln -sfT "$(readlink -f $HOME/.nix-profile)" \
             /nix/var/nix/profiles/per-user/devcell/profile && \
-    asdf install nodejs && asdf reshim
+    cd "$HOME" && MISE_DATA_DIR=/opt/mise MISE_YES=1 mise install && \
+    for tool_dir in /opt/mise/installs/*/; do \
+      tool=$(basename "$tool_dir"); \
+      version_dir=$(ls -1d "${tool_dir}"*/ 2>/dev/null | head -1); \
+      if [ -n "$version_dir" ]; then ln -sfT "$version_dir" "/opt/mise/$tool"; fi; \
+    done
 
 ENV DEVCELL_PROFILE=devcell-node
 
@@ -193,11 +208,19 @@ RUN ARCH=$(uname -m) && \
     home-manager switch --flake "/opt/nixhome#devcell-fullstack${ARCH_SUFFIX}" && \
     ln -sfT "$(readlink -f $HOME/.nix-profile)" \
             /nix/var/nix/profiles/per-user/devcell/profile && \
-    asdf install nodejs && asdf reshim
+    cd "$HOME" && MISE_DATA_DIR=/opt/mise MISE_YES=1 mise install && \
+    for tool_dir in /opt/mise/installs/*/; do \
+      tool=$(basename "$tool_dir"); \
+      version_dir=$(ls -1d "${tool_dir}"*/ 2>/dev/null | head -1); \
+      if [ -n "$version_dir" ]; then ln -sfT "$version_dir" "/opt/mise/$tool"; fi; \
+    done && \
+    test -x /opt/mise/node/bin/npm || { echo "ERROR: npm not found at /opt/mise/node/bin/npm"; ls -la /opt/mise/ 2>/dev/null; exit 1; }
 
 ENV DEVCELL_PROFILE=devcell-fullstack
+# Add mise-installed tool bins to PATH (node/npm, go, etc.) via stable symlinks
+ENV PATH="/opt/mise/node/bin:/opt/mise/go/bin:${PATH}"
 
-# Agent CLI tools (npm) — requires Node.js from asdf above
+# Agent CLI tools (npm) — requires Node.js from mise above
 COPY --chown=${USER_UID}:${USER_GID} images/package.json images/package-lock.json* /opt/npm-tools/
 RUN cd /opt/npm-tools/ && npm install
 ENV PATH="/opt/npm-tools/node_modules/.bin:${PATH}"

@@ -7,7 +7,7 @@
 # entrypoint sources them at container startup.
 #
 # Numbering convention:
-#   10-* — early setup (future: ASDF extraction)
+#   10-* — early setup (future: mise extraction)
 #   50-* — services (GUI, xrdp)
 #   90-* — late setup (future: custom user hooks)
 {lib, ...}: {

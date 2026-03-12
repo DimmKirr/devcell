@@ -77,7 +77,7 @@ type CellConfig struct {
 	Claude   ClaudeSection
 	Git      GitSection `toml:"git"`
 	Env      map[string]string
-	Asdf     map[string]string // [asdf] — keys map to ASDF_<UPPER_KEY> env vars
+	Mise     map[string]string `toml:"mise"` // [mise] — keys map to MISE_<UPPER_KEY> env vars
 	Volumes  []VolumeMount
 	Packages PackagesSection
 	Models   ModelsSection `toml:"models"`
@@ -106,7 +106,7 @@ func Merge(global, project CellConfig) CellConfig {
 	out := CellConfig{
 		Cell: global.Cell,
 		Env:  make(map[string]string),
-		Asdf: make(map[string]string),
+		Mise: make(map[string]string),
 	}
 
 	// Copy global env
@@ -118,12 +118,12 @@ func Merge(global, project CellConfig) CellConfig {
 		out.Env[k] = v
 	}
 
-	// Asdf: same accumulate semantics as Env
-	for k, v := range global.Asdf {
-		out.Asdf[k] = v
+	// Mise: same accumulate semantics as Env
+	for k, v := range global.Mise {
+		out.Mise[k] = v
 	}
-	for k, v := range project.Asdf {
-		out.Asdf[k] = v
+	for k, v := range project.Mise {
+		out.Mise[k] = v
 	}
 
 	// Scalars: project wins when non-zero

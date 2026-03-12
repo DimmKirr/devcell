@@ -163,23 +163,31 @@ func TestArgv_Labels(t *testing.T) {
 
 // --- env-file ---
 
-func TestArgv_EnvFilePresent(t *testing.T) {
+func TestArgv_EnvFileSelfRef(t *testing.T) {
 	dir := t.TempDir()
 	envFile := filepath.Join(dir, ".env")
+	os.WriteFile(envFile, []byte("# comment\nMY_SECRET=${MY_SECRET}\nLITERAL=hello\n"), 0644)
 	spec := runner.RunSpec{
-		Config:  config.Load(dir, func(k string) string {
+		Config: config.Load(dir, func(k string) string {
 			if k == "USER" { return "bob" }
 			if k == "HOME" { return "/home/bob" }
 			return ""
 		}),
-		CellCfg:      cfg.CellConfig{},
-		Binary:       "bash",
-		DefaultFlags: nil,
-		UserArgs:     nil,
+		CellCfg: cfg.CellConfig{},
+		Binary:  "bash",
 	}
-	argv := runner.BuildArgv(spec, existFS(envFile), noopLookPath)
-	if !hasConsecutive(argv, "--env-file", envFile) {
-		t.Errorf("expected --env-file %s in argv: %v", envFile, argv)
+	argv := runner.BuildArgv(spec, noopFS(), noopLookPath)
+	// Self-referencing KEY=${KEY} → just -e KEY (Docker inherits from host)
+	if !hasConsecutive(argv, "-e", "MY_SECRET") {
+		t.Errorf("expected -e MY_SECRET (inherit) in argv: %v", argv)
+	}
+	// Literal KEY=value → -e KEY=value
+	if !hasConsecutive(argv, "-e", "LITERAL=hello") {
+		t.Errorf("expected -e LITERAL=hello in argv: %v", argv)
+	}
+	// Should NOT have --env-file anymore
+	if hasArg(argv, "--env-file") {
+		t.Error("should not use --env-file; vars should be passed individually")
 	}
 }
 
@@ -241,14 +249,14 @@ func TestArgv_ReadonlyVolume(t *testing.T) {
 	}
 }
 
-// --- cfg asdf ---
+// --- cfg mise ---
 
-func TestArgv_AsdfEnvVars(t *testing.T) {
+func TestArgv_MiseEnvVars(t *testing.T) {
 	argv := buildArgv(t, func(s *runner.RunSpec) {
-		s.CellCfg.Asdf = map[string]string{"golang_mod_version_enabled": "true"}
+		s.CellCfg.Mise = map[string]string{"trusted_config_paths": "/"}
 	})
-	if !hasArg(argv, "ASDF_GOLANG_MOD_VERSION_ENABLED=true") {
-		t.Errorf("expected ASDF_GOLANG_MOD_VERSION_ENABLED=true in argv: %v", argv)
+	if !hasArg(argv, "MISE_TRUSTED_CONFIG_PATHS=/") {
+		t.Errorf("expected MISE_TRUSTED_CONFIG_PATHS=/ in argv: %v", argv)
 	}
 }
 

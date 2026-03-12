@@ -193,6 +193,7 @@ let
 
   # ── Xterm / X resources — dark theme from the same palette ──────────────
   xresources = ''
+    Xft.dpi:                96
     XTerm*background:       ${c.surface}
     XTerm*foreground:       #e0f0ff
     XTerm*cursorColor:      ${c.accent}

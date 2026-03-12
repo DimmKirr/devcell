@@ -148,39 +148,39 @@ EXTRA = "yes"
 	}
 }
 
-// --- Asdf section ---
+// --- Mise section ---
 
-func TestLoadFile_AsdfSection(t *testing.T) {
+func TestLoadFile_MiseSection(t *testing.T) {
 	dir := t.TempDir()
 	writeTOML(t, dir, "devcell.toml", `
-[asdf]
-golang_mod_version_enabled = "true"
-legacy_version_file = "yes"
+[mise]
+idiomatic_version_file = "true"
+trusted_config_paths = "/"
 `)
 	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Asdf["golang_mod_version_enabled"] != "true" {
-		t.Errorf("golang_mod_version_enabled: want true, got %q", c.Asdf["golang_mod_version_enabled"])
+	if c.Mise["idiomatic_version_file"] != "true" {
+		t.Errorf("idiomatic_version_file: want true, got %q", c.Mise["idiomatic_version_file"])
 	}
-	if c.Asdf["legacy_version_file"] != "yes" {
-		t.Errorf("legacy_version_file: want yes, got %q", c.Asdf["legacy_version_file"])
+	if c.Mise["trusted_config_paths"] != "/" {
+		t.Errorf("trusted_config_paths: want /, got %q", c.Mise["trusted_config_paths"])
 	}
 }
 
-func TestMerge_AsdfAccumulates(t *testing.T) {
-	global := cfg.CellConfig{Asdf: map[string]string{"A": "1", "B": "global"}}
-	project := cfg.CellConfig{Asdf: map[string]string{"B": "project", "C": "3"}}
+func TestMerge_MiseAccumulates(t *testing.T) {
+	global := cfg.CellConfig{Mise: map[string]string{"A": "1", "B": "global"}}
+	project := cfg.CellConfig{Mise: map[string]string{"B": "project", "C": "3"}}
 	merged := cfg.Merge(global, project)
-	if merged.Asdf["A"] != "1" {
-		t.Errorf("A should be 1, got %q", merged.Asdf["A"])
+	if merged.Mise["A"] != "1" {
+		t.Errorf("A should be 1, got %q", merged.Mise["A"])
 	}
-	if merged.Asdf["B"] != "project" {
-		t.Errorf("B: project should win, got %q", merged.Asdf["B"])
+	if merged.Mise["B"] != "project" {
+		t.Errorf("B: project should win, got %q", merged.Mise["B"])
 	}
-	if merged.Asdf["C"] != "3" {
-		t.Errorf("C should be 3, got %q", merged.Asdf["C"])
+	if merged.Mise["C"] != "3" {
+		t.Errorf("C should be 3, got %q", merged.Mise["C"])
 	}
 }
 

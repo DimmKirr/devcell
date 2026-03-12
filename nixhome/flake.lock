@@ -1,55 +1,5 @@
 {
   "nodes": {
-    "asdf": {
-      "inputs": {
-        "darwin": "darwin",
-        "flake-utils": "flake-utils",
-        "home-manager": "home-manager",
-        "nixpkgs": [
-          "nixpkgs"
-        ],
-        "plugin-direnv": "plugin-direnv",
-        "plugin-kubectl": "plugin-kubectl",
-        "plugin-kustomize": "plugin-kustomize",
-        "plugin-nodejs": "plugin-nodejs",
-        "plugin-skaffold": "plugin-skaffold"
-      },
-      "locked": {
-        "lastModified": 1772122060,
-        "narHash": "sha256-hEe7Dr1T5LcgS2r8K12y8xiqUdv55Zp8/6lKPLJjfYU=",
-        "owner": "DimmKirr",
-        "repo": "nix-asdf",
-        "rev": "9a01b9d0f00c7c8a3f8d005cf10879701b1a1da8",
-        "type": "github"
-      },
-      "original": {
-        "owner": "DimmKirr",
-        "repo": "nix-asdf",
-        "type": "github"
-      }
-    },
-    "darwin": {
-      "inputs": {
-        "nixpkgs": [
-          "asdf",
-          "nixpkgs"
-        ]
-      },
-      "locked": {
-        "lastModified": 1767634391,
-        "narHash": "sha256-owcSz2ICqTSvhBbhPP+1eWzi88e54rRZtfCNE5E/wwg=",
-        "owner": "LnL7",
-        "repo": "nix-darwin",
-        "rev": "08585aacc3d6d6c280a02da195fdbd4b9cf083c2",
-        "type": "github"
-      },
-      "original": {
-        "owner": "LnL7",
-        "ref": "nix-darwin-25.11",
-        "repo": "nix-darwin",
-        "type": "github"
-      }
-    },
     "flake-parts": {
       "inputs": {
         "nixpkgs-lib": "nixpkgs-lib"
@@ -68,44 +18,7 @@
         "type": "github"
       }
     },
-    "flake-utils": {
-      "locked": {
-        "lastModified": 1648297722,
-        "narHash": "sha256-W+qlPsiZd8F3XkzXOzAoR+mpFqzm3ekQkJNa+PIh1BQ=",
-        "owner": "numtide",
-        "repo": "flake-utils",
-        "rev": "0f8662f1319ad6abf89b3380dd2722369fc51ade",
-        "type": "github"
-      },
-      "original": {
-        "owner": "numtide",
-        "repo": "flake-utils",
-        "type": "github"
-      }
-    },
     "home-manager": {
-      "inputs": {
-        "nixpkgs": [
-          "asdf",
-          "nixpkgs"
-        ]
-      },
-      "locked": {
-        "lastModified": 1767910483,
-        "narHash": "sha256-MOU5YdVu4DVwuT5ztXgQpPuRRBjSjUGIdUzOQr9iQOY=",
-        "owner": "nix-community",
-        "repo": "home-manager",
-        "rev": "82fb7dedaad83e5e279127a38ef410bcfac6d77c",
-        "type": "github"
-      },
-      "original": {
-        "owner": "nix-community",
-        "ref": "release-25.11",
-        "repo": "home-manager",
-        "type": "github"
-      }
-    },
-    "home-manager_2": {
       "inputs": {
         "nixpkgs": [
           "nixpkgs"
@@ -182,6 +95,22 @@
         "type": "github"
       }
     },
+    "nixpkgs-edge": {
+      "locked": {
+        "lastModified": 1773302176,
+        "narHash": "sha256-9nz8XWPAd3qUJWw6yy6PX+1YJXvkeDRMwhh6AyyiLTY=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "b56913f716fc36c941c56a885ebc40b965cbaed8",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "master",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
     "nixpkgs-lib": {
       "locked": {
         "lastModified": 1765674936,
@@ -194,6 +123,22 @@
       "original": {
         "owner": "nix-community",
         "repo": "nixpkgs.lib",
+        "type": "github"
+      }
+    },
+    "nixpkgs-unstable": {
+      "locked": {
+        "lastModified": 1773110118,
+        "narHash": "sha256-mPAG8phMbCReKSiKAijjjd3v7uVcJOQ75gSjGJjt/Rk=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "e607cb5360ff1234862ac9f8839522becb853bb9",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixpkgs-unstable",
+        "repo": "nixpkgs",
         "type": "github"
       }
     },
@@ -213,94 +158,14 @@
         "type": "github"
       }
     },
-    "plugin-direnv": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1648998572,
-        "narHash": "sha256-81OFtPv0VThreRW8/Tcp/uT8BVzVEFI84vuC6yKtyU0=",
-        "owner": "asdf-community",
-        "repo": "asdf-direnv",
-        "rev": "4de6520e6b3b78c48854e63497acd005fcc83dda",
-        "type": "github"
-      },
-      "original": {
-        "owner": "asdf-community",
-        "ref": "v0.3.0",
-        "repo": "asdf-direnv",
-        "type": "github"
-      }
-    },
-    "plugin-kubectl": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1646672034,
-        "narHash": "sha256-7Gf7SnRwtmW13F1cf9M57hQ+fRMUHP2YC4/nuNabP4M=",
-        "owner": "asdf-community",
-        "repo": "asdf-kubectl",
-        "rev": "11ac5c3b0f403f7ead0b4a65bfbb04381ac8139e",
-        "type": "github"
-      },
-      "original": {
-        "owner": "asdf-community",
-        "repo": "asdf-kubectl",
-        "type": "github"
-      }
-    },
-    "plugin-kustomize": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1649341580,
-        "narHash": "sha256-WGLL5hUmFRfp7NDbankrmY5if9dRq/cNJEXBB3DwBA4=",
-        "owner": "Banno",
-        "repo": "asdf-kustomize",
-        "rev": "2efaa38011e7ea05c90cfe2ef5ec81d232adfa11",
-        "type": "github"
-      },
-      "original": {
-        "owner": "Banno",
-        "repo": "asdf-kustomize",
-        "type": "github"
-      }
-    },
-    "plugin-nodejs": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1647281008,
-        "narHash": "sha256-mrfyfnCo4fRrTmIxSyTN1dQvFdjtgbL45BrvMYZA4Fg=",
-        "owner": "asdf-vm",
-        "repo": "asdf-nodejs",
-        "rev": "f9957f3f256ebbb3fdeebcaed5082ad305222be6",
-        "type": "github"
-      },
-      "original": {
-        "owner": "asdf-vm",
-        "repo": "asdf-nodejs",
-        "type": "github"
-      }
-    },
-    "plugin-skaffold": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1647111673,
-        "narHash": "sha256-u5c7kwBlDlk/C3rAW2HVDiNVjNwV2y4WflniLpSIOzM=",
-        "owner": "nklmilojevic",
-        "repo": "asdf-skaffold",
-        "rev": "bf2f9922ddfc4d8613a2d92f3fedc458464e36e6",
-        "type": "github"
-      },
-      "original": {
-        "owner": "nklmilojevic",
-        "repo": "asdf-skaffold",
-        "type": "github"
-      }
-    },
     "root": {
       "inputs": {
-        "asdf": "asdf",
-        "home-manager": "home-manager_2",
+        "home-manager": "home-manager",
         "mcp-nixos": "mcp-nixos",
         "nix-darwin": "nix-darwin",
-        "nixpkgs": "nixpkgs_2"
+        "nixpkgs": "nixpkgs_2",
+        "nixpkgs-edge": "nixpkgs-edge",
+        "nixpkgs-unstable": "nixpkgs-unstable"
       }
     }
   },

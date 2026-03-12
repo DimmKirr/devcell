@@ -158,7 +158,7 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 	// First-run: scaffold if devcell.toml absent
 	if !scaffold.IsInitialized(c.ConfigDir) {
 		fmt.Printf(" First run — scaffolding %s\n", c.ConfigDir)
-		if err := scaffold.Scaffold(c.ConfigDir, ""); err != nil {
+		if err := scaffold.Scaffold(c.ConfigDir, "", "", false); err != nil {
 			return fmt.Errorf("scaffold: %w", err)
 		}
 		ok, promptErr := ux.GetConfirmation("Build image now? (~5 min first time)")

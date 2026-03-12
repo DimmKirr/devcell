@@ -2,7 +2,7 @@ FROM {{BASE_IMAGE}}
 
 # Copy the user's flake (fetches nixhome from GitHub).
 # Edit flake.nix to customise packages, then run 'cell build'.
-COPY --chown=devcell:usergroup flake.nix /opt/devcell/.config/home-manager/
+COPY --chown=devcell:usergroup flake.nix /opt/devcell/.config/devcell/
 
 # Activate the profile and install language runtimes.
 # NIX_REFRESH is set to "--refresh" by `cell build --no-cache` to bust nix flake cache.
@@ -10,11 +10,20 @@ ARG NIX_REFRESH=""
 RUN ARCH=$(uname -m) && \
     [ "$ARCH" = "aarch64" ] && ARCH_SUFFIX="-aarch64" || ARCH_SUFFIX="" && \
     home-manager switch \
-      --flake "/opt/devcell/.config/home-manager#devcell-ultimate${ARCH_SUFFIX}" \
+      --flake "/opt/devcell/.config/devcell#devcell-ultimate${ARCH_SUFFIX}" \
       --impure $NIX_REFRESH && \
     ln -sfT "$(readlink -f /opt/devcell/.nix-profile)" \
             /nix/var/nix/profiles/per-user/devcell/profile && \
-    asdf install nodejs && asdf reshim
+    (mkdir -p /opt/mise 2>/dev/null || sudo mkdir -p /opt/mise) && \
+    cd /opt/devcell && MISE_DATA_DIR=/opt/mise MISE_YES=1 mise install && \
+    for tool_dir in /opt/mise/installs/*/; do \
+      tool=$(basename "$tool_dir"); \
+      version_dir=$(ls -1d "${tool_dir}"*/ 2>/dev/null | head -1); \
+      if [ -n "$version_dir" ]; then ln -sfT "$version_dir" "/opt/mise/$tool"; fi; \
+    done
+
+# Add mise-installed tool bins to PATH via stable symlinks
+ENV PATH="/opt/mise/node/bin:/opt/mise/go/bin:${PATH}"
 
 # Agent CLI tools (claude, codex, etc.)
 COPY --chown=devcell:usergroup package.json /opt/npm-tools/

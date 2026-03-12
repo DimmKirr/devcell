@@ -27,11 +27,11 @@ gui = true
 # GITHUB_TOKEN = "ghp_xxx"
 # ANTHROPIC_API_KEY = "sk-ant-xxx"
 
-[asdf]
-# ASDF runtime settings forwarded as ASDF_<UPPER_KEY> env vars.
-# See: https://asdf-vm.com/manage/configuration.html
-# golang_mod_version_enabled = "true"
-# default_tool_versions_filename = ".tool-versions"
+[mise]
+# mise runtime settings forwarded as MISE_<UPPER_KEY> env vars.
+# See: https://mise.jdx.dev/configuration.html
+# trusted_config_paths = "/"
+# idiomatic_version_file = "true"
 
 # [[volumes]]
 # Extra volume mounts appended to docker run.
@@ -47,7 +47,7 @@ gui = true
 "@anthropic-ai/claude-code" = "2.1.49"
 "@openai/codex" = "^0.96.0"
 "@opentofu/opentofu-mcp-server" = "^0.1.5"
-"@playwright/mcp" = "^0.0.64"
+"patchright-mcp" = "^0.0.68"
 "@playwright/test" = "^1.57.0"
 "@slidev/cli" = "^52.11.0"
 "opencode-ai" = "^1.1.51"

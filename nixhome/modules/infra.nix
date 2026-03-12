@@ -1,20 +1,10 @@
 # infra.nix — Infrastructure-as-Code tools
-# Runtimes managed by asdf.
+# Runtimes managed by mise.
 {pkgs, ...}: {
-  programs.asdf = {
-    enable = true;
-    terraform = {
-      enable = true;
-      defaultVersion = "1.14.3";
-    };
-    opentofu = {
-      enable = true;
-      defaultVersion = "1.10.6";
-    };
-    config = {
-      legacy_version_file = "yes";
-    };
-  };
+  imports = [./mise.nix];
+
+  devcell.mise.tools.terraform = "1.14.3";
+  devcell.mise.tools.opentofu = "1.10.6";
 
   home.packages = with pkgs; [
     packer

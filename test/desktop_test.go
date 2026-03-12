@@ -287,6 +287,60 @@ func TestDesktopXresources(t *testing.T) {
 	assertContains(t, "XTerm*faceSize", xres, "XTerm*faceSize:         11")
 }
 
+// ── Patchright stealth MCP ───────────────────────────────────────────────────
+
+// TestDesktopPatchrightMcpAvailable verifies mcp-server-patchright binary is on PATH.
+// The npm package is "patchright-mcp" but its bin name is "mcp-server-patchright".
+func TestDesktopPatchrightMcpAvailable(t *testing.T) {
+	c := startContainer(t, map[string]string{"HOST_USER": hostUser, "APP_NAME": "test"})
+
+	out, code := exec(t, c, []string{"sh", "-c", "command -v mcp-server-patchright"})
+	if code != 0 {
+		t.Fatalf("FAIL: mcp-server-patchright not on PATH (exit %d)", code)
+	}
+	t.Logf("PASS: %s", strings.TrimSpace(out))
+}
+
+// TestDesktopStealthInitScript verifies the stealth init-script exists in nix store.
+func TestDesktopStealthInitScript(t *testing.T) {
+	c := startContainer(t, map[string]string{"HOST_USER": hostUser, "APP_NAME": "test"})
+
+	out, code := exec(t, c, []string{"sh", "-c",
+		"ls -1 /nix/store/*stealth-init.js 2>/dev/null | head -1"})
+	if code != 0 || strings.TrimSpace(out) == "" {
+		t.Fatalf("FAIL: stealth-init.js not found in nix store")
+	}
+	// Verify key stealth patches are present
+	content, _ := exec(t, c, []string{"cat", strings.TrimSpace(out)})
+	if !strings.Contains(content, "navigator.webdriver") {
+		t.Errorf("FAIL: stealth-init.js missing webdriver patch")
+	}
+	if !strings.Contains(content, "Intel Inc.") {
+		t.Errorf("FAIL: stealth-init.js missing WebGL spoof")
+	}
+	t.Logf("PASS: stealth-init.js found at %s", strings.TrimSpace(out))
+}
+
+// TestDesktopPatchrightMcpCellWrapper verifies the patchright-mcp-cell wrapper exists
+// and references patchright-mcp (not playwright-mcp).
+func TestDesktopPatchrightMcpCellWrapper(t *testing.T) {
+	c := startContainer(t, map[string]string{"HOST_USER": hostUser, "APP_NAME": "test"})
+
+	out, code := exec(t, c, []string{"sh", "-c", "command -v patchright-mcp-cell"})
+	if code != 0 {
+		t.Fatalf("FAIL: patchright-mcp-cell not on PATH (exit %d)", code)
+	}
+	// Read the wrapper and verify it calls mcp-server-patchright
+	wrapper, _ := exec(t, c, []string{"cat", strings.TrimSpace(out)})
+	if !strings.Contains(wrapper, "mcp-server-patchright") {
+		t.Errorf("FAIL: wrapper does not call mcp-server-patchright")
+	}
+	if strings.Contains(wrapper, "playwright-mcp ") {
+		t.Errorf("FAIL: wrapper still references playwright-mcp")
+	}
+	t.Logf("PASS: patchright-mcp-cell wrapper found at %s", strings.TrimSpace(out))
+}
+
 // ── Runtime GUI tests (require full GUI stack) ──────────────────────────────
 
 // startDesktopGUIContainer starts a container with DEVCELL_GUI_ENABLED=true
@@ -369,6 +423,50 @@ func TestDesktopFluxboxThemeActive(t *testing.T) {
 	// Workspace name must be patched with APP_NAME
 	assertContains(t, "workspaceNames", out, "test")
 	t.Logf("PASS: fluxbox running with devcell-ocean theme, workspace='test'")
+}
+
+// TestDesktopXftDpi96 — Xft.dpi must be set to 96 in X resources so that
+// Chromium reports devicePixelRatio=1 and window.screen matches the Xvfb
+// resolution (1920x1080). Without this, Xvfb reports 0mm x 0mm physical
+// size, causing Chromium to calculate a non-1.0 DPR (~1.047) and report
+// the screen as ~1835x1032 instead of 1920x1080.
+func TestDesktopXftDpi96(t *testing.T) {
+	probeGUI(t)
+	c := startDesktopGUIContainer(t)
+
+	// Wait for xrdb to load (deferred background process, ~1s)
+	var out string
+	var code int
+	for i := 0; i < 10; i++ {
+		out, code = exec(t, c, []string{"sh", "-c", "DISPLAY=:99 xrdb -query 2>&1"})
+		if code == 0 && strings.Contains(out, "Xft.dpi") {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if !strings.Contains(out, "Xft.dpi") {
+		t.Fatalf("FAIL: Xft.dpi not found in X resource database:\n%s", out)
+	}
+	assertContains(t, "Xft.dpi", out, "Xft.dpi:\t96")
+	t.Logf("PASS: Xft.dpi set to 96 in X resources")
+}
+
+// TestDesktopXvfbDpi96 — Xvfb must be started with -dpi 96 for consistent
+// rendering across all X11 clients, not just those reading Xft.dpi.
+func TestDesktopXvfbDpi96(t *testing.T) {
+	probeGUI(t)
+	c := startDesktopGUIContainer(t)
+
+	out, code := exec(t, c, []string{"sh", "-c",
+		"cat /proc/$(pgrep Xvfb)/cmdline 2>/dev/null | tr '\\0' ' '"})
+	if code != 0 {
+		t.Fatalf("FAIL: could not read Xvfb cmdline (exit %d): %s", code, out)
+	}
+	if !strings.Contains(out, "-dpi 96") && !strings.Contains(out, "-dpi96") {
+		t.Errorf("FAIL: Xvfb not started with -dpi 96:\n%s", out)
+	} else {
+		t.Logf("PASS: Xvfb started with -dpi 96")
+	}
 }
 
 // TestDesktopScreenshotNotDefaultGrey — capture a screenshot and verify

@@ -48,9 +48,23 @@ const defaultModelsSection = `# [models]
 # base_url = "http://host.docker.internal:1234/v1"
 # models = ["deepseek-r1:32b"]`
 
-func scaffoldFiles(modelsSnippet string) []scaffoldFile {
+func scaffoldFiles(modelsSnippet, nixhomePath string) []scaffoldFile {
 	dockerfile := bytes.ReplaceAll(dockerfileContent, []byte("{{BASE_IMAGE}}"), []byte(runner.BaseImageTag()))
 	flake := bytes.ReplaceAll(flakeNixContent, []byte("{{VERSION}}"), []byte(version.Version))
+
+	// When nixhomePath is set, use local path input and add COPY nixhome/ to Dockerfile.
+	if nixhomePath != "" {
+		// Replace the github: URL line with path:./nixhome
+		flake = bytes.ReplaceAll(flake,
+			[]byte(`inputs.devcell.url = "github:DimmKirr/devcell/`+version.Version+`?dir=nixhome";`),
+			[]byte(`inputs.devcell.url = "path:./nixhome";`))
+
+		// Insert COPY nixhome/ before the existing COPY flake.nix line
+		nixhomeCopy := []byte("COPY --chown=devcell:usergroup nixhome/ /opt/devcell/.config/devcell/nixhome/\n")
+		flakeCopyLine := []byte("COPY --chown=devcell:usergroup flake.nix")
+		dockerfile = bytes.Replace(dockerfile, flakeCopyLine, append(nixhomeCopy, flakeCopyLine...), 1)
+	}
+
 	models := modelsSnippet
 	if models == "" {
 		models = defaultModelsSection
@@ -106,17 +120,53 @@ func generatePyprojectTOML(pkgs map[string]string) []byte {
 
 // Scaffold writes scaffold files to dir, then generates package.json and
 // pyproject.toml from the [packages] section in devcell.toml.
-// Files that already exist are skipped (idempotent).
+// Files that already exist are skipped (idempotent) unless force is true.
 // modelsSnippet is an optional commented-out [models] section for devcell.toml;
 // pass "" to use the default generic example.
-func Scaffold(dir string, modelsSnippet string) error {
+
+// SyncNixhome copies the nixhome directory from srcPath into configDir/nixhome/.
+// It replaces any existing nixhome copy to ensure fresh content each build.
+func SyncNixhome(srcPath, configDir string) error {
+	if _, err := os.Stat(srcPath); err != nil {
+		return fmt.Errorf("nixhome source %s: %w", srcPath, err)
+	}
+	dest := filepath.Join(configDir, "nixhome")
+	// Remove stale copy so we get a clean sync every build.
+	if err := os.RemoveAll(dest); err != nil {
+		return fmt.Errorf("remove old nixhome: %w", err)
+	}
+	return copyDir(srcPath, dest)
+}
+
+// copyDir recursively copies src directory to dst.
+func copyDir(src, dst string) error {
+	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(src, path)
+		target := filepath.Join(dst, rel)
+		if info.IsDir() {
+			return os.MkdirAll(target, info.Mode())
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, info.Mode())
+	})
+}
+
+func Scaffold(dir string, modelsSnippet string, nixhomePath string, force bool) error {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", dir, err)
 	}
-	for _, f := range scaffoldFiles(modelsSnippet) {
+	for _, f := range scaffoldFiles(modelsSnippet, nixhomePath) {
 		dest := filepath.Join(dir, f.name)
-		if _, err := os.Stat(dest); err == nil {
-			continue
+		if !force {
+			if _, err := os.Stat(dest); err == nil {
+				continue
+			}
 		}
 		if err := os.WriteFile(dest, f.content, 0644); err != nil {
 			return fmt.Errorf("write %s: %w", f.name, err)
@@ -126,7 +176,7 @@ func Scaffold(dir string, modelsSnippet string) error {
 	// Scaffold homedir/.config/starship.toml for per-project prompt customization.
 	starshipDir := filepath.Join(dir, "homedir", ".config")
 	starshipDest := filepath.Join(starshipDir, "starship.toml")
-	if _, err := os.Stat(starshipDest); err != nil {
+	if force || os.IsNotExist(statErr(starshipDest)) {
 		if err := os.MkdirAll(starshipDir, 0755); err != nil {
 			return fmt.Errorf("mkdir %s: %w", starshipDir, err)
 		}
@@ -152,6 +202,12 @@ func Scaffold(dir string, modelsSnippet string) error {
 		}
 	}
 	return nil
+}
+
+// statErr returns the error from os.Stat (nil if file exists).
+func statErr(path string) error {
+	_, err := os.Stat(path)
+	return err
 }
 
 // IsInitialized returns true when devcell.toml exists in dir.

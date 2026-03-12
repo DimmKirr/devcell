@@ -47,9 +47,9 @@ server.listen(0, '127.0.0.1', () => {
 });
 `
 
-// e2eMcpClient drives playwright-mcp-cell via MCP stdio to fill the e2eFormServer form.
+// e2eMcpClient drives patchright-mcp-cell via MCP stdio to fill the e2eFormServer form.
 // Secret names (TEST_USERNAME, TEST_PASSWORD) are sent as field values; playwright-mcp
-// resolves them via lookupSecret() using the secrets file written by playwright-mcp-cell.
+// resolves them via lookupSecret() using the secrets file written by patchright-mcp-cell.
 // Prints "DONE" on success; exits non-zero on any failure.
 const e2eMcpClient = `#!/usr/bin/env python3
 import subprocess, json, os, sys, re, time
@@ -66,7 +66,7 @@ env = dict(os.environ)
 env['PLAYWRIGHT_MCP_USER_DATA_DIR'] = USER_DATA
 
 proc = subprocess.Popen(
-    ['playwright-mcp-cell', '--headless', '--browser', 'chromium',
+    ['patchright-mcp-cell', '--headless', '--browser', 'chromium',
      '--executable-path', CHROMIUM],
     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
     env=env)
@@ -147,7 +147,7 @@ finally:
 
 // ── Playwright MCP ────────────────────────────────────────────────────────────
 
-// TestMcpPlaywrightSecretsFromDotEnv verifies playwright-mcp-cell reads key names from
+// TestMcpPlaywrightSecretsFromDotEnv verifies patchright-mcp-cell reads key names from
 // $USER_WORKING_DIR/.env and resolves values from the container environment.
 // Only keys present in .env are forwarded — other container env vars are not exposed.
 func TestMcpPlaywrightSecretsFromDotEnv(t *testing.T) {
@@ -159,9 +159,9 @@ func TestMcpPlaywrightSecretsFromDotEnv(t *testing.T) {
 		"USER_WORKING_DIR": "/tmp/test-wd",
 	})
 
-	_, code := exec(t, c, []string{"sh", "-c", "command -v playwright-mcp-cell"})
+	_, code := exec(t, c, []string{"sh", "-c", "command -v patchright-mcp-cell"})
 	if code != 0 {
-		t.Fatal("FAIL: playwright-mcp-cell not found on PATH")
+		t.Fatal("FAIL: patchright-mcp-cell not found on PATH")
 	}
 
 	// Create mock .env with the secret key names (values in .env are irrelevant;
@@ -207,9 +207,9 @@ func TestMcpPlaywrightSecretsFromDotEnv(t *testing.T) {
 }
 
 // TestMcpPlaywrightStagingFileHasEntry — nix-mcp-servers.json must contain a playwright entry
-// with playwright-mcp-cell as the command.
+// with patchright-mcp-cell as the command.
 func TestMcpPlaywrightStagingFileHasEntry(t *testing.T) {
-	c := startEnvContainer(t)
+	c := startContainer(t, map[string]string{"HOST_USER": hostUser, "APP_NAME": "test"})
 
 	raw, code := exec(t, c, []string{"cat", "/etc/claude-code/nix-mcp-servers.json"})
 	if code != 0 {
@@ -235,15 +235,15 @@ func TestMcpPlaywrightStagingFileHasEntry(t *testing.T) {
 			strings.Join(keys, ", "))
 		return
 	}
-	if entry.Command != "playwright-mcp-cell" {
-		t.Errorf("FAIL: expected command %q, got %q", "playwright-mcp-cell", entry.Command)
+	if entry.Command != "patchright-mcp-cell" {
+		t.Errorf("FAIL: expected command %q, got %q", "patchright-mcp-cell", entry.Command)
 	} else {
 		t.Logf("PASS: playwright entry present, command=%s", entry.Command)
 	}
 }
 
 // TestMcpPlaywrightTempFileCleanup — secrets temp file must be deleted after wrapper exits.
-// Verifies the trap 'rm -f' EXIT in playwright-mcp-cell fires correctly so no temp file leaks.
+// Verifies the trap 'rm -f' EXIT in patchright-mcp-cell fires correctly so no temp file leaks.
 func TestMcpPlaywrightTempFileCleanup(t *testing.T) {
 	c := startContainer(t, map[string]string{
 		"HOST_USER":        hostUser,
@@ -304,17 +304,17 @@ func TestMcpPlaywrightTempFileCleanup(t *testing.T) {
 	}
 }
 
-// TestMcpPlaywrightProtocol — playwright-mcp-cell must respond to MCP initialize + tools/list
+// TestMcpPlaywrightProtocol — patchright-mcp-cell must respond to MCP initialize + tools/list
 // over stdio. The browser is lazily initialised so this works without a display server.
 //
 // @modelcontextprotocol/sdk v1.x uses newline-delimited JSON (one JSON object per line),
 // NOT Content-Length/LSP framing.
 func TestMcpPlaywrightProtocol(t *testing.T) {
-	c := startEnvContainer(t)
+	c := startContainer(t, map[string]string{"HOST_USER": hostUser, "APP_NAME": "test"})
 
-	_, code := exec(t, c, []string{"sh", "-c", "command -v playwright-mcp-cell"})
+	_, code := exec(t, c, []string{"sh", "-c", "command -v patchright-mcp-cell"})
 	if code != 0 {
-		t.Fatal("FAIL: playwright-mcp-cell not on PATH — is this the ultimate image?")
+		t.Fatal("FAIL: patchright-mcp-cell not on PATH — is this the ultimate image?")
 	}
 
 	out, code := exec(t, c, []string{"bash", "-c", `
@@ -324,14 +324,14 @@ func TestMcpPlaywrightProtocol(t *testing.T) {
 		TMPDIR_PW=$(mktemp -d /tmp/pw-proto-XXXXXX)
 		trap 'rm -rf "$TMPDIR_PW"' EXIT
 		{ printf "%s\n%s\n" "$INIT" "$LIST"; sleep 5; } \
-		| PLAYWRIGHT_MCP_USER_DATA_DIR="$TMPDIR_PW" timeout 15 playwright-mcp-cell \
+		| PLAYWRIGHT_MCP_USER_DATA_DIR="$TMPDIR_PW" timeout 15 patchright-mcp-cell \
 			--headless --browser chromium \
 			--executable-path "$CHROMIUM" \
 			2>/dev/null
 	`})
 	// exit 124 = timeout (server did not auto-exit on EOF) — responses already written to stdout
 	if code != 0 && code != 124 {
-		t.Fatalf("FAIL: playwright-mcp-cell exited %d:\n%s", code, out)
+		t.Fatalf("FAIL: patchright-mcp-cell exited %d:\n%s", code, out)
 	}
 	if !strings.Contains(out, `"result"`) {
 		t.Errorf("FAIL: no JSON-RPC result in output (exit %d):\n%s", code, out)
@@ -348,7 +348,7 @@ func TestMcpPlaywrightProtocol(t *testing.T) {
 //  1. Container starts with TEST_USERNAME and TEST_PASSWORD env vars; .env lists those keys.
 //  2. Assert playwright is registered in ~/.claude.json (merged by entrypoint).
 //  3. Start a local Node.js HTTP server that serves a login form.
-//  4. Drive playwright-mcp-cell via MCP stdio:
+//  4. Drive patchright-mcp-cell via MCP stdio:
 //     initialize → browser_navigate → browser_snapshot → browser_fill_form (secret names) → browser_click.
 //  5. Assert /tmp/form-output.txt contains the real secret values (not the names).
 func TestMcpPlaywrightE2EFormSecrets(t *testing.T) {
@@ -395,8 +395,8 @@ func TestMcpPlaywrightE2EFormSecrets(t *testing.T) {
 	if !ok {
 		t.Fatalf("FAIL step 1: playwright not in mcpServers; present keys: %v", claudeCfg.McpServers)
 	}
-	if entry.Command != "playwright-mcp-cell" {
-		t.Fatalf("FAIL step 1: playwright command=%q, want playwright-mcp-cell", entry.Command)
+	if entry.Command != "patchright-mcp-cell" {
+		t.Fatalf("FAIL step 1: playwright command=%q, want patchright-mcp-cell", entry.Command)
 	}
 	t.Logf("PASS step 1: playwright registered, command=%s", entry.Command)
 
@@ -418,7 +418,7 @@ func TestMcpPlaywrightE2EFormSecrets(t *testing.T) {
 	port, _ := exec(t, c, []string{"cat", "/tmp/server-port.txt"})
 	t.Logf("step 3: Node.js form server on port %s", port)
 
-	// Step 4: run Python MCP client — drives playwright-mcp-cell to fill form with secrets.
+	// Step 4: run Python MCP client — drives patchright-mcp-cell to fill form with secrets.
 	mcpOut, mcpCode := exec(t, c, []string{"python3", "/tmp/mcp-form-client.py"})
 	t.Logf("step 4 MCP client output:\n%s", mcpOut)
 	if mcpCode != 0 {
@@ -441,6 +441,219 @@ func TestMcpPlaywrightE2EFormSecrets(t *testing.T) {
 		t.Errorf("FAIL step 5: expected password=%s (resolved secret) in:\n%s", testPassword, result)
 	} else {
 		t.Logf("PASS: form submitted with secrets resolved correctly")
+	}
+}
+
+// ── Patchright stealth detection ──────────────────────────────────────────────
+
+// e2eStealthDetector drives patchright-mcp-cell via MCP stdio to check browser fingerprints.
+// Reads --init-script path from nix-mcp-servers.json (same args Claude Code uses in production).
+// Navigates to the e2eFormServer and evaluates JS to check stealth spoofing.
+// Outputs "STEALTH:{json}" with detection results.
+const e2eStealthDetector = `#!/usr/bin/env python3
+import subprocess, json, os, sys
+
+CHROMIUM = '/nix/var/nix/profiles/per-user/devcell/profile/bin/chromium'
+USER_DATA = '/tmp/pw-stealth-test'
+
+# Read init-script path from nix-mcp-servers.json (production args)
+with open('/etc/claude-code/nix-mcp-servers.json') as f:
+    cfg = json.load(f)
+pw_args = cfg.get('mcpServers', {}).get('playwright', {}).get('args', [])
+init_script = None
+for i, a in enumerate(pw_args):
+    if a == '--init-script' and i + 1 < len(pw_args):
+        init_script = pw_args[i + 1]
+        break
+if not init_script:
+    print('ERROR: --init-script not found in nix-mcp-servers.json', file=sys.stderr)
+    sys.exit(2)
+print('init_script: ' + init_script, flush=True)
+
+with open('/tmp/server-port.txt') as f:
+    port = f.read().strip()
+
+env = dict(os.environ)
+env['PLAYWRIGHT_MCP_USER_DATA_DIR'] = USER_DATA
+
+proc = subprocess.Popen(
+    ['patchright-mcp-cell', '--headless', '--browser', 'chromium',
+     '--executable-path', CHROMIUM, '--init-script', init_script],
+    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env)
+
+def send(msg):
+    proc.stdin.write((json.dumps(msg) + '\n').encode())
+    proc.stdin.flush()
+
+def recv():
+    line = proc.stdout.readline()
+    if not line: raise RuntimeError('EOF from patchright-mcp stdout')
+    return json.loads(line)
+
+try:
+    send({'jsonrpc':'2.0','id':1,'method':'initialize','params':{
+        'protocolVersion':'2024-11-05','capabilities':{},
+        'clientInfo':{'name':'stealth-test','version':'0'}}})
+    r = recv()
+    print('init:', r.get('result',{}).get('serverInfo',{}).get('name','?'), flush=True)
+
+    send({'jsonrpc':'2.0','id':2,'method':'tools/call','params':{
+        'name':'browser_navigate','arguments':{'url':'http://127.0.0.1:'+port}}})
+    r = recv()
+    print('navigate:', 'ok' if 'result' in r else 'ERROR:'+str(r.get('error')), flush=True)
+
+    # Evaluate stealth fingerprint checks in page context
+    send({'jsonrpc':'2.0','id':3,'method':'tools/call','params':{
+        'name':'browser_evaluate','arguments':{'function':"""() => {
+            const r = {};
+            r.webdriver = navigator.webdriver;
+            r.hasChrome = typeof window.chrome !== 'undefined';
+            r.hasChromeRuntime = !!(window.chrome && window.chrome.runtime);
+            r.pluginsCount = navigator.plugins.length;
+            r.languages = navigator.languages.join(',');
+            try {
+                const c = document.createElement('canvas');
+                const gl = c.getContext('webgl');
+                if (gl) {
+                    r.webglVendor = gl.getParameter(37445);
+                    r.webglRenderer = gl.getParameter(37446);
+                } else { r.webglError = 'no context'; }
+            } catch(e) { r.webglError = e.message; }
+            return JSON.stringify(r);
+        }"""}}})
+    r = recv()
+    text = r.get('result',{}).get('content',[{}])[0].get('text','')
+    # browser_evaluate wraps result in markdown like: ### Result\n"{ ... }"\n### Ran...
+    # Extract the JSON string between the first pair of double quotes on its own line
+    import re
+    m = re.search(r'^"(.*)"$', text, re.MULTILINE)
+    if m:
+        text = json.loads('"' + m.group(1) + '"')  # unescape \" etc
+    print('STEALTH:' + text, flush=True)
+finally:
+    proc.terminate()
+    proc.wait()
+`
+
+// TestMcpPatchrightUndetected — verifies patchright + stealth init-script make the browser
+// undetectable as automated. Launches patchright-mcp-cell with --init-script (same args
+// Claude Code uses in production via nix-mcp-servers.json), navigates to a page, and asserts:
+//   - navigator.webdriver is undefined (not true)
+//   - window.chrome.runtime exists (mock)
+//   - navigator.plugins.length >= 3 (mock)
+//   - navigator.languages includes "en-US"
+//   - WebGL vendor = "Intel Inc." (if available)
+func TestMcpPatchrightUndetected(t *testing.T) {
+	c := startContainer(t, map[string]string{
+		"HOST_USER":        hostUser,
+		"APP_NAME":         "test",
+		"USER_WORKING_DIR": "/tmp/stealth-wd",
+	})
+
+	// Check binary and init-script are present
+	_, code := exec(t, c, []string{"sh", "-c", "command -v patchright-mcp-cell"})
+	if code != 0 {
+		t.Fatal("FAIL: patchright-mcp-cell not on PATH")
+	}
+
+	// Create empty .env (wrapper expects it)
+	exec(t, c, []string{"sh", "-c", "mkdir -p /tmp/stealth-wd && touch /tmp/stealth-wd/.env"})
+
+	// Start Node.js form server (reuse the e2eFormServer for a real page)
+	if err := c.CopyToContainer(context.Background(),
+		[]byte(e2eFormServer), "/tmp/stealth-form-server.js", 0o644); err != nil {
+		t.Fatalf("FAIL: copy form server: %v", err)
+	}
+	exec(t, c, []string{"bash", "-c", "node /tmp/stealth-form-server.js &"})
+	_, portCode := exec(t, c, []string{"bash", "-c",
+		"for i in 1 2 3 4 5 6 7 8 9 10; do [ -f /tmp/server-port.txt ] && exit 0; sleep 0.5; done; exit 1"})
+	if portCode != 0 {
+		t.Fatal("FAIL: form server did not start")
+	}
+
+	// Copy and run stealth detection client
+	if err := c.CopyToContainer(context.Background(),
+		[]byte(e2eStealthDetector), "/tmp/stealth-detect.py", 0o755); err != nil {
+		t.Fatalf("FAIL: copy stealth detector: %v", err)
+	}
+
+	out, mcpCode := exec(t, c, []string{"python3", "/tmp/stealth-detect.py"})
+	t.Logf("stealth detector output:\n%s", out)
+	if mcpCode != 0 {
+		t.Fatalf("FAIL: stealth detector exited %d", mcpCode)
+	}
+
+	// Parse STEALTH:{json} line from output
+	var stealthJSON string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "STEALTH:") {
+			stealthJSON = strings.TrimPrefix(line, "STEALTH:")
+			break
+		}
+	}
+	if stealthJSON == "" {
+		t.Fatal("FAIL: no STEALTH: line in output")
+	}
+
+	var result struct {
+		Webdriver      interface{} `json:"webdriver"`
+		HasChrome      bool        `json:"hasChrome"`
+		HasChromeRT    bool        `json:"hasChromeRuntime"`
+		PluginsCount   int         `json:"pluginsCount"`
+		Languages      string      `json:"languages"`
+		WebGLVendor    string      `json:"webglVendor"`
+		WebGLRenderer  string      `json:"webglRenderer"`
+		WebGLError     string      `json:"webglError"`
+	}
+	if err := json.Unmarshal([]byte(stealthJSON), &result); err != nil {
+		t.Fatalf("FAIL: parse stealth JSON: %v\nraw: %s", err, stealthJSON)
+	}
+
+	// navigator.webdriver must be undefined (null in JSON), not true
+	if result.Webdriver == true {
+		t.Errorf("FAIL: navigator.webdriver = true (detected as bot)")
+	} else {
+		t.Logf("PASS: navigator.webdriver = %v", result.Webdriver)
+	}
+
+	// window.chrome + chrome.runtime must exist (init-script mock)
+	if !result.HasChrome {
+		t.Errorf("FAIL: window.chrome missing")
+	}
+	if !result.HasChromeRT {
+		t.Errorf("FAIL: window.chrome.runtime missing")
+	} else {
+		t.Logf("PASS: chrome.runtime present")
+	}
+
+	// navigator.plugins must have entries (init-script mock)
+	if result.PluginsCount < 3 {
+		t.Errorf("FAIL: navigator.plugins.length = %d, want >= 3", result.PluginsCount)
+	} else {
+		t.Logf("PASS: navigator.plugins.length = %d", result.PluginsCount)
+	}
+
+	// navigator.languages must include en-US
+	if !strings.Contains(result.Languages, "en-US") {
+		t.Errorf("FAIL: languages = %q, want en-US", result.Languages)
+	} else {
+		t.Logf("PASS: languages = %s", result.Languages)
+	}
+
+	// WebGL renderer spoof (may not be available in headless)
+	if result.WebGLError != "" {
+		t.Logf("SKIP: WebGL not available (%s)", result.WebGLError)
+	} else {
+		if result.WebGLVendor != "Intel Inc." {
+			t.Errorf("FAIL: WebGL vendor = %q, want 'Intel Inc.'", result.WebGLVendor)
+		} else {
+			t.Logf("PASS: WebGL vendor = %s", result.WebGLVendor)
+		}
+		if result.WebGLRenderer != "Intel Iris OpenGL Engine" {
+			t.Errorf("FAIL: WebGL renderer = %q, want 'Intel Iris OpenGL Engine'", result.WebGLRenderer)
+		} else {
+			t.Logf("PASS: WebGL renderer = %s", result.WebGLRenderer)
+		}
 	}
 }
 

@@ -24,15 +24,63 @@ let
   # Import theme — palette (c), fonts (f), and generated fluxbox cfg.
   theme = import ./themes/main/theme.nix { inherit lib pkgs; };
   inherit (theme) c f cfg init xresources wallpaper pixmaps;
+
+  # Stealth init-script — injected via --init-script to spoof JS-level fingerprints.
+  # Patchright handles CDP layer (Runtime.enable, launch flags);
+  # this script handles what page JS can detect.
+  stealthInitScript = pkgs.writeTextFile {
+    name = "stealth-init.js";
+    text = ''
+      // Patch navigator.webdriver (backup — Patchright handles via flag)
+      Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+
+      // Mock chrome.runtime
+      window.chrome = {
+        runtime: { connect: function(){}, sendMessage: function(){} },
+        loadTimes: function() { return {}; },
+        csi: function() { return {}; }
+      };
+
+      // Mock plugins
+      Object.defineProperty(navigator, 'plugins', {
+        get: () => [
+          { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer' },
+          { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai' },
+          { name: 'Native Client', filename: 'internal-nacl-plugin' }
+        ]
+      });
+
+      // Mock languages
+      Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+
+      // Patch permissions
+      const origQuery = window.navigator.permissions.query;
+      window.navigator.permissions.query = (params) =>
+        params.name === 'notifications'
+          ? Promise.resolve({ state: Notification.permission })
+          : origQuery(params);
+
+      // Spoof WebGL renderer (hide SwiftShader / Mesa llvmpipe)
+      const getParam = WebGLRenderingContext.prototype.getParameter;
+      WebGLRenderingContext.prototype.getParameter = function(p) {
+        if (p === 37445) return 'Intel Inc.';
+        if (p === 37446) return 'Intel Iris OpenGL Engine';
+        return getParam.call(this, p);
+      };
+    '';
+  };
 in
 {
-  # Contribute playwright MCP server to the system-level managed-mcp.json.
+  # Contribute patchright MCP server to the system-level managed-mcp.json.
+  # Patchright = stealth Playwright fork — patches CDP Runtime.enable, adds
+  # playwright-extra + puppeteer-extra-plugin-stealth (triple stealth stack).
   # \${VAR} in string values → literal ${VAR} in JSON → Claude Code expands at runtime.
   devcell.managedMcp.servers.playwright = {
-    command = "playwright-mcp-cell";
+    command = "patchright-mcp-cell";
     args = [
       "--browser" "chromium"
       "--executable-path" "${pkgs.chromium}/bin/chromium"
+      "--init-script" "${stealthInitScript}"
     ];
   };
   home.packages = with pkgs; [
@@ -97,12 +145,12 @@ in
     nerd-fonts.victor-mono     # cursive italic monospace
     inter          # geometric sans — fallback UI font
 
-    # Playwright MCP wrapper — sets per-app user-data-dir and forwards secrets
-    # from $USER_WORKING_DIR/.env to playwright-mcp via --secrets.
+    # Patchright MCP wrapper — sets per-app user-data-dir and forwards secrets
+    # from $USER_WORKING_DIR/.env to patchright-mcp via --secrets.
     # Key names are read from .env; resolved values come from the container env
     # (injected by docker compose env_file or op run before container start).
     # Claude sees only key names, never values.
-    (pkgs.writeShellScriptBin "playwright-mcp-cell" ''
+    (pkgs.writeShellScriptBin "patchright-mcp-cell" ''
       SECRETS_FILE=$(mktemp /tmp/pw-secrets-XXXXXX.env)
       trap 'rm -f "$SECRETS_FILE"' EXIT
 
@@ -121,9 +169,9 @@ in
         done < "$_ENV_FILE" >> "$SECRETS_FILE"
       fi
 
-      # No exec: keep shell alive so EXIT trap fires after playwright-mcp terminates.
+      # No exec: keep shell alive so EXIT trap fires after mcp-server-patchright terminates.
       USER_DATA_DIR="''${PLAYWRIGHT_MCP_USER_DATA_DIR:-$HOME/.playwright-''${APP_NAME:-cell}}"
-      playwright-mcp --user-data-dir "$USER_DATA_DIR" --secrets "$SECRETS_FILE" "$@"
+      mcp-server-patchright --user-data-dir "$USER_DATA_DIR" --secrets "$SECRETS_FILE" "$@"
     '')
   ];
 
@@ -318,7 +366,7 @@ in
       export LD_LIBRARY_PATH=${pkgs.mesa}/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
 
       log "Starting Xvfb on display :''${DISPLAY_NUM} (+GLX, Mesa llvmpipe)..."
-      gosu "$USER" Xvfb :''${DISPLAY_NUM} -screen 0 ''${RESOLUTION} +extension GLX +render +iglx 2>/dev/null &
+      gosu "$USER" Xvfb :''${DISPLAY_NUM} -screen 0 ''${RESOLUTION} -dpi 96 +extension GLX +render +iglx 2>/dev/null &
       export DISPLAY=:''${DISPLAY_NUM}
       # Wait for X server to accept connections (socket file appears before server is ready)
       for i in $(seq 1 40); do
@@ -380,6 +428,10 @@ in
           cp -a "$XRDP_PREFIX/etc/xrdp/"* "$XRDP_CFG/" 2>/dev/null || true
           chmod u+w "$XRDP_CFG/"* 2>/dev/null || true
 
+          # Pre-generate RSA keys so xrdp can read them at startup
+          # (without this, xrdp fails with "cannot read rsakeys.ini" on first connect)
+          xrdp-keygen xrdp "$XRDP_CFG/rsakeys.ini" 2>/dev/null || true
+
           # Generate self-signed SSL cert in global config dir
           # (survives container restarts via ~/.config/devcell/ bind mount at /etc/devcell/config/)
           XRDP_CERT_DIR="/etc/devcell/config/xrdp"
@@ -402,6 +454,7 @@ in
               -e "s|^certificate=.*|certificate=$XRDP_CERT_DIR/cert.pem|" \
               -e "s|^key_file=.*|key_file=$XRDP_CERT_DIR/key.pem|" \
               -e "s|^autorun=.*|autorun=vnc-any|" \
+              -e "s|^max_bpp=.*|max_bpp=24|" \
               -e "s|^LogFile=.*|LogFile=/var/log/xrdp.log|" \
               -e "s|^LogLevel=.*|LogLevel=$XRDP_LOG_LEVEL|" \
               -e "s|^#*EnableSyslog=.*|EnableSyslog=false|" \
@@ -422,6 +475,7 @@ in
               echo 'port=5900'
               echo "username=''${HOST_USER}"
               echo 'password=vnc'
+              echo 'xserverbpp=24'
           } >> "$XRDP_CFG/xrdp.ini"
 
           log "Starting xrdp on port 3389 (RDP → VNC :''${DISPLAY_NUM})..."

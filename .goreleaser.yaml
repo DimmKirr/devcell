@@ -35,21 +35,24 @@ release:
 
 changelog:
   sort: asc
-  use: github
+  use: git
   groups:
-    - title: Features
+    - title: "Features"
       regexp: '^.*?feat(\(.+\))??!?:.+$'
       order: 0
-    - title: Bug Fixes
+    - title: "Bug Fixes"
       regexp: '^.*?fix(\(.+\))??!?:.+$'
       order: 1
-    - title: Other
+    - title: "Chores"
+      regexp: '^.*?chore(\(.+\))??!?:.+$'
+      order: 2
+    - title: "Tests"
+      regexp: '^.*?test(\(.+\))??!?:.+$'
+      order: 3
+    - title: "Other"
       order: 999
   filters:
     exclude:
-      - '^chore'
-      - '^test'
-      - '^docs'
       - 'Merge pull request'
       - 'Merge branch'
 

@@ -147,10 +147,25 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 		}
 	}
 
-	// Optional .env file
+	// Optional .env file — resolve self-referencing vars (KEY=${KEY}) by passing
+	// -e KEY so Docker inherits the real value from the host environment.
+	// Literal KEY=value lines are passed as-is via -e KEY=value.
+	// Comments and blank lines are skipped.
 	envFile := filepath.Join(c.BaseDir, ".env")
-	if err := fs.Stat(envFile); err == nil {
-		argv = append(argv, "--env-file", envFile)
+	if envData, err := os.ReadFile(envFile); err == nil {
+		for _, line := range strings.Split(string(envData), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			parts := strings.SplitN(line, "=", 2)
+			if len(parts) == 2 && parts[1] == "${"+parts[0]+"}" {
+				// Self-referencing: KEY=${KEY} → inherit from host env
+				argv = append(argv, "-e", parts[0])
+			} else {
+				argv = append(argv, "-e", line)
+			}
+		}
 	}
 
 	// GUI flag — only publish VNC port when GUI is enabled
@@ -170,9 +185,9 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 		argv = append(argv, "-e", k+"="+v)
 	}
 
-	// cfg [asdf] entries → ASDF_<UPPER_KEY>=value
-	for k, v := range spec.CellCfg.Asdf {
-		argv = append(argv, "-e", "ASDF_"+strings.ToUpper(k)+"="+v)
+	// cfg [mise] entries → MISE_<UPPER_KEY>=value
+	for k, v := range spec.CellCfg.Mise {
+		argv = append(argv, "-e", "MISE_"+strings.ToUpper(k)+"="+v)
 	}
 
 	// Command-specific extra env vars (e.g. OPENCODE_CONFIG_CONTENT)
@@ -189,6 +204,7 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 	v(c.HostHome + "/.claude/agents:/home/" + c.HostUser + "/.claude/agents:ro")
 	v(c.HostHome + "/.claude/skills:/home/" + c.HostUser + "/.claude/skills")
 	v(c.ConfigDir + ":/etc/devcell/config")
+	v(c.ConfigDir + ":/home/" + c.HostUser + "/.config/devcell")
 
 	// cfg [[volumes]] entries
 	for _, vol := range spec.CellCfg.Volumes {

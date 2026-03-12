@@ -310,6 +310,70 @@ func TestRdpUserExists(t *testing.T) {
 	}
 }
 
+// TestRdpClientResolution — verify the RDP client receives the full 1920x1080
+// desktop without cropping or scaling. Connects xfreerdp requesting 1920x1080,
+// checks xrdp negotiated that resolution, and takes a server-side screenshot
+// to verify the framebuffer dimensions during an active RDP session.
+func TestRdpClientResolution(t *testing.T) {
+	probeGUI(t)
+	c := startRdpContainer(t)
+	skipIfNoXfreerdp(t, c)
+
+	// Verify server-side Xvfb is 1920x1080 before connecting.
+	xrandrOut, code := exec(t, c, []string{"sh", "-c", "DISPLAY=:99 xrandr 2>&1"})
+	if code != 0 {
+		t.Fatalf("xrandr failed: %s", xrandrOut)
+	}
+	if !strings.Contains(xrandrOut, "1920x1080") {
+		t.Fatalf("server display not 1920x1080 before RDP connect:\n%s", xrandrOut)
+	}
+
+	// Clear xrdp log to capture only this session's negotiation.
+	exec(t, c, []string{"sh", "-c", "truncate -s0 /var/log/xrdp.log"})
+
+	// Start a client Xvfb on :98 (larger than 1920x1080 to avoid constraining xfreerdp).
+	exec(t, c, []string{"sh", "-c", "Xvfb :98 -screen 0 2560x1440x24 -dpi 96 &"})
+	time.Sleep(1 * time.Second)
+
+	// Connect xfreerdp on :98 requesting 1920x1080. Run for 5s then kill.
+	exec(t, c, []string{"sh", "-c",
+		"DISPLAY=:98 xfreerdp /v:127.0.0.1:3389 /u:" + hostUser +
+			" /p:rdp /sec:rdp /cert:ignore /size:1920x1080 /gdi:sw 2>&1 &" +
+			" sleep 5 && kill %1 2>/dev/null; wait 2>/dev/null; true"})
+
+	// 1. Check xrdp log for negotiated 1920x1080.
+	logOut, _ := exec(t, c, []string{"sh", "-c", "cat /var/log/xrdp.log 2>/dev/null"})
+	if !strings.Contains(logOut, "1920") || !strings.Contains(logOut, "1080") {
+		t.Errorf("FAIL: xrdp did not negotiate 1920x1080:\n%s", logOut)
+	} else {
+		t.Logf("PASS: xrdp negotiated 1920x1080")
+	}
+
+	// 2. Verify server display remains 1920x1080 during the session.
+	xrandrOut, code = exec(t, c, []string{"sh", "-c", "DISPLAY=:99 xrandr 2>&1"})
+	if code != 0 || !strings.Contains(xrandrOut, "1920x1080") {
+		t.Errorf("FAIL: server display not 1920x1080 during RDP session:\n%s", xrandrOut)
+	}
+
+	// 3. Take server-side screenshot during active session, verify dimensions.
+	_, hasImport := exec(t, c, []string{"sh", "-c", "command -v import"})
+	if hasImport == 0 {
+		exec(t, c, []string{"sh", "-c",
+			"DISPLAY=:99 import -window root /tmp/rdp-resolution.png 2>&1"})
+		identOut, _ := exec(t, c, []string{"sh", "-c",
+			"identify /tmp/rdp-resolution.png 2>/dev/null | head -1"})
+		if strings.Contains(identOut, "1920x1080") {
+			t.Logf("PASS: server screenshot 1920x1080 during RDP session")
+		} else {
+			t.Errorf("FAIL: server screenshot not 1920x1080: %s", identOut)
+		}
+	}
+
+	// Cleanup
+	exec(t, c, []string{"sh", "-c",
+		"pkill -f 'xfreerdp.*127.0.0.1:3389' 2>/dev/null; pkill -f 'Xvfb :98' 2>/dev/null; true"})
+}
+
 // skipIfNoXfreerdp skips the test if xfreerdp is not on PATH inside the container.
 func skipIfNoXfreerdp(t *testing.T, c testcontainers.Container) {
 	t.Helper()

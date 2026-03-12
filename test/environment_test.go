@@ -175,9 +175,9 @@ func TestEnvBasePermissions(t *testing.T) {
 		"/opt/devcell",
 		"/opt/devcell/.config",
 		"/opt/devcell/.config/nix",
-		"/opt/devcell/.config/home-manager",
+		"/opt/devcell/.config/devcell",
 		"/opt/devcell/.nix-profile",
-		"/opt/asdf",
+		"/opt/mise",
 		"/opt/npm-tools",
 		"/opt/python-tools",
 	}

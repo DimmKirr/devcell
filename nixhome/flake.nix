@@ -3,6 +3,8 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
+    nixpkgs-unstable.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+    nixpkgs-edge.url = "github:NixOS/nixpkgs/master";
     home-manager = {
       url = "github:nix-community/home-manager/release-25.11";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -11,19 +13,16 @@
       url = "github:LnL7/nix-darwin/nix-darwin-25.11";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    asdf = {
-      url = "github:DimmKirr/nix-asdf";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
     mcp-nixos.url = "github:utensils/mcp-nixos";
   };
 
   outputs = {
     self,
     nixpkgs,
+    nixpkgs-unstable,
+    nixpkgs-edge,
     home-manager,
     nix-darwin,
-    asdf,
     mcp-nixos,
   }: let
     lib = nixpkgs.lib;
@@ -33,17 +32,20 @@
     user = {username = "devcell"; homeDirectory = "/opt/devcell";};
 
     # Build a homeManagerConfiguration for a given system and list of modules.
-    mkHome = system: modules:
+    mkHome = system: modules: let
+      nixCfg = {
+        inherit system;
+        config.allowUnfreePredicate = pkg:
+          builtins.elem (lib.getName pkg) ["claude-code" "packer" "terraform"];
+      };
+      pkgsUnstable = import nixpkgs-unstable nixCfg;
+      pkgsEdge = import nixpkgs-edge nixCfg;
+    in
       home-manager.lib.homeManagerConfiguration {
-        pkgs = import nixpkgs {
-          inherit system;
-          config.allowUnfreePredicate = pkg:
-            builtins.elem (lib.getName pkg) ["packer" "terraform"];
-        };
-        extraSpecialArgs = {inherit mcp-nixos;};
+        pkgs = import nixpkgs nixCfg;
+        extraSpecialArgs = {inherit mcp-nixos pkgsUnstable pkgsEdge;};
         modules =
           [
-            asdf.homeManagerModules.default
             {
               home.stateVersion = "25.11";
               home.username = user.username;
@@ -90,7 +92,17 @@
         home-manager.darwinModules.home-manager
         {
           # Pass flake inputs into home-manager modules (needed by base.nix → managed-*.nix)
-          home-manager.extraSpecialArgs = {inherit asdf mcp-nixos;};
+          home-manager.extraSpecialArgs = {
+            inherit mcp-nixos;
+            pkgsUnstable = import nixpkgs-unstable {
+              system = "aarch64-darwin";
+              config.allowUnfree = true;
+            };
+            pkgsEdge = import nixpkgs-edge {
+              system = "aarch64-darwin";
+              config.allowUnfree = true;
+            };
+          };
           home-manager.useGlobalPkgs = true;
           home-manager.useUserPackages = true;
           home-manager.users.vagrant = import ./hosts/macos/home.nix;

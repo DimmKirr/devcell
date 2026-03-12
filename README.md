@@ -116,7 +116,7 @@ image_tag = "latest-go"
 - [Playwright](https://playwright.dev/) — browser automation and testing
 
 ### Version Management
-- **asdf** — Node.js, Python, Go, Ruby, Terraform, OpenTofu
+- **mise** — Node.js, Go, Terraform, OpenTofu
 - **Nix** — package manager with flakes support
 
 ### Infrastructure
@@ -150,8 +150,8 @@ The image is built from composable Nix home-manager modules (`nixhome/modules/`)
 | `shell.nix` | zsh + Starship prompt, autosuggestions, syntax highlighting |
 | `base.nix` | Universal utilities (git, ripgrep, tmux, jq, fonts) |
 | `build.nix` | Native build toolchain (clang, cmake, lld) |
-| `go.nix` | Go runtime (asdf) + tooling (golangci-lint, gopls) |
-| `node.nix` | Node.js runtime (asdf) + yarn |
+| `go.nix` | Go runtime (mise) + tooling (golangci-lint, gopls) |
+| `node.nix` | Node.js runtime (mise) + yarn |
 | `python.nix` | Python3 + uv package manager |
 | `infra.nix` | Terraform, OpenTofu, packer |
 | `web.nix` | Chromium + Hugo + Playwright |

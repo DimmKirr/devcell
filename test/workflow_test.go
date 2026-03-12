@@ -114,7 +114,7 @@ func TestCellShell(t *testing.T) {
 		os.RemoveAll(configDir)
 	})
 	devcellConfigDir := filepath.Join(configDir, "devcell")
-	if err := scaffold.Scaffold(devcellConfigDir, ""); err != nil {
+	if err := scaffold.Scaffold(devcellConfigDir, "", "", false); err != nil {
 		t.Fatalf("scaffold: %v", err)
 	}
 
