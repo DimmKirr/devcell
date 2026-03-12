@@ -2,19 +2,43 @@
 # Global DevCell configuration. Project-level overrides go in <project>/.devcell.toml
 
 [cell]
-# Override the default image tag (default: latest-ultimate)
+# Override the default image tag.
+# Available tags: latest-base, latest-go, latest-node, latest-python,
+#   latest-electronics, latest-fullstack, latest-ultimate (default)
 # image_tag = "latest-go"
 # Enable GUI (Xvfb + VNC + browser). Injects DEVCELL_GUI_ENABLED=true.
 gui = true
 
+[claude]
+# Route Claude Code through a local ollama instance (Anthropic API compat).
+# Equivalent to: cell claude --ollama
+# use_ollama = false
+
+# [git]
+# Git identity forwarded into the container.
+# If omitted and no GIT_AUTHOR_* env vars are set, ~/.config/git/config is mounted read-only instead.
+# author_name = "Your Name"
+# author_email = "you@example.com"
+# committer_name = "Your Name"   # defaults to author_name if omitted
+# committer_email = "you@example.com"  # defaults to author_email if omitted
+
 [env]
 # Extra environment variables forwarded into the container.
-# ANTHROPIC_BASE_URL = "http://host.docker.internal:8080"
-# MY_TOKEN = "abc123"
+# GITHUB_TOKEN = "ghp_xxx"
+# ANTHROPIC_API_KEY = "sk-ant-xxx"
+
+[mise]
+# mise runtime settings forwarded as MISE_<UPPER_KEY> env vars.
+# See: https://mise.jdx.dev/configuration.html
+# trusted_config_paths = "/"
+# idiomatic_version_file = "true"
 
 # [[volumes]]
 # Extra volume mounts appended to docker run.
 # mount = "~/work/secrets:/run/secrets:ro"
+#
+# [[volumes]]
+# mount = "~/.ssh:/home/user/.ssh:ro"
 
 {{MODELS_SECTION}}
 
@@ -23,7 +47,7 @@ gui = true
 "@anthropic-ai/claude-code" = "2.1.49"
 "@openai/codex" = "^0.96.0"
 "@opentofu/opentofu-mcp-server" = "^0.1.5"
-"@playwright/mcp" = "^0.0.64"
+"patchright-mcp" = "^0.0.68"
 "@playwright/test" = "^1.57.0"
 "@slidev/cli" = "^52.11.0"
 "opencode-ai" = "^1.1.51"
@@ -31,3 +55,5 @@ gui = true
 [packages.python]
 # Python packages installed in the container. Edit and run 'cell build'.
 "pre-commit" = "*"
+# "httpie" = "*"
+# "pipx" = "*"

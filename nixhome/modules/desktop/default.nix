@@ -19,14 +19,68 @@
 #   libglu1-mesa / -dev        → pkgs.libGLU
 #   libtiff5-dev               → pkgs.libtiff
 #   libwxgtk3.2-1, libwxgtk-webview3.2-1 → pkgs.wxGTK32 (pname="wxwidgets" 3.2.x)
-{pkgs, ...}: {
-  # Contribute playwright MCP server to the system-level managed-mcp.json.
+{pkgs, lib, ...}:
+let
+  # Import theme — palette (c), fonts (f), and generated fluxbox cfg.
+  theme = import ./themes/main/theme.nix { inherit lib pkgs; };
+  inherit (theme) c f cfg init xresources wallpaper pixmaps;
+
+  # Stealth init-script — injected via --init-script to spoof JS-level fingerprints.
+  # Patchright handles CDP layer (Runtime.enable, launch flags);
+  # this script handles what page JS can detect.
+  stealthInitScript = pkgs.writeTextFile {
+    name = "stealth-init.js";
+    text = ''
+      // Patch navigator.webdriver (backup — Patchright handles via flag)
+      Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+
+      // Mock chrome.runtime
+      window.chrome = {
+        runtime: { connect: function(){}, sendMessage: function(){} },
+        loadTimes: function() { return {}; },
+        csi: function() { return {}; }
+      };
+
+      // Mock plugins
+      Object.defineProperty(navigator, 'plugins', {
+        get: () => [
+          { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer' },
+          { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai' },
+          { name: 'Native Client', filename: 'internal-nacl-plugin' }
+        ]
+      });
+
+      // Mock languages
+      Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+
+      // Patch permissions
+      const origQuery = window.navigator.permissions.query;
+      window.navigator.permissions.query = (params) =>
+        params.name === 'notifications'
+          ? Promise.resolve({ state: Notification.permission })
+          : origQuery(params);
+
+      // Spoof WebGL renderer (hide SwiftShader / Mesa llvmpipe)
+      const getParam = WebGLRenderingContext.prototype.getParameter;
+      WebGLRenderingContext.prototype.getParameter = function(p) {
+        if (p === 37445) return 'Intel Inc.';
+        if (p === 37446) return 'Intel Iris OpenGL Engine';
+        return getParam.call(this, p);
+      };
+    '';
+  };
+in
+{
+  # Contribute patchright MCP server to the system-level managed-mcp.json.
+  # Patchright = stealth Playwright fork — patches CDP Runtime.enable, adds
+  # playwright-extra + puppeteer-extra-plugin-stealth (triple stealth stack).
   # \${VAR} in string values → literal ${VAR} in JSON → Claude Code expands at runtime.
   devcell.managedMcp.servers.playwright = {
-    command = "playwright-mcp-cell";
+    command = "patchright-mcp-cell";
     args = [
       "--browser" "chromium"
       "--executable-path" "${pkgs.chromium}/bin/chromium"
+      "--init-script" "${stealthInitScript}"
     ];
   };
   home.packages = with pkgs; [
@@ -40,6 +94,7 @@
     xorg.xrandr # display configuration (from x11-apps)
     xorg.xset # X server settings utility
     xorg.xsetroot # solid color / background setter
+    xorg.xrdb     # X resource database — loads .Xresources (xterm colors, fonts)
 
     # Background image setter — sets wallpaper before/after fluxbox starts
     feh
@@ -49,6 +104,9 @@
 
     # Screenshot capture — used by tests to verify desktop renders
     imagemagick # provides `import` CLI for X11 screen capture
+
+    # X11 automation — simulate keyboard/mouse input, query windows
+    xdotool # (use: xdotool key ctrl+c, xdotool search --name "Firefox")
 
     # Terminal emulator — launched from fluxbox menu
     xterm
@@ -64,6 +122,7 @@
     fontconfig # font configuration (libfontconfig)
     freetype # font rendering (libfreetype6)
     libGL # OpenGL (libegl1-mesa / libgl1-mesa)
+    mesa  # Mesa 3D — provides llvmpipe software rasterizer for GLX on Xvfb
     glew # OpenGL extension library (libglew2.2)
     libGLU # OpenGL utility library (libglu1-mesa)
     libtiff # TIFF image library (libtiff5)
@@ -74,13 +133,24 @@
     # Fonts — required for Chromium and other GUI apps
     noto-fonts
     dejavu_fonts
+    nerd-fonts.jetbrains-mono  # neobrutalist UI font — fluxbox theme and xterm
+    nerd-fonts.fira-code       # popular ligature font
+    nerd-fonts.hack            # clean monospace
+    nerd-fonts.meslo-lg        # macOS Terminal default derivative
+    nerd-fonts.caskaydia-cove  # Cascadia Code Nerd Font
+    nerd-fonts.sauce-code-pro  # Source Code Pro Nerd Font
+    nerd-fonts.ubuntu-mono     # Ubuntu monospace
+    nerd-fonts.roboto-mono     # Google monospace
+    nerd-fonts.iosevka         # narrow monospace
+    nerd-fonts.victor-mono     # cursive italic monospace
+    inter          # geometric sans — fallback UI font
 
-    # Playwright MCP wrapper — sets per-app user-data-dir and forwards secrets
-    # from $USER_WORKING_DIR/.env to playwright-mcp via --secrets.
+    # Patchright MCP wrapper — sets per-app user-data-dir and forwards secrets
+    # from $USER_WORKING_DIR/.env to patchright-mcp via --secrets.
     # Key names are read from .env; resolved values come from the container env
     # (injected by docker compose env_file or op run before container start).
     # Claude sees only key names, never values.
-    (pkgs.writeShellScriptBin "playwright-mcp-cell" ''
+    (pkgs.writeShellScriptBin "patchright-mcp-cell" ''
       SECRETS_FILE=$(mktemp /tmp/pw-secrets-XXXXXX.env)
       trap 'rm -f "$SECRETS_FILE"' EXIT
 
@@ -99,9 +169,9 @@
         done < "$_ENV_FILE" >> "$SECRETS_FILE"
       fi
 
-      # No exec: keep shell alive so EXIT trap fires after playwright-mcp terminates.
+      # No exec: keep shell alive so EXIT trap fires after mcp-server-patchright terminates.
       USER_DATA_DIR="''${PLAYWRIGHT_MCP_USER_DATA_DIR:-$HOME/.playwright-''${APP_NAME:-cell}}"
-      playwright-mcp --user-data-dir "$USER_DATA_DIR" --secrets "$SECRETS_FILE" "$@"
+      mcp-server-patchright --user-data-dir "$USER_DATA_DIR" --secrets "$SECRETS_FILE" "$@"
     '')
   ];
 
@@ -116,10 +186,7 @@
   xsession.windowManager.fluxbox = {
     enable = true;
 
-    # Point menuFile at /opt/devcell so fluxbox reads it regardless of session $HOME.
-    init = ''
-      session.menuFile:	/opt/devcell/.fluxbox/menu
-    '';
+    inherit init;
 
     # Full keybindings. home-manager replaces the entire default keys file,
     # so we must include useful defaults here. Scroll-to-cycle-workspaces
@@ -164,23 +231,117 @@
     # so the compat link /nix/var/nix/profiles/per-user/$USER/profile is used correctly
     # regardless of which username the container runs as.
     menu = ''
-      [begin] (DevcCell)
+      [begin] ([*.] devcell)
         [submenu] (Applications)
           [exec] (Chromium) {sh -c 'chromium &'}
         [end]
-        [exec] (Terminal) {${pkgs.xterm}/bin/xterm}
+        [exec] (Kitty) {${pkgs.kitty}/bin/kitty}
+        [exec] (XTerm) {${pkgs.xterm}/bin/xterm}
         [separator]
         [exit] (Exit Fluxbox)
       [end]
     '';
   };
 
-  home.file.".fluxbox/wallpaper.png".source = ./wallpaper.png;
+  # ── Kitty terminal — GPU-accelerated with software fallback ───────────
+  programs.kitty = {
+    enable = true;
+    font = {
+      name = "JetBrainsMono Nerd Font";
+      size = 11;
+    };
+    settings = {
+      # ── Colors — neobrutalist palette from theme.nix ──
+      background = c.surface;
+      foreground = "#e0f0ff";
+      cursor = c.accent;
+      cursor_text_color = c.surface;
+      selection_background = "#334455";
+      selection_foreground = "#ffffff";
+      url_color = c.accent;
+      url_style = "curly";
 
-  # ── Entrypoint fragment: GUI service startup ──────────────────────────────
-  # Sourced by entrypoint.sh from /etc/devcell/entrypoint.d/ at container start.
-  # Staged there by the activation script in entrypoint.nix.
-  home.file.".config/devcell/entrypoint.d/50-gui.sh" = {
+      # ── Window borders (kitty splits, not WM) ──
+      active_border_color = c.accent;
+      inactive_border_color = c.inactive;
+      bell_border_color = c.close;
+      window_border_width = "1px";
+
+      # ── Window chrome ──
+      window_padding_width = 8;
+      hide_window_decorations = false;
+
+      # ── Rendering — software fallback for containers without GPU ──
+      linux_display_server = "x11";
+
+      # ── Bell ──
+      enable_audio_bell = false;
+      visual_bell_duration = "0.15";
+      visual_bell_color = c.raised;
+
+      # ── Scrollback ──
+      scrollback_lines = 10000;
+
+      # ── Opacity ──
+      dim_opacity = "0.7";
+      inactive_text_alpha = "0.8";
+
+      # ── Tab bar — powerline style matching toolbar ──
+      tab_bar_edge = "bottom";
+      tab_bar_style = "powerline";
+      tab_powerline_style = "slanted";
+      tab_bar_background = c.border;
+      active_tab_background = c.accent;
+      active_tab_foreground = c.border;
+      active_tab_font_style = "bold";
+      inactive_tab_background = c.raised;
+      inactive_tab_foreground = c.inactive;
+      inactive_tab_font_style = "normal";
+
+      # ── Marks (ctrl+shift+1/2/3 to highlight patterns) ──
+      mark1_background = c.accent;
+      mark1_foreground = c.border;
+      mark2_background = c.highlight;
+      mark2_foreground = c.border;
+      mark3_background = c.close;
+      mark3_foreground = c.textBright;
+
+      # ── Terminal colors (same as Xresources) ──
+      color0  = c.surface;
+      color1  = "#ff5555";
+      color2  = c.highlight;
+      color3  = "#f1fa8c";
+      color4  = "#2e86c1";
+      color5  = "#bd93f9";
+      color6  = c.accent;
+      color7  = "#bfbfbf";
+      color8  = "#555577";
+      color9  = "#ff6e6e";
+      color10 = "#c8f346";
+      color11 = "#ffffa5";
+      color12 = "#5dade2";
+      color13 = "#d6bcfa";
+      color14 = "#48d1b5";
+      color15 = c.textBright;
+    };
+  };
+
+  # ── Theme file deployment ─────────────────────────────────────────────────
+  # All visual assets: wallpaper, Xresources, fluxbox style + overlay, button pixmaps.
+  home.file = {
+    ".fluxbox/wallpaper.png".source = wallpaper;
+    ".Xresources".text = xresources;
+    ".fluxbox/styles/devcell-ocean/theme.cfg".text = cfg;
+    ".fluxbox/overlay".text = cfg;
+    ".fluxbox/apps".text = ''
+      [app] (name=.*)
+        [Tab] {no}
+        [Deco] {1087}
+      [end]
+    '';
+    # ── Entrypoint fragment: GUI service startup ────────────────────────────
+    # Sourced by entrypoint.sh from /etc/devcell/entrypoint.d/ at container start.
+    ".config/devcell/entrypoint.d/50-gui.sh" = {
     executable = true;
     text = ''
       #!/bin/bash
@@ -189,17 +350,38 @@
 
       [ "$DEVCELL_GUI_ENABLED" = "true" ] || return 0
 
+      # Ensure DBUS machine-id exists (Kitty/GTK apps need it)
+      [ -f /etc/machine-id ] || dbus-uuidgen > /etc/machine-id 2>/dev/null || true
+
       DISPLAY_NUM=99
       RESOLUTION=1920x1080x24
 
       mkdir -p /tmp/.X11-unix
       chmod 1777 /tmp/.X11-unix
 
-      log "Starting Xvfb on display :''${DISPLAY_NUM}..."
-      gosu "$USER" Xvfb :''${DISPLAY_NUM} -screen 0 ''${RESOLUTION} 2>/dev/null &
-      sleep 1
+      # Mesa llvmpipe software rendering — enables GLX for GPU terminals (Kitty etc.)
+      export LIBGL_ALWAYS_SOFTWARE=1
+      export GALLIUM_DRIVER=llvmpipe
+      export LIBGL_DRIVERS_PATH=${pkgs.mesa}/lib/dri
+      export LD_LIBRARY_PATH=${pkgs.mesa}/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
 
+      log "Starting Xvfb on display :''${DISPLAY_NUM} (+GLX, Mesa llvmpipe)..."
+      gosu "$USER" Xvfb :''${DISPLAY_NUM} -screen 0 ''${RESOLUTION} -dpi 96 +extension GLX +render +iglx 2>/dev/null &
       export DISPLAY=:''${DISPLAY_NUM}
+      # Wait for X server to accept connections (socket file appears before server is ready)
+      for i in $(seq 1 40); do
+          xset -display :''${DISPLAY_NUM} q >/dev/null 2>&1 && break
+          sleep 0.05
+      done
+
+      # Load X resources (xterm dark theme, cursor color, fonts)
+      # Deferred via background process: xrdb ChangeProperty requests sent from
+      # the entrypoint's PID 1 context are silently dropped by Xvfb. Running
+      # xrdb from a detached process after exec gosu replaces PID 1 works.
+      if [ -f "$DEVCELL_HOME/.Xresources" ]; then
+          (sleep 1; xrdb -display :''${DISPLAY_NUM} -merge "$DEVCELL_HOME/.Xresources" 2>/dev/null) &
+          disown
+      fi
 
       if [ -f "$DEVCELL_HOME/.fluxbox/wallpaper.png" ]; then
           gosu "$USER" feh --bg-fill "$DEVCELL_HOME/.fluxbox/wallpaper.png" 2>/dev/null || true
@@ -210,7 +392,7 @@
       FLUXBOX_RC=/tmp/fluxbox-init
       cp "$DEVCELL_HOME/.fluxbox/init" "$FLUXBOX_RC"
       chmod u+w "$FLUXBOX_RC"
-      WORKSPACE_NAME="''${APP_NAME:-cell}"
+      WORKSPACE_NAME=" ''${APP_NAME:-cell} "
       if grep -q "session.screen0.workspaceNames" "$FLUXBOX_RC"; then
           sed -i "s/^session.screen0.workspaceNames:.*/session.screen0.workspaceNames: ''${WORKSPACE_NAME}/" "$FLUXBOX_RC"
       else
@@ -218,15 +400,19 @@
       fi
       log "Starting fluxbox (workspace: ''${WORKSPACE_NAME})..."
       gosu "$USER" fluxbox -rc "$FLUXBOX_RC" &>/dev/null &
-      sleep 1
+      # Poll for fluxbox process instead of fixed sleep 1
+      for i in $(seq 1 20); do
+          pgrep -u "$USER" fluxbox >/dev/null 2>&1 && break
+          sleep 0.05
+      done
 
       if [ -f "$DEVCELL_HOME/.fluxbox/wallpaper.png" ]; then
           gosu "$USER" feh --bg-fill "$DEVCELL_HOME/.fluxbox/wallpaper.png" 2>/dev/null || true
       fi
 
       log "Starting x11vnc on port 5900..."
-      gosu "$USER" x11vnc -display :''${DISPLAY_NUM} -forever -passwd vnc -rfbport 5900 \
-          -desktop "''${APP_NAME:-cell}" -pointer_mode 2 -repeat &>/dev/null &
+      gosu "$USER" x11vnc -display :''${DISPLAY_NUM} -forever -nevershared -passwd vnc -rfbport 5900 \
+          -desktop "''${APP_NAME:-cell}" -pointer_mode 2 -repeat -xrandr &>/dev/null &
 
       log "VNC server ready - connect to localhost:''${EXT_VNC_PORT:-5900}"
       log "DISPLAY=:''${DISPLAY_NUM}"
@@ -234,9 +420,6 @@
       # ── xrdp (RDP gateway to existing VNC session) ────────────────────────
       XRDP_BIN=$(command -v xrdp 2>/dev/null)
       if [ -n "$XRDP_BIN" ]; then
-          # Set user password so sesman PAM auth works for RDP login
-          echo "$USER:rdp" | chpasswd
-
           XRDP_CFG="/tmp/xrdp"
           mkdir -p "$XRDP_CFG"
           XRDP_PREFIX=$(dirname "$(dirname "$(readlink -f "$XRDP_BIN")")")
@@ -245,9 +428,13 @@
           cp -a "$XRDP_PREFIX/etc/xrdp/"* "$XRDP_CFG/" 2>/dev/null || true
           chmod u+w "$XRDP_CFG/"* 2>/dev/null || true
 
+          # Pre-generate RSA keys so xrdp can read them at startup
+          # (without this, xrdp fails with "cannot read rsakeys.ini" on first connect)
+          xrdp-keygen xrdp "$XRDP_CFG/rsakeys.ini" 2>/dev/null || true
+
           # Generate self-signed SSL cert in global config dir
-          # (survives container restarts via ~/.config/devcell/xrdp/ bind mount)
-          XRDP_CERT_DIR="/etc/devcell/xrdp"
+          # (survives container restarts via ~/.config/devcell/ bind mount at /etc/devcell/config/)
+          XRDP_CERT_DIR="/etc/devcell/config/xrdp"
           mkdir -p "$XRDP_CERT_DIR"
           if [ ! -f "$XRDP_CERT_DIR/key.pem" ]; then
               openssl req -x509 -newkey rsa:2048 -nodes \
@@ -267,6 +454,7 @@
               -e "s|^certificate=.*|certificate=$XRDP_CERT_DIR/cert.pem|" \
               -e "s|^key_file=.*|key_file=$XRDP_CERT_DIR/key.pem|" \
               -e "s|^autorun=.*|autorun=vnc-any|" \
+              -e "s|^max_bpp=.*|max_bpp=24|" \
               -e "s|^LogFile=.*|LogFile=/var/log/xrdp.log|" \
               -e "s|^LogLevel=.*|LogLevel=$XRDP_LOG_LEVEL|" \
               -e "s|^#*EnableSyslog=.*|EnableSyslog=false|" \
@@ -287,36 +475,10 @@
               echo 'port=5900'
               echo "username=''${HOST_USER}"
               echo 'password=vnc'
+              echo 'xserverbpp=24'
           } >> "$XRDP_CFG/xrdp.ini"
 
-          # sesman.ini — needed by xrdp for PAM auth; logs to file only
-          {
-              echo '[Globals]'
-              echo 'EnableUserWindowManager=false'
-              echo 'DefaultWindowManager=startwm.sh'
-              echo
-              echo '[Security]'
-              echo 'AllowRootLogin=true'
-              echo 'MaxLoginRetry=3'
-              echo 'TerminalServerUsers=tsusers'
-              echo 'TerminalServerAdmins=tsadmins'
-              echo
-              echo '[Sessions]'
-              echo 'X11DisplayOffset=10'
-              echo 'MaxSessions=1'
-              echo 'KillDisconnected=false'
-              echo 'DisconnectedTimeLimit=0'
-              echo 'IdleTimeLimit=0'
-              echo
-              echo '[Logging]'
-              echo 'LogFile=/var/log/xrdp-sesman.log'
-              echo "LogLevel=$XRDP_LOG_LEVEL"
-              echo 'EnableSyslog=false'
-          } > "$XRDP_CFG/sesman.ini"
-
           log "Starting xrdp on port 3389 (RDP → VNC :''${DISPLAY_NUM})..."
-          xrdp-sesman --nodaemon --config "$XRDP_CFG/sesman.ini" >>/var/log/xrdp-sesman.log 2>&1 &
-          sleep 1
           xrdp --nodaemon --config "$XRDP_CFG/xrdp.ini" >>/var/log/xrdp.log 2>&1 &
 
           log "xrdp ready - connect to localhost:''${EXT_RDP_PORT:-3389}"
@@ -324,5 +486,6 @@
           log "xrdp not found — skipping RDP server"
       fi
     '';
-  };
+    };
+  } // pixmaps;
 }

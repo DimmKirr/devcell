@@ -1,6 +1,7 @@
 # base.nix — utilities present in every profile
 {pkgs, ...}: {
   imports = [
+    ./shell.nix
     ./entrypoint.nix
     ./managed-mcp.nix
     ./managed-claude.nix
@@ -47,6 +48,8 @@
     iosevka-bin    # best block element coverage; designed for terminals
     noto-fonts     # comprehensive Unicode incl. Noto Sans Mono
 
+    claude-code # AI coding assistant CLI
+    opencode # AI coding agent for terminal
     aria2 # download tool
     dasel # JSON/TOML/YAML/XML processor with TOML output support
     ffmpeg # media processing

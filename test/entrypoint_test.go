@@ -6,6 +6,7 @@ import (
 	"os"
 	osexec "os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -15,43 +16,11 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-// gitShortSHA returns the abbreviated commit hash of HEAD.
-func gitShortSHA(t *testing.T) string {
-	t.Helper()
-	out, err := osexec.Command("git", "rev-parse", "--short", "HEAD").Output()
-	if err != nil {
-		t.Fatalf("git rev-parse: %v", err)
-	}
-	return strings.TrimSpace(string(out))
-}
-
-// buildTestBaseImage builds the base image via docker buildx bake with a
-// unique test-specific tag. Returns the tag. Removes the image on cleanup.
-func buildTestBaseImage(t *testing.T) string {
-	t.Helper()
-	tag := fmt.Sprintf("devcell-test-base:%s-%s", gitShortSHA(t), time.Now().Format("20060102T150405"))
-	t.Logf("Building base image: %s", tag)
-
-	cmd := osexec.Command("docker", "buildx", "bake",
-		"--file", "docker-bake.hcl",
-		"--load",
-		"--set", fmt.Sprintf("local-base.tags=%s", tag),
-		"local")
-	cmd.Dir = filepath.Join("..")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("build base image: %v", err)
-	}
-	t.Cleanup(func() { osexec.Command("docker", "rmi", tag).Run() })
-	return tag
-}
-
 // buildTestUserImage builds a user image from a scaffolded config directory.
 // Returns the tag. Removes the image on cleanup.
 func buildTestUserImage(t *testing.T, configDir string) string {
 	t.Helper()
-	tag := fmt.Sprintf("devcell-test-user:%s-%s", gitShortSHA(t), time.Now().Format("20060102T150405"))
+	tag := fmt.Sprintf("devcell-test-user:%s-%s", shortSHA(), time.Now().Format("20060102T150405"))
 	t.Logf("Building user image: %s (from %s)", tag, configDir)
 
 	cmd := osexec.Command("docker", "build", "-t", tag, configDir)
@@ -83,17 +52,12 @@ func TestEntrypointFragments(t *testing.T) {
 	}
 
 	// 1. Resolve base image.
-	baseImage := os.Getenv("DEVCELL_TEST_BASE_IMAGE")
-	if baseImage == "" {
-		baseImage = buildTestBaseImage(t)
-	} else {
-		t.Logf("Using pre-built base image: %s", baseImage)
-	}
+	baseImg := baseImage()
 
 	// 2. Scaffold config dir with this base image.
 	configDir := t.TempDir()
-	t.Setenv("DEVCELL_BASE_IMAGE", baseImage)
-	if err := scaffold.Scaffold(configDir, ""); err != nil {
+	t.Setenv("DEVCELL_BASE_IMAGE", baseImg)
+	if err := scaffold.Scaffold(configDir, "", "", false); err != nil {
 		t.Fatalf("scaffold: %v", err)
 	}
 
@@ -102,10 +66,10 @@ func TestEntrypointFragments(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read Dockerfile: %v", err)
 	}
-	if !strings.HasPrefix(string(dockerfile), "FROM "+baseImage) {
+	if !strings.HasPrefix(string(dockerfile), "FROM "+baseImg) {
 		t.Fatalf("Dockerfile FROM doesn't match base image: got %.80s", string(dockerfile))
 	}
-	t.Logf("Scaffold OK: Dockerfile FROM %s", baseImage)
+	t.Logf("Scaffold OK: Dockerfile FROM %s", baseImg)
 
 	// 3. Build user image.
 	userImage := buildTestUserImage(t, configDir)
@@ -171,4 +135,94 @@ func TestEntrypointFragments(t *testing.T) {
 		}
 		t.Logf("PASS: xrdp listening on :3389\n%s", out)
 	})
+}
+
+// TestEntrypointDebugTimestamps verifies that DEVCELL_DEBUG=true produces
+// timestamped log lines in the format [X.XXXs].
+func TestEntrypointDebugTimestamps(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode")
+	}
+	img := baseImage()
+
+	out, err := osexec.Command("docker", "run", "--rm",
+		"--user", "0",
+		"-e", "HOST_USER=testuser",
+		"-e", "APP_NAME=tstest",
+		"-e", "DEVCELL_DEBUG=true",
+		img,
+		"echo", "ready",
+	).CombinedOutput()
+	if err != nil {
+		t.Fatalf("docker run: %v\noutput: %s", err, out)
+	}
+
+	output := string(out)
+	t.Logf("Debug output:\n%s", output)
+
+	// Every log line should have a timestamp like [0.123s] or [1.456s]
+	tsPattern := regexp.MustCompile(`\[\d+\.\d{3}s\]`)
+	if !tsPattern.MatchString(output) {
+		t.Fatalf("FAIL: no timestamped log lines found (expected [X.XXXs] format)")
+	}
+
+	// Verify multiple log lines have timestamps (not just one)
+	matches := tsPattern.FindAllString(output, -1)
+	t.Logf("PASS: found %d timestamped log lines", len(matches))
+	if len(matches) < 2 {
+		t.Errorf("expected at least 2 timestamped lines, got %d", len(matches))
+	}
+
+	// Verify no log lines WITHOUT timestamps (lines that look like log output but lack [X.XXXs])
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || line == "ready" {
+			continue
+		}
+		// Lines starting with ✓ or containing known log markers should have timestamps
+		if (strings.Contains(line, "✓") || strings.Contains(line, "Installing") ||
+			strings.Contains(line, "Starting") || strings.Contains(line, "Merging")) &&
+			!tsPattern.MatchString(line) {
+			t.Errorf("FAIL: log line missing timestamp: %s", line)
+		}
+	}
+}
+
+// TestEntrypointSilentWithoutDebug verifies that without DEVCELL_DEBUG, the
+// entrypoint produces no log output (spinner is now in the Go CLI, not the entrypoint).
+func TestEntrypointSilentWithoutDebug(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping in short mode")
+	}
+	img := baseImage()
+
+	out, err := osexec.Command("docker", "run", "--rm",
+		"--user", "0",
+		"-e", "HOST_USER=testuser",
+		"-e", "APP_NAME=myapp42",
+		img,
+		"echo", "ready",
+	).CombinedOutput()
+	if err != nil {
+		t.Fatalf("docker run: %v\noutput: %s", err, out)
+	}
+
+	output := string(out)
+	t.Logf("Non-debug output:\n%s", output)
+
+	// No debug timestamps should appear
+	tsPattern := regexp.MustCompile(`\[\d+\.\d{3}s\]`)
+	if tsPattern.MatchString(output) {
+		t.Errorf("FAIL: debug timestamps found in non-debug mode")
+	} else {
+		t.Logf("PASS: no debug timestamps in non-debug mode")
+	}
+
+	// No verbose log lines should appear
+	for _, marker := range []string{"Installing global tool", "Starting Xvfb", "Starting fluxbox", "Merging Claude"} {
+		if strings.Contains(output, marker) {
+			t.Errorf("FAIL: debug log line leaked in non-debug mode: %s", marker)
+		}
+	}
+	t.Logf("PASS: no debug log lines leaked")
 }

@@ -13,7 +13,7 @@ import (
 
 func TestScaffold_CreatesAllFiles(t *testing.T) {
 	dir := t.TempDir()
-	if err := scaffold.Scaffold(dir, ""); err != nil {
+	if err := scaffold.Scaffold(dir, "", "", false); err != nil {
 		t.Fatalf("Scaffold failed: %v", err)
 	}
 	for _, name := range []string{"Dockerfile", "flake.nix", "devcell.toml"} {
@@ -25,7 +25,7 @@ func TestScaffold_CreatesAllFiles(t *testing.T) {
 
 func TestScaffold_Idempotent(t *testing.T) {
 	dir := t.TempDir()
-	if err := scaffold.Scaffold(dir, ""); err != nil {
+	if err := scaffold.Scaffold(dir, "", "", false); err != nil {
 		t.Fatal(err)
 	}
 	// Overwrite Dockerfile with sentinel content
@@ -34,7 +34,7 @@ func TestScaffold_Idempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Scaffold again — must not overwrite
-	if err := scaffold.Scaffold(dir, ""); err != nil {
+	if err := scaffold.Scaffold(dir, "", "", false); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(filepath.Join(dir, "Dockerfile"))
@@ -48,7 +48,7 @@ func TestScaffold_Idempotent(t *testing.T) {
 
 func TestScaffold_DockerfileStartsWithFROM(t *testing.T) {
 	dir := t.TempDir()
-	if err := scaffold.Scaffold(dir, ""); err != nil {
+	if err := scaffold.Scaffold(dir, "", "", false); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(filepath.Join(dir, "Dockerfile"))
@@ -74,7 +74,7 @@ func TestScaffold_DefaultBaseImageIsRemote(t *testing.T) {
 func TestScaffold_BaseImageOverride(t *testing.T) {
 	t.Setenv("DEVCELL_BASE_IMAGE", "myregistry.io/devcell:test-v42")
 	dir := t.TempDir()
-	if err := scaffold.Scaffold(dir, ""); err != nil {
+	if err := scaffold.Scaffold(dir, "", "", false); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(filepath.Join(dir, "Dockerfile"))
@@ -88,7 +88,7 @@ func TestScaffold_BaseImageOverride(t *testing.T) {
 // pre-installed in the base image; scaffold must NOT duplicate it.
 func TestScaffold_DockerfileDoesNotInstallHomeManager(t *testing.T) {
 	dir := t.TempDir()
-	if err := scaffold.Scaffold(dir, ""); err != nil {
+	if err := scaffold.Scaffold(dir, "", "", false); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(filepath.Join(dir, "Dockerfile"))
@@ -102,7 +102,7 @@ func TestScaffold_DockerfileDoesNotInstallHomeManager(t *testing.T) {
 // home-manager switch to activate the profile from the user flake.
 func TestScaffold_DockerfileRunsHomeManagerSwitch(t *testing.T) {
 	dir := t.TempDir()
-	if err := scaffold.Scaffold(dir, ""); err != nil {
+	if err := scaffold.Scaffold(dir, "", "", false); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(filepath.Join(dir, "Dockerfile"))
@@ -115,7 +115,7 @@ func TestScaffold_DockerfileRunsHomeManagerSwitch(t *testing.T) {
 // GitHub (not path:/opt/nixhome), so users can point to any nixhome source.
 func TestScaffold_FlakeNixUsesGitHubURL(t *testing.T) {
 	dir := t.TempDir()
-	if err := scaffold.Scaffold(dir, ""); err != nil {
+	if err := scaffold.Scaffold(dir, "", "", false); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(filepath.Join(dir, "flake.nix"))
@@ -130,7 +130,7 @@ func TestScaffold_FlakeNixUsesGitHubURL(t *testing.T) {
 
 func TestScaffold_DevcellTomlIsValidTOML(t *testing.T) {
 	dir := t.TempDir()
-	if err := scaffold.Scaffold(dir, ""); err != nil {
+	if err := scaffold.Scaffold(dir, "", "", false); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(filepath.Join(dir, "devcell.toml"))
@@ -142,7 +142,7 @@ func TestScaffold_DevcellTomlIsValidTOML(t *testing.T) {
 
 func TestScaffold_FlakeNixContainsUpstreamURL(t *testing.T) {
 	dir := t.TempDir()
-	if err := scaffold.Scaffold(dir, ""); err != nil {
+	if err := scaffold.Scaffold(dir, "", "", false); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(filepath.Join(dir, "flake.nix"))
@@ -153,7 +153,7 @@ func TestScaffold_FlakeNixContainsUpstreamURL(t *testing.T) {
 
 func TestScaffold_FlakeNixVersionSubstituted(t *testing.T) {
 	dir := t.TempDir()
-	if err := scaffold.Scaffold(dir, ""); err != nil {
+	if err := scaffold.Scaffold(dir, "", "", false); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(filepath.Join(dir, "flake.nix"))
@@ -225,7 +225,7 @@ func TestScaffoldVagrantfile_Idempotent(t *testing.T) {
 func TestScaffold_WithModelsSnippet_InjectsIntoToml(t *testing.T) {
 	dir := t.TempDir()
 	snippet := "# [models]\n# default = \"ollama/deepseek-r1:70b\"\n# [models.providers.ollama]\n# models = [\"deepseek-r1:70b\", \"qwen3:32b\"]\n"
-	if err := scaffold.Scaffold(dir, snippet); err != nil {
+	if err := scaffold.Scaffold(dir, snippet, "", false); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(filepath.Join(dir, "devcell.toml"))
@@ -240,7 +240,7 @@ func TestScaffold_WithModelsSnippet_InjectsIntoToml(t *testing.T) {
 
 func TestScaffold_EmptySnippet_UsesDefaultModelsSection(t *testing.T) {
 	dir := t.TempDir()
-	if err := scaffold.Scaffold(dir, ""); err != nil {
+	if err := scaffold.Scaffold(dir, "", "", false); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(filepath.Join(dir, "devcell.toml"))
@@ -254,7 +254,7 @@ func TestScaffold_EmptySnippet_UsesDefaultModelsSection(t *testing.T) {
 func TestScaffold_WithSnippet_StillValidTOML(t *testing.T) {
 	dir := t.TempDir()
 	snippet := "# [models]\n# default = \"ollama/deepseek-r1:70b\"\n# [models.providers.ollama]\n# models = [\"deepseek-r1:70b\"]\n"
-	if err := scaffold.Scaffold(dir, snippet); err != nil {
+	if err := scaffold.Scaffold(dir, snippet, "", false); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(filepath.Join(dir, "devcell.toml"))
@@ -303,5 +303,138 @@ func TestScaffoldVagrantfile_EmptyNixhomeKeepsEnvFallback(t *testing.T) {
 	data, _ := os.ReadFile(filepath.Join(dir, "Vagrantfile"))
 	if !strings.Contains(string(data), "NIXHOME_PATH") {
 		t.Error("NIXHOME_PATH env fallback missing from Vagrantfile")
+	}
+}
+
+// --- DEVCELL_NIXHOME_PATH support ---
+
+// TestScaffold_WithNixhomePath_FlakeUsesPathInput — when nixhomePath is set,
+// flake.nix must use path:./nixhome instead of GitHub URL.
+func TestScaffold_WithNixhomePath_FlakeUsesPathInput(t *testing.T) {
+	dir := t.TempDir()
+	if err := scaffold.Scaffold(dir, "", "/some/local/nixhome", false); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, "flake.nix"))
+	s := string(data)
+	if !strings.Contains(s, `inputs.devcell.url = "path:./nixhome"`) {
+		t.Errorf("flake.nix must have inputs.devcell.url = path:./nixhome when nixhomePath is set, got:\n%s", s)
+	}
+	// The active (non-comment) URL line must not be a github: URL.
+	for _, line := range strings.Split(s, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if strings.Contains(trimmed, "inputs.devcell.url") && strings.Contains(trimmed, "github:") {
+			t.Errorf("active inputs.devcell.url must not use github: when nixhomePath is set, got line: %s", trimmed)
+		}
+	}
+}
+
+// TestScaffold_WithNixhomePath_DockerfileCopiesNixhome — when nixhomePath is set,
+// Dockerfile must COPY nixhome/ into the build context before flake.nix.
+func TestScaffold_WithNixhomePath_DockerfileCopiesNixhome(t *testing.T) {
+	dir := t.TempDir()
+	if err := scaffold.Scaffold(dir, "", "/some/local/nixhome", false); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, "Dockerfile"))
+	s := string(data)
+	nixhomeCopyLine := "COPY --chown=devcell:usergroup nixhome/"
+	if !strings.Contains(s, nixhomeCopyLine) {
+		t.Errorf("Dockerfile must COPY nixhome/ when nixhomePath is set, got:\n%s", s)
+	}
+	// nixhome COPY must appear before flake.nix COPY
+	nixhomeIdx := strings.Index(s, nixhomeCopyLine)
+	flakeCopyIdx := strings.Index(s, "COPY --chown=devcell:usergroup flake.nix")
+	if nixhomeIdx < 0 || flakeCopyIdx < 0 || nixhomeIdx > flakeCopyIdx {
+		t.Errorf("nixhome/ COPY must appear before flake.nix COPY in Dockerfile")
+	}
+}
+
+// TestScaffold_WithoutNixhomePath_DockerfileNoCopyNixhome — when nixhomePath is empty,
+// Dockerfile must NOT contain a COPY nixhome/ line (no regression).
+func TestScaffold_WithoutNixhomePath_DockerfileNoCopyNixhome(t *testing.T) {
+	dir := t.TempDir()
+	if err := scaffold.Scaffold(dir, "", "", false); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, "Dockerfile"))
+	s := string(data)
+	if strings.Contains(s, "COPY") && strings.Contains(s, "nixhome/") {
+		t.Errorf("Dockerfile must NOT COPY nixhome/ when nixhomePath is empty, got:\n%s", s)
+	}
+}
+
+// TestSyncNixhome_CopiesDirectory — SyncNixhome copies nixhome dir into configDir/nixhome/.
+func TestSyncNixhome_CopiesDirectory(t *testing.T) {
+	// Create a fake nixhome source with a marker file
+	srcDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(srcDir, "modules"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "flake.nix"), []byte("# nixhome flake"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "modules", "base.nix"), []byte("# base"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	configDir := t.TempDir()
+	if err := scaffold.SyncNixhome(srcDir, configDir); err != nil {
+		t.Fatalf("SyncNixhome failed: %v", err)
+	}
+
+	// Verify files were copied
+	dest := filepath.Join(configDir, "nixhome", "flake.nix")
+	data, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("expected %s to exist: %v", dest, err)
+	}
+	if string(data) != "# nixhome flake" {
+		t.Errorf("expected copied flake.nix content, got: %s", string(data))
+	}
+
+	// Verify subdirectory was copied
+	subDest := filepath.Join(configDir, "nixhome", "modules", "base.nix")
+	if _, err := os.Stat(subDest); err != nil {
+		t.Errorf("expected %s to exist: %v", subDest, err)
+	}
+}
+
+// TestSyncNixhome_ErrorOnMissingPath — SyncNixhome returns error for non-existent source.
+func TestSyncNixhome_ErrorOnMissingPath(t *testing.T) {
+	configDir := t.TempDir()
+	err := scaffold.SyncNixhome("/nonexistent/nixhome", configDir)
+	if err == nil {
+		t.Error("expected error for non-existent nixhome path, got nil")
+	}
+}
+
+// TestSyncNixhome_OverwritesExisting — SyncNixhome replaces previous nixhome copy (fresh each build).
+func TestSyncNixhome_OverwritesExisting(t *testing.T) {
+	srcDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(srcDir, "flake.nix"), []byte("# v2"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	configDir := t.TempDir()
+	// Pre-populate with stale content
+	staleDir := filepath.Join(configDir, "nixhome")
+	if err := os.MkdirAll(staleDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staleDir, "flake.nix"), []byte("# v1"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := scaffold.SyncNixhome(srcDir, configDir); err != nil {
+		t.Fatal(err)
+	}
+
+	data, _ := os.ReadFile(filepath.Join(configDir, "nixhome", "flake.nix"))
+	if string(data) != "# v2" {
+		t.Errorf("SyncNixhome should overwrite stale content, got: %s", string(data))
 	}
 }

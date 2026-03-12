@@ -12,11 +12,19 @@ export HOME="/home/$HOST_USER"
 
 # ── Verbose logging — only active when DEVCELL_DEBUG=true ─────────────────────
 # Default is silent so containers launched without the flag stay quiet.
+# Debug mode includes elapsed time since entrypoint start for profiling.
+_ENTRYPOINT_T0=$(($(date +%s%N) / 1000000))
 if [ "${DEVCELL_DEBUG:-false}" = "true" ]; then
-    log() { echo "$@"; }
+    log() {
+        local _ms=$(( $(date +%s%N) / 1000000 - _ENTRYPOINT_T0 ))
+        printf '[%d.%03ds] %s\n' $((_ms/1000)) $((_ms%1000)) "$*"
+    }
 else
     log() { :; }
 fi
+
+
+log "Entrypoint start (user=$HOST_USER app=${APP_NAME:-})"
 
 # ── Create session user if needed ─────────────────────────────────────────────
 if ! id "$HOST_USER" &>/dev/null; then
@@ -39,7 +47,7 @@ if [ -S /var/run/docker.sock ]; then
 fi
 
 mkdir -p "$HOME/.local/bin" "$HOME/tmp"
-chown "$HOST_USER" "$HOME/.local/bin" "$HOME/tmp"
+chown "$HOST_USER" "$HOME/.local" "$HOME/.local/bin" "$HOME/tmp"
 
 # ── Give session user access to devcell's nix environment ─────────────────────
 # nix.sh resolves $HOME/.nix-profile to find nix tools. Create a symlink so
@@ -50,45 +58,58 @@ ln -sfT "$(readlink -f /opt/devcell/.nix-profile)" "$HOME/.nix-profile"
 # .profile sources nix.sh from the literal /opt/devcell path — copy as-is so
 # nix stays in PATH. hm-session-vars.sh hardcodes GOPATH=/opt/devcell/go, so
 # we append explicit overrides pointing write paths at session $HOME.
-for file in .bashrc .zshrc .profile; do
+for file in .bashrc .zshrc .zshenv .profile; do
     if [ -f "$DEVCELL_HOME/$file" ]; then
         cp "$DEVCELL_HOME/$file" "$HOME/$file"
         # Override write-path vars set by hm-session-vars.sh, and session identity.
         # Explicitly include nix profile bin via compat symlink (world-readable);
         # /opt/devcell/ is 700 so testuser cannot follow the .nix-profile symlink there.
-        printf '\n# -- devcell session user overrides --\nexport USER="%s"\nexport GOPATH="%s/go"\nexport ASDF_DATA_DIR="%s/.asdf"\nexport PATH="%s/go/bin:/nix/var/nix/profiles/per-user/devcell/profile/bin:%s/.asdf/shims:/opt/python-tools/.venv/bin:/opt/npm-tools/node_modules/.bin${PATH:+:}${PATH}"\n' \
-            "$HOST_USER" "$HOME" "$HOME" "$HOME" "$HOME" >> "$HOME/$file"
+        printf '\n# -- devcell session user overrides --\nexport USER="%s"\nexport GOPATH="%s/go"\nexport MISE_DATA_DIR="%s/.local/share/mise"\nexport HISTFILE="%s/.zsh_history"\nexport PATH="%s/go/bin:/nix/var/nix/profiles/per-user/devcell/profile/bin:%s/.local/share/mise/shims:/opt/python-tools/.venv/bin:/opt/npm-tools/node_modules/.bin${PATH:+:}${PATH}"\n' \
+            "$HOST_USER" "$HOME" "$HOME" "$HOME" "$HOME" "$HOME" >> "$HOME/$file"
         chown "$HOST_USER" "$HOME/$file"
     fi
 done
 
-for file in .asdfrc .tool-versions; do
+for file in .tool-versions; do
     [ -e "$DEVCELL_HOME/$file" ] && [ ! -e "$HOME/$file" ] \
         && cp -r "$DEVCELL_HOME/$file" "$HOME/$file" && chown -R "$HOST_USER" "$HOME/$file"
 done
 
-# ── Setup ~/.asdf (user-persisted ASDF_DATA_DIR) ──────────────────────────────
-# /opt/asdf holds baked-in installs (ephemeral, reset on each container start).
-# ~/.asdf (CellHome, bind-mounted) holds user-installed versions that persist.
-# Baked-in versions are symlinked per-version into ~/.asdf so asdf resolves both
-# through a single ASDF_DATA_DIR without copying data.
-setup_asdf_home() {
-    local baked="/opt/asdf"
-    local user_asdf="$HOME/.asdf"
-    local asdf_bin="/nix/var/nix/profiles/per-user/devcell/profile/bin/asdf"
+# Copy mise config from nix build to session user home
+if [ -d "$DEVCELL_HOME/.config/mise" ] && [ ! -d "$HOME/.config/mise" ]; then
+    mkdir -p "$HOME/.config"
+    cp -r "$DEVCELL_HOME/.config/mise" "$HOME/.config/"
+    chown -R "$HOST_USER" "$HOME/.config/mise"
+fi
 
-    mkdir -p "$user_asdf/installs" "$user_asdf/plugins" "$user_asdf/shims"
+# Copy default-npm-packages for auto-install after Node.js
+if [ -f "$DEVCELL_HOME/.default-npm-packages" ] && [ ! -f "$HOME/.default-npm-packages" ]; then
+    cp "$DEVCELL_HOME/.default-npm-packages" "$HOME/.default-npm-packages"
+    chown "$HOST_USER" "$HOME/.default-npm-packages"
+fi
+
+# ── Setup ~/.local/share/mise (user-persisted MISE_DATA_DIR) ─────────────────
+# /opt/mise holds baked-in installs (ephemeral, reset on each container start).
+# ~/.local/share/mise (CellHome, bind-mounted) holds user-installed versions
+# that persist. Baked-in versions are symlinked per-version so mise resolves
+# both through a single MISE_DATA_DIR without copying data.
+setup_mise_home() {
+    local baked="/opt/mise"
+    local user_mise="$HOME/.local/share/mise"
+    local mise_bin="/nix/var/nix/profiles/per-user/devcell/profile/bin/mise"
+
+    mkdir -p "$user_mise/installs" "$user_mise/shims"
 
     # Symlink each baked-in tool version individually so user installs can coexist
     # as real directories alongside the symlinks.
     for tool_dir in "$baked/installs"/*/; do
         [ -d "$tool_dir" ] || continue
         tool_name=$(basename "$tool_dir")
-        mkdir -p "$user_asdf/installs/$tool_name"
+        mkdir -p "$user_mise/installs/$tool_name"
 
         # Remove dangling symlinks left by superseded image versions.
         # Use * (not */) so dangling symlinks (no live target) are included.
-        for link in "$user_asdf/installs/$tool_name"/*; do
+        for link in "$user_mise/installs/$tool_name"/*; do
             if [ -L "$link" ] && [ ! -e "$link" ]; then rm -f "$link"; fi
         done
 
@@ -96,53 +117,70 @@ setup_asdf_home() {
         for ver_dir in "$tool_dir"*/; do
             [ -d "$ver_dir" ] || continue
             ver_name=$(basename "$ver_dir")
-            dest="$user_asdf/installs/$tool_name/$ver_name"
+            dest="$user_mise/installs/$tool_name/$ver_name"
             # Never overwrite a real directory (user-installed version).
             [ -d "$dest" ] && [ ! -L "$dest" ] && continue
             ln -sfT "$ver_dir" "$dest"
         done
     done
 
-    # Symlink baked-in plugins (only if not already a real/user-managed dir).
-    for plugin_dir in "$baked/plugins"/*/; do
-        [ -d "$plugin_dir" ] || continue
-        plugin_name=$(basename "$plugin_dir")
-        dest="$user_asdf/plugins/$plugin_name"
-        [ -d "$dest" ] && [ ! -L "$dest" ] && continue
-        ln -sfT "$plugin_dir" "$dest"
-    done
+    chown -R "$HOST_USER" "$user_mise"
 
-    chown -R "$HOST_USER" "$user_asdf"
-
-    # Regenerate shims into ~/.asdf/shims for all currently visible installs.
-    ASDF_DATA_DIR="$user_asdf" HOME="$HOME" "$asdf_bin" reshim 2>/dev/null || true
+    # Regenerate shims for all currently visible installs.
+    MISE_DATA_DIR="$user_mise" HOME="$HOME" "$mise_bin" reshim 2>/dev/null || true
 
     # Install any versions listed in ~/.tool-versions that aren't baked.
-    # Runs on first start (or after user edits the file); subsequent starts are
-    # instant because installed versions persist in the cell home.
+    # Skips if the file hasn't changed since the last successful install
+    # (checksum stored in mise data dir). First start or edits trigger a full check.
     if [ -f "$HOME/.tool-versions" ]; then
-        log "Installing global tool versions from ~/.tool-versions..."
-        (cd "$HOME" && ASDF_DATA_DIR="$user_asdf" HOME="$HOME" USER="$HOST_USER" \
-            "$asdf_bin" install 2>&1) | while IFS= read -r line; do log "$line"; done || true
-        chown -R "$HOST_USER" "$user_asdf"
+        local tv_sha
+        tv_sha=$(sha256sum "$HOME/.tool-versions" 2>/dev/null | cut -d' ' -f1)
+        if [ -f "$user_mise/.tv-global.sha" ] && [ "$(cat "$user_mise/.tv-global.sha" 2>/dev/null)" = "$tv_sha" ]; then
+            log "Global .tool-versions unchanged, skipping install"
+        else
+            log "Installing global tool versions from ~/.tool-versions..."
+            (cd "$HOME" && MISE_DATA_DIR="$user_mise" HOME="$HOME" USER="$HOST_USER" \
+                "$mise_bin" install -y 2>&1) | while IFS= read -r line; do log "$line"; done || true
+            chown -R "$HOST_USER" "$user_mise"
+            echo "$tv_sha" > "$user_mise/.tv-global.sha"
+        fi
     fi
 
     # If the workspace has a .tool-versions, install any missing versions now so
-    # they land in ~/.asdf (CellHome) and persist — no re-download on next start.
+    # they land in ~/.local/share/mise (CellHome) and persist — no re-download on next start.
     local workspace="/${APP_NAME:-}"
     if [ -n "$APP_NAME" ] && [ -f "$workspace/.tool-versions" ]; then
-        log "Installing workspace tool versions from $workspace/.tool-versions..."
-        (cd "$workspace" && ASDF_DATA_DIR="$user_asdf" HOME="$HOME" USER="$HOST_USER" \
-            "$asdf_bin" install 2>&1) | while IFS= read -r line; do log "$line"; done || true
-        chown -R "$HOST_USER" "$user_asdf"
+        local ws_sha
+        ws_sha=$(sha256sum "$workspace/.tool-versions" 2>/dev/null | cut -d' ' -f1)
+        if [ -f "$user_mise/.tv-workspace.sha" ] && [ "$(cat "$user_mise/.tv-workspace.sha" 2>/dev/null)" = "$ws_sha" ]; then
+            log "Workspace .tool-versions unchanged, skipping install"
+        else
+            log "Installing workspace tool versions from $workspace/.tool-versions..."
+            MISE_DATA_DIR="$user_mise" "$mise_bin" trust "$workspace/.tool-versions" 2>/dev/null || true
+            (cd "$workspace" && MISE_DATA_DIR="$user_mise" HOME="$HOME" USER="$HOST_USER" \
+                "$mise_bin" install -y 2>&1) | while IFS= read -r line; do log "$line"; done || true
+            chown -R "$HOST_USER" "$user_mise"
+            echo "$ws_sha" > "$user_mise/.tv-workspace.sha"
+        fi
     fi
 }
-setup_asdf_home
+setup_mise_home
 
 if [ -d "$DEVCELL_HOME/.config/nix" ] && [ ! -d "$HOME/.config/nix" ]; then
     mkdir -p "$HOME/.config"
     cp -r "$DEVCELL_HOME/.config/nix" "$HOME/.config/"
-    chown -R "$HOST_USER" "$HOME/.config/nix"
+    chown -R "$HOST_USER" "$HOME/.config"
+fi
+
+# ── Copy starship config — project homedir wins over nix default ─────────────
+if [ -f "$REPO_HOMEDIR/.config/starship.toml" ]; then
+    mkdir -p "$HOME/.config"
+    cp "$REPO_HOMEDIR/.config/starship.toml" "$HOME/.config/"
+    chown "$HOST_USER" "$HOME/.config/starship.toml"
+elif [ -f "$DEVCELL_HOME/.config/starship.toml" ]; then
+    mkdir -p "$HOME/.config"
+    cp "$DEVCELL_HOME/.config/starship.toml" "$HOME/.config/"
+    chown "$HOST_USER" "$HOME/.config/starship.toml"
 fi
 
 # ── Copy from repo's homedir/ (project-specific overrides) ───────────────────
@@ -185,6 +223,7 @@ merge_claude_nix() {
         mkdir -p "$HOME/.claude/hooks"
         cp -r "$nix_hooks_dir/"* "$HOME/.claude/hooks/" 2>/dev/null || true
         find "$HOME/.claude/hooks" -type f -name "*.sh" -exec chmod +x {} \; 2>/dev/null || true
+        chown -R "$HOST_USER" "$HOME/.claude"
         log "✓ Claude hooks installed from nix"
     fi
     if [ -f "$nix_settings" ]; then
@@ -561,10 +600,12 @@ fi
 export CHROMIUM_PROFILE_PATH="${HOME}/.chrome-${APP_NAME:-cell}"
 export PLAYWRIGHT_MCP_USER_DATA_DIR="${HOME}/.playwright-${APP_NAME:-cell}"
 
-# Ensure ASDF_DATA_DIR and shims are correct for exec'd processes (e.g. claude)
+# Ensure MISE_DATA_DIR and shims are correct for exec'd processes (e.g. claude)
 # that don't source shell rc files and would otherwise inherit the container ENV
-# which still points at the ephemeral /opt/asdf.
-export ASDF_DATA_DIR="${HOME}/.asdf"
-export PATH="${HOME}/.asdf/shims:${PATH}"
+# which still points at the ephemeral /opt/mise.
+export MISE_DATA_DIR="${HOME}/.local/share/mise"
+export PATH="${HOME}/.local/share/mise/shims:${PATH}"
+
+log "Entrypoint ready — exec $*"
 
 exec gosu "$USER" "$@"

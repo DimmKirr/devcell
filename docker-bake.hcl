@@ -46,6 +46,7 @@ target "_base-args" {
     USER_UID  = USER_UID
     USER_GID  = USER_GID
   }
+
 }
 
 # ── Profile image targets ────────────────────────────────────────────────────
@@ -62,8 +63,8 @@ target "base" {
     "${REGISTRY}:${VERSION}-base",
     "${REGISTRY}:${VERSION}",
   ]
-  cache-from = ["type=gha,scope=base"]
-  cache-to   = ["type=gha,mode=max,scope=base"]
+  cache-from = ["type=registry,ref=${REGISTRY}:cache-base"]
+  cache-to   = ["type=registry,ref=${REGISTRY}:cache-base,mode=max"]
 }
 
 target "go" {
@@ -73,8 +74,8 @@ target "go" {
   target     = "go"
   platforms  = split(",", PLATFORMS)
   tags       = ["${REGISTRY}:${VERSION}-go"]
-  cache-from = ["type=gha,scope=go"]
-  cache-to   = ["type=gha,mode=max,scope=go"]
+  cache-from = ["type=registry,ref=${REGISTRY}:cache-go"]
+  cache-to   = ["type=registry,ref=${REGISTRY}:cache-go,mode=max"]
 }
 
 target "node" {
@@ -84,8 +85,8 @@ target "node" {
   target     = "node"
   platforms  = split(",", PLATFORMS)
   tags       = ["${REGISTRY}:${VERSION}-node"]
-  cache-from = ["type=gha,scope=node"]
-  cache-to   = ["type=gha,mode=max,scope=node"]
+  cache-from = ["type=registry,ref=${REGISTRY}:cache-node"]
+  cache-to   = ["type=registry,ref=${REGISTRY}:cache-node,mode=max"]
 }
 
 target "python" {
@@ -95,8 +96,8 @@ target "python" {
   target     = "python"
   platforms  = split(",", PLATFORMS)
   tags       = ["${REGISTRY}:${VERSION}-python"]
-  cache-from = ["type=gha,scope=python"]
-  cache-to   = ["type=gha,mode=max,scope=python"]
+  cache-from = ["type=registry,ref=${REGISTRY}:cache-python"]
+  cache-to   = ["type=registry,ref=${REGISTRY}:cache-python,mode=max"]
 }
 
 target "electronics" {
@@ -106,8 +107,8 @@ target "electronics" {
   target     = "electronics"
   platforms  = split(",", PLATFORMS)
   tags       = ["${REGISTRY}:${VERSION}-electronics"]
-  cache-from = ["type=gha,scope=electronics"]
-  cache-to   = ["type=gha,mode=max,scope=electronics"]
+  cache-from = ["type=registry,ref=${REGISTRY}:cache-electronics"]
+  cache-to   = ["type=registry,ref=${REGISTRY}:cache-electronics,mode=max"]
 }
 
 # fullstack — all language tools (backward-compatible tag: latest-fullstack)
@@ -120,8 +121,8 @@ target "fullstack" {
   tags = [
     "${REGISTRY}:${VERSION}-fullstack",
   ]
-  cache-from = ["type=gha,scope=fullstack"]
-  cache-to   = ["type=gha,mode=max,scope=fullstack"]
+  cache-from = ["type=registry,ref=${REGISTRY}:cache-fullstack"]
+  cache-to   = ["type=registry,ref=${REGISTRY}:cache-fullstack,mode=max"]
 }
 
 # ultimate — fullstack + desktop + KiCad, ngspice, libspnav, poppler
@@ -134,8 +135,8 @@ target "ultimate" {
   tags = [
     "${REGISTRY}:${VERSION}-ultimate",
   ]
-  cache-from = ["type=gha,scope=ultimate"]
-  cache-to   = ["type=gha,mode=max,scope=ultimate"]
+  cache-from = ["type=registry,ref=${REGISTRY}:cache-ultimate"]
+  cache-to   = ["type=registry,ref=${REGISTRY}:cache-ultimate,mode=max"]
 }
 
 # ── Groups ────────────────────────────────────────────────────────────────────
@@ -157,16 +158,22 @@ group "release" {
 
 # local-base: base tagged for local scaffold Dockerfile use (FROM ghcr.io/dimmkirr/devcell:base-local)
 target "local-base" {
-  inherits = ["base"]
-  tags = ["ghcr.io/dimmkirr/devcell:base-local"]
-  pull = false
+  inherits   = ["base"]
+  tags       = ["ghcr.io/dimmkirr/devcell:base-local"]
+  platforms  = []
+  pull       = false
+  cache-from = []
+  cache-to   = []
 }
 
 # local-ultimate: ultimate profile for local testing (uses local nixhome/)
 target "local-ultimate" {
-  inherits = ["ultimate"]
-  tags = ["ghcr.io/dimmkirr/devcell:ultimate-local"]
-  pull = false
+  inherits   = ["ultimate"]
+  tags       = ["ghcr.io/dimmkirr/devcell:ultimate-local"]
+  platforms  = []
+  pull       = false
+  cache-from = []
+  cache-to   = []
 }
 
 # local: load into local Docker daemon (no push, no multi-arch)

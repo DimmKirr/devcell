@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 
 	"github.com/DimmKirr/devcell/internal/config"
@@ -14,18 +15,28 @@ import (
 )
 
 var rdpCmd = &cobra.Command{
-	Use:   "rdp",
+	Use:   "rdp [app-name or suffix]",
 	Short: "Open RDP connection to the running devcell container",
-	RunE:  runRDP,
+	Long: `Open an RDP connection to a running devcell container.
+
+When multiple containers are running, specify which one by app name or
+just the numeric suffix:
+
+    cell rdp devcell-271
+    cell rdp 271`,
+	Args:              cobra.MaximumNArgs(1),
+	RunE:              runRDP,
+	ValidArgsFunction: completeRunningApps,
 }
 
 func init() {
 	rdpCmd.Flags().Bool("list", false, "list all running cell containers and their RDP ports")
-	rdpCmd.Flags().String("app", "", "open RDP to a named container (by AppName)")
 	rdpCmd.Flags().Bool("verbose", false, "show debug info for RDP port lookup")
+	rdpCmd.Flags().Bool("fullscreen", false, "open RDP session in fullscreen mode")
+	rdpCmd.Flags().String("viewer", "", "RDP viewer: freerdp (default), macrdp, royaltsx")
 }
 
-func runRDP(cmd *cobra.Command, _ []string) error {
+func runRDP(cmd *cobra.Command, args []string) error {
 	applyOutputFlags()
 	verbose, _ := cmd.Flags().GetBool("verbose")
 	if verbose {
@@ -33,27 +44,115 @@ func runRDP(cmd *cobra.Command, _ []string) error {
 		ux.LogPlainText = true
 	}
 	list, _ := cmd.Flags().GetBool("list")
-	appName, _ := cmd.Flags().GetString("app")
+	rdpFullscreen, _ = cmd.Flags().GetBool("fullscreen")
+	rdpViewer, _ = cmd.Flags().GetString("viewer")
 
 	if list {
 		return rdpList()
 	}
-	if appName != "" {
-		return rdpApp(appName)
+	if len(args) > 0 {
+		return rdpApp(resolveAppArg(args[0]))
 	}
 	return rdpDefault()
 }
 
-func rdpDefault() error {
-	if port := os.Getenv("EXT_RDP_PORT"); port != "" {
-		rdpDebug("EXT_RDP_PORT=%s (fast path)", port)
-		return openURL(internalrdp.RDPUrl(port))
-	}
+var (
+	rdpFullscreen bool   // set by --fullscreen flag
+	rdpViewer     string // set by --viewer flag
+)
 
+// openRDP dispatches to the selected viewer.
+// Default: FreeRDP → macOS Windows App fallback (darwin only).
+func openRDP(c config.Config, port string) error {
+	switch rdpViewer {
+	case "macrdp":
+		return openMacRDP(port)
+	case "royaltsx":
+		return openRoyalTSX(c, port)
+	case "freerdp":
+		return openFreeRDP(c, port)
+	case "":
+		// Auto: Royal TSX (darwin) → FreeRDP → macOS Windows App (darwin)
+		if runtime.GOOS == "darwin" && internalrdp.HasRoyalTSX() {
+			rdpDebug("auto-detected Royal TSX")
+			return openRoyalTSX(c, port)
+		}
+		if client, found := internalrdp.FindClient(); found {
+			return openFreeRDPWith(c, port, client)
+		}
+		if runtime.GOOS == "darwin" {
+			rdpDebug("no Royal TSX or FreeRDP found, falling back to macOS Windows App")
+			fmt.Fprintf(os.Stderr, "Tip: install Royal TSX or FreeRDP for a better experience:\n  brew install freerdp\n\n")
+			return openMacRDP(port)
+		}
+		return fmt.Errorf("%s", internalrdp.InstallHint())
+	default:
+		return fmt.Errorf("unknown viewer %q — use freerdp, macrdp, or royaltsx", rdpViewer)
+	}
+}
+
+// openFreeRDP connects via FreeRDP (auto-login, clipboard, cert verification).
+func openFreeRDP(c config.Config, port string) error {
+	client, found := internalrdp.FindClient()
+	if !found {
+		return fmt.Errorf("%s", internalrdp.InstallHint())
+	}
+	return openFreeRDPWith(c, port, client)
+}
+
+func openFreeRDPWith(c config.Config, port string, client internalrdp.ClientBinary) error {
+	certFlag := internalrdp.CertFlag(c.ConfigDir)
+	rdpDebug("using %s (%s), cert: %s", client.Name, client.Path, certFlag)
+	args := []string{
+		"/v:127.0.0.1:" + port,
+		"/u:" + c.HostUser,
+		"/p:rdp",
+		"/admin",
+		certFlag,
+		"+clipboard",
+		"/log-level:FATAL",
+	}
+	if rdpFullscreen {
+		args = append(args, "/f", "/smart-sizing")
+	} else {
+		args = append(args, "/w:1920", "/h:1080")
+	}
+	cmd := exec.Command(client.Path, args...)
+	if runtime.GOOS == "darwin" && strings.HasPrefix(client.Name, "sdl-") {
+		fmt.Fprintf(os.Stderr, "Using SDL on macOS — the screen may flicker for a moment, this is normal.\n")
+	}
+	if runtime.GOOS == "darwin" {
+		return cmd.Start()
+	}
+	return cmd.Run()
+}
+
+// openMacRDP opens the connection via macOS Windows App (rdp:// URI).
+func openMacRDP(port string) error {
+	if runtime.GOOS != "darwin" {
+		return fmt.Errorf("macrdp viewer is only available on macOS")
+	}
+	rdpDebug("opening macOS Windows App for port %s", port)
+	return openURL(internalrdp.RDPUrl(port))
+}
+
+// openRoyalTSX opens the connection via Royal TSX (rtsx:// URI).
+func openRoyalTSX(c config.Config, port string) error {
+	rdpDebug("opening Royal TSX for port %s", port)
+	return openURL(internalrdp.RoyalTSXUrl(port, c.HostUser, "rdp"))
+}
+
+func rdpDefault() error {
 	c, err := config.LoadFromOS()
 	if err != nil {
 		return err
 	}
+
+	if port := os.Getenv("EXT_RDP_PORT"); port != "" {
+		rdpDebug("EXT_RDP_PORT=%s (fast path)", port)
+		return openRDP(c, port)
+	}
+
 	rdpDebug("basedir: %s", c.BaseDir)
 	rdpDebug("cellID:  %s  (computed port: %s)", c.CellID, c.RDPPort)
 
@@ -67,7 +166,7 @@ func rdpDefault() error {
 		if m, _ := internalrdp.ParseDockerPS(string(bytes.TrimSpace(out))); len(m) > 0 {
 			for appName, port := range m {
 				rdpDebug("label-exact match: %s → %s", appName, port)
-				return openURL(internalrdp.RDPUrl(port))
+				return openRDP(c, port)
 			}
 		}
 	}
@@ -82,14 +181,14 @@ func rdpDefault() error {
 			if len(m) == 1 {
 				for appName, port := range m {
 					rdpDebug("label-dir single match: %s → %s", appName, port)
-					return openURL(internalrdp.RDPUrl(port))
+					return openRDP(c, port)
 				}
 			}
-			var opts []string
-			for appName := range m {
-				opts = append(opts, "  cell rdp --app "+appName)
+			selected, err := selectCell(m)
+			if err != nil {
+				return err
 			}
-			return fmt.Errorf("multiple containers for this directory — pick one:\n%s", strings.Join(opts, "\n"))
+			return openRDP(c, m[selected])
 		}
 	}
 
@@ -97,7 +196,7 @@ func rdpDefault() error {
 	rdpDebug("no label match; falling back to bind-mount inspect")
 	allOut, err := exec.Command("docker", "ps", "-q", "--filter", "name=cell-").Output()
 	if err != nil || len(bytes.TrimSpace(allOut)) == 0 {
-		return fmt.Errorf("no running container found for %q — run 'cell rdp --list' to see all", c.BaseDir)
+		return fmt.Errorf("no running cell found for %q — run 'cell rdp --list' to see all", c.BaseDir)
 	}
 	ids := strings.Fields(string(bytes.TrimSpace(allOut)))
 	rdpDebug("inspecting %d containers: %v", len(ids), ids)
@@ -112,15 +211,19 @@ func rdpDefault() error {
 	rdpDebug("bind-mount matches: %+v", matches)
 	switch len(matches) {
 	case 0:
-		return fmt.Errorf("no running container found for %q — run 'cell rdp --list' to see all", c.BaseDir)
+		return fmt.Errorf("no running cell found for %q — run 'cell rdp --list' to see all", c.BaseDir)
 	case 1:
-		return openURL(internalrdp.RDPUrl(matches[0].Port))
+		return openRDP(c, matches[0].Port)
 	default:
-		var opts []string
+		bindM := make(map[string]string, len(matches))
 		for _, m := range matches {
-			opts = append(opts, "  cell rdp --app "+m.AppName)
+			bindM[m.AppName] = m.Port
 		}
-		return fmt.Errorf("multiple containers for this directory — pick one:\n%s", strings.Join(opts, "\n"))
+		selected, err := selectCell(bindM)
+		if err != nil {
+			return err
+		}
+		return openRDP(c, bindM[selected])
 	}
 }
 
@@ -153,6 +256,10 @@ func rdpList() error {
 }
 
 func rdpApp(appName string) error {
+	c, err := config.LoadFromOS()
+	if err != nil {
+		return err
+	}
 	containerName := "cell-" + appName + "-run"
 	out, err := exec.Command("docker", "inspect", containerName).Output()
 	if err != nil {
@@ -162,5 +269,5 @@ func rdpApp(appName string) error {
 	if err != nil {
 		return fmt.Errorf("RDP port not published for %q: %w", appName, err)
 	}
-	return openURL(internalrdp.RDPUrl(port))
+	return openRDP(c, port)
 }

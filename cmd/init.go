@@ -21,6 +21,7 @@ var initCmd = &cobra.Command{
 func init() {
 	initCmd.Flags().BoolP("yes", "y", false, "Skip confirmation prompts and proceed with defaults")
 	initCmd.Flags().Bool("macos", false, "Set up a macOS VM box via UTM + Vagrant")
+	initCmd.Flags().Bool("force", false, "Overwrite existing Dockerfile, flake.nix, and devcell.toml")
 }
 
 func runInit(cmd *cobra.Command, _ []string) error {
@@ -30,6 +31,7 @@ func runInit(cmd *cobra.Command, _ []string) error {
 	}
 	applyOutputFlags()
 	yes, _ := cmd.Flags().GetBool("yes")
+	force, _ := cmd.Flags().GetBool("force")
 
 	// Override base image tag for scaffold Dockerfile if --base-image is set.
 	if bi, _ := cmd.Flags().GetString("base-image"); bi != "" {
@@ -46,7 +48,8 @@ func runInit(cmd *cobra.Command, _ []string) error {
 	modelsSnippet := detectOllamaModels()
 
 	fmt.Printf(" Scaffolding %s\n", c.ConfigDir)
-	if err := scaffold.Scaffold(c.ConfigDir, modelsSnippet); err != nil {
+	nixhomePath := os.Getenv("DEVCELL_NIXHOME_PATH")
+	if err := scaffold.Scaffold(c.ConfigDir, modelsSnippet, nixhomePath, force); err != nil {
 		return fmt.Errorf("scaffold: %w", err)
 	}
 	fmt.Printf(" Config dir ready: %s\n", c.ConfigDir)
@@ -77,7 +80,7 @@ func detectOllamaModels() string {
 		return ""
 	}
 	ranked := ollama.RankModels(models, 10, nil, nil)
-	snippet := ollama.FormatTOMLSnippet(ranked)
+	snippet := ollama.FormatActiveTOMLSnippet(ranked)
 	if snippet != "" {
 		fmt.Printf(" Detected ollama with %d models\n", len(ranked))
 	}

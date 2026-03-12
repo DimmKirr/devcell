@@ -8,7 +8,7 @@ package container_test
 // Run against current image to capture baseline:
 //   go test -v -run TestEnv ./...
 // Run against refactored image:
-//   DEVCELL_IMAGE=ghcr.io/dimmkirr/devcell:opt-devcell go test -v -run TestEnv ./...
+//   DEVCELL_TEST_IMAGE=ghcr.io/dimmkirr/devcell:opt-devcell go test -v -run TestEnv ./...
 
 import (
 	"fmt"
@@ -175,9 +175,9 @@ func TestEnvBasePermissions(t *testing.T) {
 		"/opt/devcell",
 		"/opt/devcell/.config",
 		"/opt/devcell/.config/nix",
-		"/opt/devcell/.config/home-manager",
+		"/opt/devcell/.config/devcell",
 		"/opt/devcell/.nix-profile",
-		"/opt/asdf",
+		"/opt/mise",
 		"/opt/npm-tools",
 		"/opt/python-tools",
 	}

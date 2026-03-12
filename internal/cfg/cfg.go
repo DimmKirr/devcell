@@ -36,10 +36,48 @@ type ModelsSection struct {
 	Providers map[string]LLMProvider  `toml:"providers"`
 }
 
+// ClaudeSection holds [claude] config.
+type ClaudeSection struct {
+	UseOllama bool `toml:"use_ollama"`
+}
+
+// GitSection holds [git] config for git identity inside the container.
+type GitSection struct {
+	AuthorName     string `toml:"author_name"`
+	AuthorEmail    string `toml:"author_email"`
+	CommitterName  string `toml:"committer_name"`
+	CommitterEmail string `toml:"committer_email"`
+}
+
+// HasIdentity reports whether any git identity field is set.
+func (g GitSection) HasIdentity() bool {
+	return g.AuthorName != "" || g.AuthorEmail != "" ||
+		g.CommitterName != "" || g.CommitterEmail != ""
+}
+
+// ResolvedCommitterName returns CommitterName if set, else falls back to AuthorName.
+func (g GitSection) ResolvedCommitterName() string {
+	if g.CommitterName != "" {
+		return g.CommitterName
+	}
+	return g.AuthorName
+}
+
+// ResolvedCommitterEmail returns CommitterEmail if set, else falls back to AuthorEmail.
+func (g GitSection) ResolvedCommitterEmail() string {
+	if g.CommitterEmail != "" {
+		return g.CommitterEmail
+	}
+	return g.AuthorEmail
+}
+
 // CellConfig is the merged configuration from all TOML layers.
 type CellConfig struct {
 	Cell     CellSection
+	Claude   ClaudeSection
+	Git      GitSection `toml:"git"`
 	Env      map[string]string
+	Mise     map[string]string `toml:"mise"` // [mise] — keys map to MISE_<UPPER_KEY> env vars
 	Volumes  []VolumeMount
 	Packages PackagesSection
 	Models   ModelsSection `toml:"models"`
@@ -68,6 +106,7 @@ func Merge(global, project CellConfig) CellConfig {
 	out := CellConfig{
 		Cell: global.Cell,
 		Env:  make(map[string]string),
+		Mise: make(map[string]string),
 	}
 
 	// Copy global env
@@ -79,12 +118,41 @@ func Merge(global, project CellConfig) CellConfig {
 		out.Env[k] = v
 	}
 
+	// Mise: same accumulate semantics as Env
+	for k, v := range global.Mise {
+		out.Mise[k] = v
+	}
+	for k, v := range project.Mise {
+		out.Mise[k] = v
+	}
+
 	// Scalars: project wins when non-zero
 	if project.Cell.ImageTag != "" {
 		out.Cell.ImageTag = project.Cell.ImageTag
 	}
 	if project.Cell.GUI {
 		out.Cell.GUI = true
+	}
+
+	// Claude: project wins when true
+	out.Claude = global.Claude
+	if project.Claude.UseOllama {
+		out.Claude.UseOllama = true
+	}
+
+	// Git: project wins when non-zero
+	out.Git = global.Git
+	if project.Git.AuthorName != "" {
+		out.Git.AuthorName = project.Git.AuthorName
+	}
+	if project.Git.AuthorEmail != "" {
+		out.Git.AuthorEmail = project.Git.AuthorEmail
+	}
+	if project.Git.CommitterName != "" {
+		out.Git.CommitterName = project.Git.CommitterName
+	}
+	if project.Git.CommitterEmail != "" {
+		out.Git.CommitterEmail = project.Git.CommitterEmail
 	}
 
 	// Slices accumulate: global first, then project

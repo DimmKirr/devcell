@@ -163,23 +163,31 @@ func TestArgv_Labels(t *testing.T) {
 
 // --- env-file ---
 
-func TestArgv_EnvFilePresent(t *testing.T) {
+func TestArgv_EnvFileSelfRef(t *testing.T) {
 	dir := t.TempDir()
 	envFile := filepath.Join(dir, ".env")
+	os.WriteFile(envFile, []byte("# comment\nMY_SECRET=${MY_SECRET}\nLITERAL=hello\n"), 0644)
 	spec := runner.RunSpec{
-		Config:  config.Load(dir, func(k string) string {
+		Config: config.Load(dir, func(k string) string {
 			if k == "USER" { return "bob" }
 			if k == "HOME" { return "/home/bob" }
 			return ""
 		}),
-		CellCfg:      cfg.CellConfig{},
-		Binary:       "bash",
-		DefaultFlags: nil,
-		UserArgs:     nil,
+		CellCfg: cfg.CellConfig{},
+		Binary:  "bash",
 	}
-	argv := runner.BuildArgv(spec, existFS(envFile), noopLookPath)
-	if !hasConsecutive(argv, "--env-file", envFile) {
-		t.Errorf("expected --env-file %s in argv: %v", envFile, argv)
+	argv := runner.BuildArgv(spec, noopFS(), noopLookPath)
+	// Self-referencing KEY=${KEY} → just -e KEY (Docker inherits from host)
+	if !hasConsecutive(argv, "-e", "MY_SECRET") {
+		t.Errorf("expected -e MY_SECRET (inherit) in argv: %v", argv)
+	}
+	// Literal KEY=value → -e KEY=value
+	if !hasConsecutive(argv, "-e", "LITERAL=hello") {
+		t.Errorf("expected -e LITERAL=hello in argv: %v", argv)
+	}
+	// Should NOT have --env-file anymore
+	if hasArg(argv, "--env-file") {
+		t.Error("should not use --env-file; vars should be passed individually")
 	}
 }
 
@@ -238,6 +246,17 @@ func TestArgv_ReadonlyVolume(t *testing.T) {
 	})
 	if !hasConsecutive(argv, "-v", "/host:/container:ro") {
 		t.Errorf("expected -v /host:/container:ro in argv: %v", argv)
+	}
+}
+
+// --- cfg mise ---
+
+func TestArgv_MiseEnvVars(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.CellCfg.Mise = map[string]string{"trusted_config_paths": "/"}
+	})
+	if !hasArg(argv, "MISE_TRUSTED_CONFIG_PATHS=/") {
+		t.Errorf("expected MISE_TRUSTED_CONFIG_PATHS=/ in argv: %v", argv)
 	}
 }
 
@@ -319,6 +338,83 @@ func TestArgv_GUIDisabledByDefault(t *testing.T) {
 	argv := buildArgv(t)
 	if hasArg(argv, "DEVCELL_GUI_ENABLED=true") {
 		t.Error("DEVCELL_GUI_ENABLED should not be present when gui=false")
+	}
+}
+
+// --- Git identity ---
+
+func TestArgv_GitEnvVarsFromHostEnv(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.Getenv = func(k string) string {
+			m := map[string]string{
+				"GIT_AUTHOR_NAME":  "EnvAlice",
+				"GIT_AUTHOR_EMAIL": "env@alice.com",
+			}
+			return m[k]
+		}
+		s.CellCfg.Git = cfg.GitSection{
+			AuthorName: "TomlBob", AuthorEmail: "toml@bob.com",
+		}
+	})
+	if !hasArg(argv, "GIT_AUTHOR_NAME=EnvAlice") {
+		t.Errorf("expected GIT_AUTHOR_NAME=EnvAlice: %v", argv)
+	}
+	if !hasArg(argv, "GIT_AUTHOR_EMAIL=env@alice.com") {
+		t.Errorf("expected GIT_AUTHOR_EMAIL=env@alice.com: %v", argv)
+	}
+}
+
+func TestArgv_GitEnvVarsFromToml(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.Getenv = func(string) string { return "" }
+		s.CellCfg.Git = cfg.GitSection{
+			AuthorName: "Alice", AuthorEmail: "alice@test.com",
+		}
+	})
+	if !hasArg(argv, "GIT_AUTHOR_NAME=Alice") {
+		t.Errorf("expected GIT_AUTHOR_NAME=Alice: %v", argv)
+	}
+	if !hasArg(argv, "GIT_COMMITTER_NAME=Alice") {
+		t.Errorf("expected GIT_COMMITTER_NAME=Alice (defaulted from author): %v", argv)
+	}
+	if !hasArg(argv, "GIT_COMMITTER_EMAIL=alice@test.com") {
+		t.Errorf("expected GIT_COMMITTER_EMAIL=alice@test.com (defaulted from author): %v", argv)
+	}
+}
+
+func TestArgv_GitConfigMounted(t *testing.T) {
+	// fs.Stat checks the file; mount is the parent directory (avoids Docker mkdir-file bug)
+	gitConfigFile := "/home/bob/.config/git/config"
+	spec := runner.RunSpec{
+		Config:  baseConfig(),
+		CellCfg: cfg.CellConfig{},
+		Binary:  "bash",
+		Getenv:  func(string) string { return "" },
+	}
+	argv := runner.BuildArgv(spec, existFS(gitConfigFile), noopLookPath)
+	expectedMount := "/home/bob/.config/git:/etc/devcell/git:ro"
+	if !hasConsecutive(argv, "-v", expectedMount) {
+		t.Errorf("expected git config dir mount %q: %v", expectedMount, argv)
+	}
+	if !hasArg(argv, "GIT_CONFIG_GLOBAL=/etc/devcell/git/config") {
+		t.Errorf("expected GIT_CONFIG_GLOBAL env var: %v", argv)
+	}
+	for _, a := range argv {
+		if strings.HasPrefix(a, "GIT_AUTHOR_NAME=") {
+			t.Errorf("should not inject GIT_AUTHOR_NAME when mounting config: %v", argv)
+		}
+	}
+}
+
+func TestArgv_GitFallbackDefaults(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.Getenv = func(string) string { return "" }
+	})
+	if !hasArg(argv, "GIT_AUTHOR_NAME=DevCell") {
+		t.Errorf("expected hardcoded fallback GIT_AUTHOR_NAME=DevCell: %v", argv)
+	}
+	if !hasArg(argv, "GIT_COMMITTER_EMAIL=devcell@devcell.io") {
+		t.Errorf("expected hardcoded fallback GIT_COMMITTER_EMAIL: %v", argv)
 	}
 }
 

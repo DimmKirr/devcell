@@ -1,22 +1,14 @@
 # go.nix — Go runtime and toolchain
-# Runtime managed by asdf; tooling from nixpkgs.
+# Runtime managed by mise; tooling from nixpkgs.
 # Not in nixpkgs: terraform-plugin-docs (tfplugindocs) → installed from GitHub release in Dockerfile
 {
   pkgs,
   config,
   ...
 }: {
-  programs.asdf = {
-    enable = true;
-    golang = {
-      enable = true;
-      defaultVersion = "1.26.0";
-    };
-    config = {
-      legacy_version_file = "yes";
-      golang_mod_version_enabled = "yes";
-    };
-  };
+  imports = [./mise.nix];
+
+  devcell.mise.tools.go = "1.26.0";
 
   home.packages = with pkgs; [
     golangci-lint

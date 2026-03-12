@@ -148,6 +148,42 @@ EXTRA = "yes"
 	}
 }
 
+// --- Mise section ---
+
+func TestLoadFile_MiseSection(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[mise]
+idiomatic_version_file = "true"
+trusted_config_paths = "/"
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Mise["idiomatic_version_file"] != "true" {
+		t.Errorf("idiomatic_version_file: want true, got %q", c.Mise["idiomatic_version_file"])
+	}
+	if c.Mise["trusted_config_paths"] != "/" {
+		t.Errorf("trusted_config_paths: want /, got %q", c.Mise["trusted_config_paths"])
+	}
+}
+
+func TestMerge_MiseAccumulates(t *testing.T) {
+	global := cfg.CellConfig{Mise: map[string]string{"A": "1", "B": "global"}}
+	project := cfg.CellConfig{Mise: map[string]string{"B": "project", "C": "3"}}
+	merged := cfg.Merge(global, project)
+	if merged.Mise["A"] != "1" {
+		t.Errorf("A should be 1, got %q", merged.Mise["A"])
+	}
+	if merged.Mise["B"] != "project" {
+		t.Errorf("B: project should win, got %q", merged.Mise["B"])
+	}
+	if merged.Mise["C"] != "3" {
+		t.Errorf("C should be 3, got %q", merged.Mise["C"])
+	}
+}
+
 // --- GUI field ---
 
 func TestLoadFile_GUITrue(t *testing.T) {
@@ -293,5 +329,146 @@ func TestMerge_ModelsProjectWins(t *testing.T) {
 	}
 	if merged.Models.Providers["ollama"].Models[0] != "deepseek-r1:32b" {
 		t.Errorf("ollama models should be project's, got %v", merged.Models.Providers["ollama"].Models)
+	}
+}
+
+// --- Claude section ---
+
+func TestLoadFile_ClaudeUseOllama(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[claude]
+use_ollama = true
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.Claude.UseOllama {
+		t.Error("expected UseOllama=true after parsing use_ollama=true")
+	}
+}
+
+func TestLoadFile_ClaudeDefaultsFalse(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `[cell]`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Claude.UseOllama {
+		t.Error("expected UseOllama=false when not set")
+	}
+}
+
+func TestMerge_ClaudeProjectEnablesOverGlobal(t *testing.T) {
+	global := cfg.CellConfig{Claude: cfg.ClaudeSection{UseOllama: false}}
+	project := cfg.CellConfig{Claude: cfg.ClaudeSection{UseOllama: true}}
+	merged := cfg.Merge(global, project)
+	if !merged.Claude.UseOllama {
+		t.Error("expected project use_ollama=true to win over global false")
+	}
+}
+
+func TestMerge_ClaudeGlobalKeptWhenProjectUnset(t *testing.T) {
+	global := cfg.CellConfig{Claude: cfg.ClaudeSection{UseOllama: true}}
+	project := cfg.CellConfig{}
+	merged := cfg.Merge(global, project)
+	if !merged.Claude.UseOllama {
+		t.Error("expected global use_ollama=true to be preserved when project unset")
+	}
+}
+
+// --- Git section ---
+
+func TestLoadFile_GitSection(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[git]
+author_name = "Alice"
+author_email = "alice@example.com"
+committer_name = "Bob"
+committer_email = "bob@example.com"
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Git.AuthorName != "Alice" {
+		t.Errorf("author_name: want Alice, got %q", c.Git.AuthorName)
+	}
+	if c.Git.AuthorEmail != "alice@example.com" {
+		t.Errorf("author_email: want alice@example.com, got %q", c.Git.AuthorEmail)
+	}
+	if c.Git.CommitterName != "Bob" {
+		t.Errorf("committer_name: want Bob, got %q", c.Git.CommitterName)
+	}
+	if c.Git.CommitterEmail != "bob@example.com" {
+		t.Errorf("committer_email: want bob@example.com, got %q", c.Git.CommitterEmail)
+	}
+}
+
+func TestLoadFile_GitDefaultsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `[cell]`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Git.HasIdentity() {
+		t.Error("expected no git identity when [git] not set")
+	}
+}
+
+func TestMerge_GitProjectWins(t *testing.T) {
+	global := cfg.CellConfig{Git: cfg.GitSection{AuthorName: "Global", AuthorEmail: "global@test.com"}}
+	project := cfg.CellConfig{Git: cfg.GitSection{AuthorName: "Project"}}
+	merged := cfg.Merge(global, project)
+	if merged.Git.AuthorName != "Project" {
+		t.Errorf("want Project, got %q", merged.Git.AuthorName)
+	}
+	if merged.Git.AuthorEmail != "global@test.com" {
+		t.Errorf("email should be preserved from global, got %q", merged.Git.AuthorEmail)
+	}
+}
+
+func TestMerge_GitGlobalKeptWhenProjectUnset(t *testing.T) {
+	global := cfg.CellConfig{Git: cfg.GitSection{AuthorName: "Global", AuthorEmail: "global@test.com"}}
+	project := cfg.CellConfig{}
+	merged := cfg.Merge(global, project)
+	if merged.Git.AuthorName != "Global" {
+		t.Errorf("want Global, got %q", merged.Git.AuthorName)
+	}
+}
+
+func TestGitSection_HasIdentity(t *testing.T) {
+	if (cfg.GitSection{}).HasIdentity() {
+		t.Error("empty GitSection should not have identity")
+	}
+	if !(cfg.GitSection{AuthorEmail: "a@b.com"}).HasIdentity() {
+		t.Error("GitSection with author_email should have identity")
+	}
+}
+
+func TestGitSection_CommitterDefaultsToAuthor(t *testing.T) {
+	g := cfg.GitSection{AuthorName: "Alice", AuthorEmail: "alice@test.com"}
+	if g.ResolvedCommitterName() != "Alice" {
+		t.Errorf("want Alice, got %q", g.ResolvedCommitterName())
+	}
+	if g.ResolvedCommitterEmail() != "alice@test.com" {
+		t.Errorf("want alice@test.com, got %q", g.ResolvedCommitterEmail())
+	}
+}
+
+func TestGitSection_ExplicitCommitterOverridesAuthor(t *testing.T) {
+	g := cfg.GitSection{
+		AuthorName: "Alice", AuthorEmail: "alice@test.com",
+		CommitterName: "Bot", CommitterEmail: "bot@ci.com",
+	}
+	if g.ResolvedCommitterName() != "Bot" {
+		t.Errorf("want Bot, got %q", g.ResolvedCommitterName())
+	}
+	if g.ResolvedCommitterEmail() != "bot@ci.com" {
+		t.Errorf("want bot@ci.com, got %q", g.ResolvedCommitterEmail())
 	}
 }

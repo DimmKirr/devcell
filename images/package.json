@@ -4,12 +4,10 @@
   "description": "npm tools for devcell",
   "private": true,
   "dependencies": {
-    "@anthropic-ai/claude-code": "2.1.49",
     "@openai/codex": "^0.96.0",
     "@opentofu/opentofu-mcp-server": "^0.1.5",
-    "@playwright/mcp": "^0.0.64",
+    "patchright-mcp": "^0.0.68",
     "@playwright/test": "^1.57.0",
-    "@slidev/cli": "^52.11.0",
-    "opencode-ai": "^1.1.51"
+    "@slidev/cli": "^52.11.0"
   }
 }

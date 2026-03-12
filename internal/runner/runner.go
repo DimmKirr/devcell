@@ -67,6 +67,14 @@ type RunSpec struct {
 	Debug        bool              // pass DEVCELL_DEBUG=true into the container
 	Image        string            // image ID or tag to run; defaults to UserImageTag
 	ExtraEnv     map[string]string // additional env vars injected by the command handler
+	Getenv       func(string) string // env lookup; defaults to os.Getenv when nil
+}
+
+func (s RunSpec) getenv(key string) string {
+	if s.Getenv != nil {
+		return s.Getenv(key)
+	}
+	return os.Getenv(key)
 }
 
 // BuildArgv constructs the full docker run argv for the given spec.
@@ -104,15 +112,60 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 	e("HISTFILE", "/home/"+c.HostUser+"/zsh_history_"+c.AppName)
 	e("TMPDIR", "/home/"+c.HostUser+"/tmp")
 	e("CODEX_OSS_BASE_URL", envOrDefault("CODEX_OSS_BASE_URL", "http://host.docker.internal:1234/v1"))
-	e("GIT_AUTHOR_NAME", envOrDefault("GIT_AUTHOR_NAME", "DevCell"))
-	e("GIT_AUTHOR_EMAIL", envOrDefault("GIT_AUTHOR_EMAIL", "devcell@devcell.io"))
-	e("GIT_COMMITTER_NAME", envOrDefault("GIT_COMMITTER_NAME", "DevCell"))
-	e("GIT_COMMITTER_EMAIL", envOrDefault("GIT_COMMITTER_EMAIL", "devcell@devcell.io"))
 
-	// Optional .env file
+	// Volume mount helper (defined early for use in git identity fallback)
+	v := func(mount string) { argv = append(argv, "-v", mount) }
+
+	// Git identity: host env > [git] toml > mount ~/.config/git/config:ro > hardcoded defaults
+	gitCfg := spec.CellCfg.Git
+	hostGitEnv := spec.getenv("GIT_AUTHOR_NAME") != "" ||
+		spec.getenv("GIT_AUTHOR_EMAIL") != "" ||
+		spec.getenv("GIT_COMMITTER_NAME") != "" ||
+		spec.getenv("GIT_COMMITTER_EMAIL") != ""
+
+	if hostGitEnv {
+		e("GIT_AUTHOR_NAME", envOrDefaultFn(spec.getenv, "GIT_AUTHOR_NAME", "DevCell"))
+		e("GIT_AUTHOR_EMAIL", envOrDefaultFn(spec.getenv, "GIT_AUTHOR_EMAIL", "devcell@devcell.io"))
+		e("GIT_COMMITTER_NAME", envOrDefaultFn(spec.getenv, "GIT_COMMITTER_NAME", "DevCell"))
+		e("GIT_COMMITTER_EMAIL", envOrDefaultFn(spec.getenv, "GIT_COMMITTER_EMAIL", "devcell@devcell.io"))
+	} else if gitCfg.HasIdentity() {
+		e("GIT_AUTHOR_NAME", gitCfg.AuthorName)
+		e("GIT_AUTHOR_EMAIL", gitCfg.AuthorEmail)
+		e("GIT_COMMITTER_NAME", gitCfg.ResolvedCommitterName())
+		e("GIT_COMMITTER_EMAIL", gitCfg.ResolvedCommitterEmail())
+	} else {
+		gitConfigDir := filepath.Join(c.HostHome, ".config", "git")
+		gitConfigFile := filepath.Join(gitConfigDir, "config")
+		if err := fs.Stat(gitConfigFile); err == nil {
+			v(gitConfigDir + ":/etc/devcell/git:ro")
+			e("GIT_CONFIG_GLOBAL", "/etc/devcell/git/config")
+		} else {
+			e("GIT_AUTHOR_NAME", "DevCell")
+			e("GIT_AUTHOR_EMAIL", "devcell@devcell.io")
+			e("GIT_COMMITTER_NAME", "DevCell")
+			e("GIT_COMMITTER_EMAIL", "devcell@devcell.io")
+		}
+	}
+
+	// Optional .env file — resolve self-referencing vars (KEY=${KEY}) by passing
+	// -e KEY so Docker inherits the real value from the host environment.
+	// Literal KEY=value lines are passed as-is via -e KEY=value.
+	// Comments and blank lines are skipped.
 	envFile := filepath.Join(c.BaseDir, ".env")
-	if err := fs.Stat(envFile); err == nil {
-		argv = append(argv, "--env-file", envFile)
+	if envData, err := os.ReadFile(envFile); err == nil {
+		for _, line := range strings.Split(string(envData), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			parts := strings.SplitN(line, "=", 2)
+			if len(parts) == 2 && parts[1] == "${"+parts[0]+"}" {
+				// Self-referencing: KEY=${KEY} → inherit from host env
+				argv = append(argv, "-e", parts[0])
+			} else {
+				argv = append(argv, "-e", line)
+			}
+		}
 	}
 
 	// GUI flag — only publish VNC port when GUI is enabled
@@ -132,13 +185,17 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 		argv = append(argv, "-e", k+"="+v)
 	}
 
+	// cfg [mise] entries → MISE_<UPPER_KEY>=value
+	for k, v := range spec.CellCfg.Mise {
+		argv = append(argv, "-e", "MISE_"+strings.ToUpper(k)+"="+v)
+	}
+
 	// Command-specific extra env vars (e.g. OPENCODE_CONFIG_CONTENT)
 	for k, v := range spec.ExtraEnv {
 		argv = append(argv, "-e", k+"="+v)
 	}
 
 	// Standard volumes
-	v := func(mount string) { argv = append(argv, "-v", mount) }
 	v(c.BaseDir + ":" + c.BaseDir)
 	v(c.BaseDir + ":/" + c.AppName)
 	v(c.CellHome + ":/home/" + c.HostUser)
@@ -146,15 +203,16 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 	v(c.HostHome + "/.claude/commands:/home/" + c.HostUser + "/.claude/commands:ro")
 	v(c.HostHome + "/.claude/agents:/home/" + c.HostUser + "/.claude/agents:ro")
 	v(c.HostHome + "/.claude/skills:/home/" + c.HostUser + "/.claude/skills")
+	v(c.ConfigDir + ":/etc/devcell/config")
+	v(c.ConfigDir + ":/home/" + c.HostUser + "/.config/devcell")
 
 	// cfg [[volumes]] entries
 	for _, vol := range spec.CellCfg.Volumes {
 		argv = append(argv, "-v", vol.Mount)
 	}
 
-	// GUI volumes and port mapping
+	// GUI port mapping
 	if spec.CellCfg.Cell.GUI {
-		v(c.ConfigDir + "/xrdp:/etc/devcell/xrdp")
 		argv = append(argv, "-p", c.VNCPort+":5900")
 		argv = append(argv, "-p", c.RDPPort+":3389")
 	}
@@ -297,6 +355,13 @@ func LocalImageID(ctx context.Context) (string, error) {
 
 func envOrDefault(key, def string) string {
 	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
+
+func envOrDefaultFn(getenv func(string) string, key, def string) string {
+	if v := getenv(key); v != "" {
 		return v
 	}
 	return def
