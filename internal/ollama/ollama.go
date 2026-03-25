@@ -182,9 +182,9 @@ func FormatActiveTOMLSnippet(ranked []RankedModel) string {
 	}
 
 	var b strings.Builder
-	b.WriteString("[models]\n")
+	b.WriteString("[llm.models]\n")
 	b.WriteString(fmt.Sprintf("default = \"ollama/%s\"\n", ranked[0].Name))
-	b.WriteString("\n[models.providers.ollama]\n")
+	b.WriteString("\n[llm.models.providers.ollama]\n")
 	b.WriteString(fmt.Sprintf("models = [%s]\n", strings.Join(names, ", ")))
 
 	return b.String()

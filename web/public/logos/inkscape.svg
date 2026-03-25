@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <!--
+    Inkscape icon: diamond frame with a calligraphy pen nib inside.
+    Diamond uses a thick stroke, nib is a filled silhouette with a split slit.
+  -->
+  <!-- Diamond outline -->
+  <polygon points="128,18 222,128 128,238 34,128"
+           fill="none" stroke="#333333" stroke-width="16" stroke-linejoin="round"/>
+
+  <!-- Pen nib: two-lobed shape tapering to a point at bottom -->
+  <!-- Nib shoulder: wide flat top -->
+  <rect x="106" y="82" width="44" height="14" rx="5" fill="#333333"/>
+
+  <!-- Nib body: rounded top lobes tapering to tip -->
+  <path d="
+    M 106,96
+    Q 96,100 92,116
+    C 90,132 104,152 128,170
+    C 152,152 166,132 164,116
+    Q 160,100 150,96
+    Z
+  " fill="#333333"/>
+
+  <!-- Nib slit: white line from center of body to near tip -->
+  <line x1="128" y1="108" x2="128" y2="162"
+        stroke="white" stroke-width="4" stroke-linecap="round"/>
+</svg>

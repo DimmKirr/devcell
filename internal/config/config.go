@@ -2,8 +2,10 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -81,6 +83,9 @@ func resolveCellID(getenv func(string) string) string {
 }
 
 func resolveSessionName(getenv func(string) string) string {
+	if s := getenv("DEVCELL_SESSION_NAME"); s != "" {
+		return s
+	}
 	if s := getenv("TMUX_SESSION_NAME"); s != "" {
 		return s
 	}
@@ -96,4 +101,40 @@ func resolveConfigDir(getenv func(string) string) string {
 		return xdg + "/devcell"
 	}
 	return getenv("HOME") + "/.config/devcell"
+}
+
+// ResolveAvailablePorts checks whether VNCPort and RDPPort are free and
+// replaces them with nearby available ports when they are already bound.
+func (c *Config) ResolveAvailablePorts() {
+	c.VNCPort = resolveAvailablePort(c.VNCPort)
+	c.RDPPort = resolveAvailablePort(c.RDPPort)
+}
+
+// resolveAvailablePort returns preferred if it's free, otherwise scans
+// upward (up to 100 attempts) for the next available port.
+func resolveAvailablePort(preferred string) string {
+	port, err := strconv.Atoi(preferred)
+	if err != nil {
+		return preferred
+	}
+	for i := 0; i < 100; i++ {
+		candidate := port + i
+		if candidate > 65535 {
+			break
+		}
+		if isPortAvailable(candidate) {
+			return strconv.Itoa(candidate)
+		}
+	}
+	return preferred
+}
+
+// isPortAvailable reports whether a TCP port can be bound on all interfaces.
+func isPortAvailable(port int) bool {
+	ln, err := net.Listen("tcp", ":"+strconv.Itoa(port))
+	if err != nil {
+		return false
+	}
+	ln.Close()
+	return true
 }

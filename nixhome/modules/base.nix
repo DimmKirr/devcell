@@ -1,43 +1,39 @@
-# base.nix — utilities present in every profile
-{pkgs, ...}: {
+# base.nix — utilities present in every stack
+{pkgs, lib, pkgsUnstable, ...}: {
   imports = [
     ./shell.nix
-    ./entrypoint.nix
-    ./managed-mcp.nix
-    ./managed-claude.nix
-    ./managed-opencode.nix
+    ./llm
   ];
 
-  devcell.managedOpencode.providers = {
-    lmstudio = {
-      npm = "@ai-sdk/openai-compatible";
-      name = "LM Studio (local)";
-      options.baseURL = "http://127.0.0.1:1234/v1";
-      models = {
-        "google/gemma-3n-e4b".name = "Gemma 3n-e4b (local)";
-        "zai-org_glm-4.7-flash".name = "GLM-4.7 (local)";
-      };
-    };
-  };
+  # ── Stage entrypoint fragments to /etc/devcell/entrypoint.d/ ───────────────
+  # Any module can drop a fragment into ~/.config/devcell/entrypoint.d/ via home.file.
+  # This activation script copies them to /etc/devcell/entrypoint.d/ where the base
+  # entrypoint sources them at container startup.
+  #
+  # Numbering convention:
+  #   10-* — early setup (future: mise extraction)
+  #   50-* — services (GUI, xrdp)
+  #   90-* — late setup (future: custom user hooks)
+  home.activation.stageEntrypoints = lib.hm.dag.entryAfter ["writeBoundary"] ''
+    export PATH="/usr/bin:/bin:$PATH"
+    $DRY_RUN_CMD sudo mkdir -p /etc/devcell/entrypoint.d
+    if [ -d "$HOME/.config/devcell/entrypoint.d" ]; then
+      $DRY_RUN_CMD sudo ${pkgs.rsync}/bin/rsync -a --chmod=+x --delete \
+        "$HOME/.config/devcell/entrypoint.d/" /etc/devcell/entrypoint.d/
+    fi
+  '';
 
-  devcell.managedClaude = {
-    hookScripts."auto-approve-all.sh" = ''
-      #!/bin/bash
-      # Auto-approve all permission requests (unrestricted mode for background agents)
-      echo '{"decision":"allow","applyPermissionRule":true}'
-    '';
-    settings = {
-      hooks.PermissionRequest = [
-        {
-          matcher = "*";
-          hooks = [
-            {
-              type = "command";
-              command = "bash ~/.claude/hooks/auto-approve-all.sh";
-            }
-          ];
-        }
-      ];
+  home.file = {
+    # ── Entrypoint fragments ─────────────────────────────────────────────────
+    # Standalone shell scripts sourced by entrypoint.sh at container start.
+    # See fragments/ directory for the actual shell code.
+    ".config/devcell/entrypoint.d/05-shell-rc.sh" = {
+      executable = true;
+      source = ./fragments/05-shell-rc.sh;
+    };
+    ".config/devcell/entrypoint.d/20-homedir.sh" = {
+      executable = true;
+      source = ./fragments/20-homedir.sh;
     };
   };
 
@@ -48,8 +44,6 @@
     iosevka-bin    # best block element coverage; designed for terminals
     noto-fonts     # comprehensive Unicode incl. Noto Sans Mono
 
-    claude-code # AI coding assistant CLI
-    opencode # AI coding agent for terminal
     aria2 # download tool
     dasel # JSON/TOML/YAML/XML processor with TOML output support
     ffmpeg # media processing
@@ -60,7 +54,9 @@
     go-task # task runner (Taskfile)
     pre-commit # git hook manager
     jq # JSON processor
+    pandoc # document converter (use: pandoc input.md -o output.pdf)
     ripgrep # fast grep
+    sqlite # SQLite CLI (use: sqlite3)
     expect # provides unbuffer — forces PTY for commands that need a TTY
     tini # minimal init for containers
     tmux # terminal multiplexer
@@ -68,6 +64,7 @@
     tree # directory listing
     unzip # archive extraction
     wget # HTTP downloader
+    rsync # fast file sync (used by entrypoint fragment staging)
     yq-go # TOML/YAML/JSON processor
   ];
 }

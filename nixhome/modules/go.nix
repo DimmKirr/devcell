@@ -18,6 +18,7 @@
 
   home.sessionVariables = {
     GOPATH = "${config.home.homeDirectory}/go";
+    CC = "cc"; # Go defaults to gcc which we don't have; cc → clang via nix
   };
 
   home.sessionPath = ["${config.home.homeDirectory}/go/bin"];

@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <!--
+    Ollama: llama head silhouette.
+    Built from simple geometric primitives:
+    - Rounded head (circle)
+    - Pointed ear (triangle)
+    - Long neck (trapezoid)
+    - Body suggestion (rounded rect)
+    All unioned via overlapping fills.
+  -->
+  <g fill="#333333">
+    <!-- Body (truncated, suggests shoulders) -->
+    <rect x="58" y="188" width="140" height="44" rx="14"/>
+
+    <!-- Neck: slightly tapered rectangle -->
+    <polygon points="90,192 102,108 154,108 166,192"/>
+
+    <!-- Head: circle -->
+    <circle cx="128" cy="90" r="52"/>
+
+    <!-- Ear: upright pointed triangle on top-left of head -->
+    <polygon points="94,50 82,10 118,44"/>
+
+    <!-- Eye: white circle cut-out for detail -->
+    <circle cx="118" cy="84" r="8" fill="white"/>
+  </g>
+</svg>

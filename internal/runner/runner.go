@@ -13,6 +13,7 @@ import (
 
 	"github.com/DimmKirr/devcell/internal/cfg"
 	"github.com/DimmKirr/devcell/internal/config"
+	"github.com/DimmKirr/devcell/internal/version"
 )
 
 const (
@@ -64,9 +65,10 @@ type RunSpec struct {
 	Binary       string
 	DefaultFlags []string
 	UserArgs     []string
-	Debug        bool              // pass DEVCELL_DEBUG=true into the container
-	Image        string            // image ID or tag to run; defaults to UserImageTag
-	ExtraEnv     map[string]string // additional env vars injected by the command handler
+	Debug        bool                // pass DEVCELL_DEBUG=true into the container
+	Image        string              // image ID or tag to run; defaults to UserImageTag
+	ExtraEnv     map[string]string   // additional env vars injected by the command handler
+	InheritEnv   []string            // env var names to inherit from host (passed as -e KEY with no value)
 	Getenv       func(string) string // env lookup; defaults to os.Getenv when nil
 }
 
@@ -134,24 +136,17 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 		e("GIT_COMMITTER_NAME", gitCfg.ResolvedCommitterName())
 		e("GIT_COMMITTER_EMAIL", gitCfg.ResolvedCommitterEmail())
 	} else {
-		gitConfigDir := filepath.Join(c.HostHome, ".config", "git")
-		gitConfigFile := filepath.Join(gitConfigDir, "config")
-		if err := fs.Stat(gitConfigFile); err == nil {
-			v(gitConfigDir + ":/etc/devcell/git:ro")
-			e("GIT_CONFIG_GLOBAL", "/etc/devcell/git/config")
-		} else {
-			e("GIT_AUTHOR_NAME", "DevCell")
-			e("GIT_AUTHOR_EMAIL", "devcell@devcell.io")
-			e("GIT_COMMITTER_NAME", "DevCell")
-			e("GIT_COMMITTER_EMAIL", "devcell@devcell.io")
-		}
+		e("GIT_AUTHOR_NAME", "DevCell")
+		e("GIT_AUTHOR_EMAIL", "devcell@devcell.io")
+		e("GIT_COMMITTER_NAME", "DevCell")
+		e("GIT_COMMITTER_EMAIL", "devcell@devcell.io")
 	}
 
 	// Optional .env file — resolve self-referencing vars (KEY=${KEY}) by passing
 	// -e KEY so Docker inherits the real value from the host environment.
 	// Literal KEY=value lines are passed as-is via -e KEY=value.
 	// Comments and blank lines are skipped.
-	envFile := filepath.Join(c.BaseDir, ".env")
+	envFile := filepath.Join(c.BaseDir, ".env.devcell")
 	if envData, err := os.ReadFile(envFile); err == nil {
 		for _, line := range strings.Split(string(envData), "\n") {
 			line = strings.TrimSpace(line)
@@ -180,6 +175,13 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 		argv = append(argv, "-e", "DEVCELL_DEBUG=true")
 	}
 
+	// Timezone: config wins, then host $TZ
+	if tz := spec.CellCfg.Cell.Timezone; tz != "" {
+		argv = append(argv, "-e", "TZ="+tz)
+	} else if tz := os.Getenv("TZ"); tz != "" {
+		argv = append(argv, "-e", "TZ="+tz)
+	}
+
 	// cfg [env] entries
 	for k, v := range spec.CellCfg.Env {
 		argv = append(argv, "-e", k+"="+v)
@@ -193,6 +195,11 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 	// Command-specific extra env vars (e.g. OPENCODE_CONFIG_CONTENT)
 	for k, v := range spec.ExtraEnv {
 		argv = append(argv, "-e", k+"="+v)
+	}
+
+	// Inherit env vars from host (secrets resolved by caller, set via os.Setenv)
+	for _, k := range spec.InheritEnv {
+		argv = append(argv, "-e", k)
 	}
 
 	// Standard volumes
@@ -275,7 +282,9 @@ func BuildImage(ctx context.Context, configDir string, noCache bool, verbose boo
 	if verbose {
 		progress = "--progress=plain"
 	}
-	args := []string{"build", "-t", UserImageTag(), progress}
+	args := []string{"build", "-t", UserImageTag(), progress,
+		"--build-arg", "GIT_COMMIT=" + version.GitCommit,
+	}
 	if noCache {
 		args = append(args, "--no-cache", "--build-arg", "NIX_REFRESH=--refresh")
 	}
@@ -351,6 +360,64 @@ func LocalImageID(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("inspect %s: %w", UserImageTag(), err)
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// ImageVersions reads /etc/devcell/base-image-version and user-image-version
+// from the user image. Returns (base, user) strings; empty string if file is missing.
+func ImageVersions(ctx context.Context) (base, user string) {
+	out, err := exec.CommandContext(ctx, "docker", "run", "--rm", "--entrypoint", "sh",
+		UserImageTag(), "-c",
+		"cat /etc/devcell/base-image-version 2>/dev/null; echo '---'; cat /etc/devcell/user-image-version 2>/dev/null",
+	).Output()
+	if err != nil {
+		return "", ""
+	}
+	parts := strings.SplitN(strings.TrimSpace(string(out)), "---", 2)
+	if len(parts) == 2 {
+		base = strings.TrimSpace(parts[0])
+		user = strings.TrimSpace(parts[1])
+	}
+	return
+}
+
+// UpdateFlakeLock runs nix flake lock (or update) inside a temp base container
+// with configDir bind-mounted. When lockOnly is true, runs "nix flake lock"
+// (resolves inputs, generates lock if missing, doesn't update existing pins).
+// When lockOnly is false, runs "nix flake update" (pulls latest for all inputs).
+func UpdateFlakeLock(ctx context.Context, configDir string, lockOnly bool, verbose bool, out io.Writer) error {
+	nixCmd := "nix flake update"
+	if lockOnly {
+		nixCmd = "nix flake lock"
+	}
+	args := []string{
+		"run", "--rm",
+		"-v", configDir + ":/opt/devcell/.config/devcell",
+		"--entrypoint", "sh",
+		BaseImageTag(),
+		"-c", "cd /opt/devcell/.config/devcell && " + nixCmd,
+	}
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	cmd.Cancel = func() error {
+		if cmd.Process != nil {
+			return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		}
+		return nil
+	}
+	if verbose {
+		cmd.Stdout = out
+		cmd.Stderr = out
+	} else {
+		cmd.Stdout = io.Discard
+		cmd.Stderr = out
+	}
+	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			return fmt.Errorf("nix flake: interrupted")
+		}
+		return fmt.Errorf("nix flake: %w", err)
+	}
+	return nil
 }
 
 func envOrDefault(key, def string) string {

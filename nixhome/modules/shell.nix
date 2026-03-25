@@ -1,5 +1,5 @@
 # shell.nix — zsh + starship prompt configuration
-# Imported by base.nix so all profiles get a consistent shell experience.
+# Imported by base.nix so all stacks get a consistent shell experience.
 # Works in both `cell shell` (zsh) and xterm (desktop GUI).
 {pkgs, ...}: {
   programs.zsh = {

@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <!--
+    KiCad: PCB trace pattern with right-angle traces and pads.
+    Three trace runs, six pads (filled circles).
+    Stroke-only traces + filled pad circles.
+  -->
+  <g fill="#333333" stroke="#333333" stroke-width="12" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Trace 1: pad A (56,80) → right → (140,80) → down → pad B (140,176) -->
+    <polyline points="56,80 140,80 140,176" fill="none"/>
+    <!-- Trace 2: pad D (56,176) → right → (100,176) → up → pad E (100,128) -->
+    <polyline points="56,176 100,176 100,128" fill="none"/>
+    <!-- Trace 3: pad C (176,80) → down → (176,140) → right → (200,140) → down → pad F (200,176) -->
+    <polyline points="176,80 176,140 200,140 200,176" fill="none"/>
+  </g>
+  <!-- Pads: filled circles -->
+  <g fill="#333333">
+    <circle cx="56"  cy="80"  r="14"/>
+    <circle cx="140" cy="176" r="14"/>
+    <circle cx="176" cy="80"  r="14"/>
+    <circle cx="56"  cy="176" r="14"/>
+    <circle cx="100" cy="128" r="14"/>
+    <circle cx="200" cy="176" r="14"/>
+  </g>
+</svg>

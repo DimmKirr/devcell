@@ -99,7 +99,7 @@ func TestScaffold_DockerfileDoesNotInstallHomeManager(t *testing.T) {
 }
 
 // TestScaffold_DockerfileRunsHomeManagerSwitch — user Dockerfile must run
-// home-manager switch to activate the profile from the user flake.
+// home-manager switch to activate the stack from the user flake.
 func TestScaffold_DockerfileRunsHomeManagerSwitch(t *testing.T) {
 	dir := t.TempDir()
 	if err := scaffold.Scaffold(dir, "", "", false); err != nil {
@@ -246,14 +246,14 @@ func TestScaffold_EmptySnippet_UsesDefaultModelsSection(t *testing.T) {
 	data, _ := os.ReadFile(filepath.Join(dir, "devcell.toml"))
 	s := string(data)
 	// Default template has the generic commented example
-	if !strings.Contains(s, "# [models]") {
-		t.Errorf("expected default models section in devcell.toml, got:\n%s", s)
+	if !strings.Contains(s, "# [llm.models]") {
+		t.Errorf("expected default llm.models section in devcell.toml, got:\n%s", s)
 	}
 }
 
 func TestScaffold_WithSnippet_StillValidTOML(t *testing.T) {
 	dir := t.TempDir()
-	snippet := "# [models]\n# default = \"ollama/deepseek-r1:70b\"\n# [models.providers.ollama]\n# models = [\"deepseek-r1:70b\"]\n"
+	snippet := "# [llm.models]\n# default = \"ollama/deepseek-r1:70b\"\n# [llm.models.providers.ollama]\n# models = [\"deepseek-r1:70b\"]\n"
 	if err := scaffold.Scaffold(dir, snippet, "", false); err != nil {
 		t.Fatal(err)
 	}
@@ -345,11 +345,11 @@ func TestScaffold_WithNixhomePath_DockerfileCopiesNixhome(t *testing.T) {
 	if !strings.Contains(s, nixhomeCopyLine) {
 		t.Errorf("Dockerfile must COPY nixhome/ when nixhomePath is set, got:\n%s", s)
 	}
-	// nixhome COPY must appear before flake.nix COPY
+	// nixhome COPY must appear before flake.* COPY
 	nixhomeIdx := strings.Index(s, nixhomeCopyLine)
-	flakeCopyIdx := strings.Index(s, "COPY --chown=devcell:usergroup flake.nix")
+	flakeCopyIdx := strings.Index(s, "COPY --chown=devcell:usergroup flake.*")
 	if nixhomeIdx < 0 || flakeCopyIdx < 0 || nixhomeIdx > flakeCopyIdx {
-		t.Errorf("nixhome/ COPY must appear before flake.nix COPY in Dockerfile")
+		t.Errorf("nixhome/ COPY must appear before flake.* COPY in Dockerfile")
 	}
 }
 

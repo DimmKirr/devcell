@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <!--
+    OpenTofu: isometric cube (tofu block).
+    Single color #333333. Three faces differentiated by fill vs. stroke-only.
+    Top face: white fill + dark stroke (lightest)
+    Left face: filled dark
+    Right face: filled dark, slightly smaller stroke gap reads as different face
+  -->
+  <!-- Left face (solid fill) -->
+  <polygon points="36,82 128,132 128,224 36,174"
+           fill="#333333"/>
+
+  <!-- Right face (solid fill) -->
+  <polygon points="220,82 128,132 128,224 220,174"
+           fill="#333333"/>
+
+  <!-- Top face (white fill to separate from sides) -->
+  <polygon points="128,32 220,82 128,132 36,82"
+           fill="white" stroke="#333333" stroke-width="10" stroke-linejoin="round"/>
+
+  <!-- Outer edges — overdraw to sharpen all three face boundaries -->
+  <polyline points="36,82 128,32 220,82 220,174 128,224 36,174 36,82"
+            fill="none" stroke="#333333" stroke-width="10"
+            stroke-linejoin="round" stroke-linecap="round"/>
+  <line x1="128" y1="132" x2="128" y2="224"
+        stroke="#333333" stroke-width="10" stroke-linecap="round"/>
+  <line x1="128" y1="132" x2="36" y2="82"
+        stroke="#333333" stroke-width="10" stroke-linecap="round"/>
+  <line x1="128" y1="132" x2="220" y2="82"
+        stroke="#333333" stroke-width="10" stroke-linecap="round"/>
+</svg>

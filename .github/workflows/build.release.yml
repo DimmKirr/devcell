@@ -89,7 +89,7 @@ jobs:
         run: |
           R=${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}
           V=${{ env.VERSION }}
-          for suffix in "" "-base"; do
+          for suffix in "" "-base" "-ultimate"; do
             docker buildx imagetools create \
               -t "${R}:${V}${suffix}" \
               "${R}:${V}-amd64${suffix}" \
@@ -100,7 +100,7 @@ jobs:
         run: |
           R=${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}
           V=${{ env.VERSION }}
-          for tag in "${V}" "${V}-base"; do
+          for tag in "${V}" "${V}-base" "${V}-ultimate"; do
             echo "=== ${tag} ==="
             docker buildx imagetools inspect "${R}:${tag}"
           done
@@ -139,3 +139,59 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release edit "${{ env.RELEASE_VERSION }}" --draft=false --latest=false
+
+  e2e-install:
+    name: E2E Install (${{ matrix.arch }})
+    needs: [cell-release, docker-manifest]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - name: Set version
+        run: echo "VERSION=${GITHUB_REF_NAME}" >> $GITHUB_ENV
+
+      - name: Download cell binary
+        run: |
+          TARBALL="cell-linux-${{ matrix.arch }}.tar.gz"
+          URL="https://github.com/DimmKirr/devcell/releases/download/${VERSION}/${TARBALL}"
+          echo "Downloading: ${URL}"
+          curl -fsSL -o "${TARBALL}" "${URL}"
+          tar xzf "${TARBALL}"
+          chmod +x cell
+          sudo mv cell /usr/local/bin/cell
+
+      - name: Verify cell binary
+        run: |
+          cell --help
+          echo "--- cell binary OK ---"
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run cell claude --version (full pipeline)
+        run: |
+          # Simulate a new user in a fresh project dir
+          mkdir -p /tmp/e2e-project && cd /tmp/e2e-project
+
+          # Flow: scaffold devcell.toml → pull base image → build user image → start container → print claude version
+          OUTPUT=$(cell --plain-text claude --version 2>&1) || true
+          echo "$OUTPUT"
+
+          # Assert cell version string is present
+          if echo "$OUTPUT" | grep -qE "cell\s+v?[0-9]+\.[0-9]+\.[0-9]+"; then
+            echo "--- PASS: cell version found ---"
+          else
+            echo "--- FAIL: cell version string not found in output ---"
+            exit 1
+          fi

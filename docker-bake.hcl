@@ -40,18 +40,22 @@ variable "PLATFORMS" {
 
 # ── Shared inheritance targets (prefixed _ = not buildable directly) ──────────
 
-target "_base-args" {
-  args = {
-    USER_NAME = USER_NAME
-    USER_UID  = USER_UID
-    USER_GID  = USER_GID
-  }
-
+variable "GIT_COMMIT" {
+  default = ""
 }
 
-# ── Profile image targets ────────────────────────────────────────────────────
-# Each target builds a Dockerfile stage that applies a nix home-manager profile
-# plus any language-specific tools (go install, npm, uv) that profile requires.
+target "_base-args" {
+  args = {
+    USER_NAME  = USER_NAME
+    USER_UID   = USER_UID
+    USER_GID   = USER_GID
+    GIT_COMMIT = GIT_COMMIT
+  }
+}
+
+# ── Stack image targets ──────────────────────────────────────────────────────
+# Each target builds a Dockerfile stage that applies a nix home-manager stack
+# plus any language-specific tools (go install, npm, uv) that stack requires.
 
 target "base" {
   inherits   = ["_base-args"]
@@ -151,9 +155,9 @@ group "ci" {
   targets = ["base", "ultimate"]
 }
 
-# release: all published variants for a tagged release
+# release: all published stacks for a tagged release
 group "release" {
-  targets = ["base"]
+  targets = ["base", "ultimate"]
 }
 
 # local-base: base tagged for local scaffold Dockerfile use (FROM ghcr.io/dimmkirr/devcell:base-local)
@@ -166,7 +170,7 @@ target "local-base" {
   cache-to   = []
 }
 
-# local-ultimate: ultimate profile for local testing (uses local nixhome/)
+# local-ultimate: ultimate stack for local testing (uses local nixhome/)
 target "local-ultimate" {
   inherits   = ["ultimate"]
   tags       = ["ghcr.io/dimmkirr/devcell:ultimate-local"]

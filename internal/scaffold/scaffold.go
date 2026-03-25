@@ -24,6 +24,9 @@ var flakeNixContent []byte
 //go:embed templates/devcell.toml.tmpl
 var devcellTomlContent []byte
 
+//go:embed templates/devcell.project.toml.tmpl
+var devcellProjectTomlContent []byte
+
 //go:embed templates/starship.toml.tmpl
 var starshipTomlContent []byte
 
@@ -37,14 +40,14 @@ type scaffoldFile struct {
 
 // defaultModelsSection is the generic commented example used when no
 // ollama models are detected.
-const defaultModelsSection = `# [models]
+const defaultModelsSection = `# [llm.models]
 # Default LLM model (format: provider/model). Used by opencode and other agents.
 # default = "ollama/deepseek-r1:32b"
 
-# [models.providers.ollama]
+# [llm.models.providers.ollama]
 # models = ["deepseek-r1:32b", "qwen3:8b"]
 
-# [models.providers.lmstudio]
+# [llm.models.providers.lmstudio]
 # base_url = "http://host.docker.internal:1234/v1"
 # models = ["deepseek-r1:32b"]`
 
@@ -59,9 +62,9 @@ func scaffoldFiles(modelsSnippet, nixhomePath string) []scaffoldFile {
 			[]byte(`inputs.devcell.url = "github:DimmKirr/devcell/`+version.Version+`?dir=nixhome";`),
 			[]byte(`inputs.devcell.url = "path:./nixhome";`))
 
-		// Insert COPY nixhome/ before the existing COPY flake.nix line
+		// Insert COPY nixhome/ before the existing COPY flake.* line
 		nixhomeCopy := []byte("COPY --chown=devcell:usergroup nixhome/ /opt/devcell/.config/devcell/nixhome/\n")
-		flakeCopyLine := []byte("COPY --chown=devcell:usergroup flake.nix")
+		flakeCopyLine := []byte("COPY --chown=devcell:usergroup flake.*")
 		dockerfile = bytes.Replace(dockerfile, flakeCopyLine, append(nixhomeCopy, flakeCopyLine...), 1)
 	}
 
@@ -126,6 +129,9 @@ func generatePyprojectTOML(pkgs map[string]string) []byte {
 
 // SyncNixhome copies the nixhome directory from srcPath into configDir/nixhome/.
 // It replaces any existing nixhome copy to ensure fresh content each build.
+// Also removes the outer flake.lock so nix regenerates it from the inner
+// nixhome's inputs — prevents stale lock from pinning different nixpkgs
+// than the base image, which would cause a full re-download.
 func SyncNixhome(srcPath, configDir string) error {
 	if _, err := os.Stat(srcPath); err != nil {
 		return fmt.Errorf("nixhome source %s: %w", srcPath, err)
@@ -135,6 +141,9 @@ func SyncNixhome(srcPath, configDir string) error {
 	if err := os.RemoveAll(dest); err != nil {
 		return fmt.Errorf("remove old nixhome: %w", err)
 	}
+	// Remove stale outer flake.lock — inner nixhome has its own lock
+	// that matches the base image's nix store.
+	os.Remove(filepath.Join(configDir, "flake.lock"))
 	return copyDir(srcPath, dest)
 }
 
@@ -204,6 +213,26 @@ func Scaffold(dir string, modelsSnippet string, nixhomePath string, force bool) 
 	return nil
 }
 
+// RegeneratePackageFiles regenerates package.json and pyproject.toml from devcell.toml.
+// Call this before any build to ensure derived files are in sync with config.
+func RegeneratePackageFiles(configDir string) error {
+	c, err := cfg.LoadFile(filepath.Join(configDir, "devcell.toml"))
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	generated := []scaffoldFile{
+		{"package.json", generatePackageJSON(c.Packages.Npm)},
+		{"pyproject.toml", generatePyprojectTOML(c.Packages.Python)},
+	}
+	for _, f := range generated {
+		dest := filepath.Join(configDir, f.name)
+		if err := os.WriteFile(dest, f.content, 0644); err != nil {
+			return fmt.Errorf("write %s: %w", f.name, err)
+		}
+	}
+	return nil
+}
+
 // statErr returns the error from os.Stat (nil if file exists).
 func statErr(path string) error {
 	_, err := os.Stat(path)
@@ -235,4 +264,19 @@ func ScaffoldVagrantfile(dir, vagrantBox, nixhomePath string) error {
 		return fmt.Errorf("write Vagrantfile: %w", err)
 	}
 	return nil
+}
+
+// ScaffoldProject writes a .devcell.toml in the given directory.
+// Returns os.ErrExist if the file already exists.
+func ScaffoldProject(dir string) error {
+	dest := filepath.Join(dir, ".devcell.toml")
+	if _, err := os.Stat(dest); err == nil {
+		return os.ErrExist
+	}
+	return os.WriteFile(dest, devcellProjectTomlContent, 0644)
+}
+
+// ScaffoldProjectForce writes a .devcell.toml, overwriting if it exists.
+func ScaffoldProjectForce(dir string) error {
+	return os.WriteFile(filepath.Join(dir, ".devcell.toml"), devcellProjectTomlContent, 0644)
 }

@@ -10,6 +10,7 @@ require (
 	github.com/pterm/pterm v0.12.80
 	github.com/spf13/cobra v1.8.1
 	github.com/testcontainers/testcontainers-go v0.40.0
+	golang.org/x/mod v0.30.0
 )
 
 require (

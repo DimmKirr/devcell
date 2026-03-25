@@ -1,8 +1,8 @@
 # hosts/macos/home.nix — home-manager config for the vagrant user on the devcell macOS VM
-# Reuses the devcell base profile (tmux, jq, ripgrep, go-task, git-lfs, etc.)
+# Reuses the devcell base stack (tmux, jq, ripgrep, go-task, git-lfs, etc.)
 { mcp-nixos, ... }: {
   imports = [
-    ../../profiles/base.nix
+    ../../stacks/base.nix
   ];
 
   home.username = "vagrant";

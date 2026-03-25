@@ -15,6 +15,7 @@ import (
 	"github.com/DimmKirr/devcell/internal/backup"
 	"github.com/DimmKirr/devcell/internal/cfg"
 	"github.com/DimmKirr/devcell/internal/config"
+	"github.com/DimmKirr/devcell/internal/op"
 	"github.com/DimmKirr/devcell/internal/runner"
 	"github.com/DimmKirr/devcell/internal/scaffold"
 	"github.com/DimmKirr/devcell/internal/ux"
@@ -29,6 +30,12 @@ var rootCmd = &cobra.Command{
 	Long: `cell launches AI coding agents (claude, codex, opencode) and utility
 tools inside a consistent Docker dev environment.`,
 	Args: cobra.ArbitraryArgs,
+	PersistentPreRun: func(cmd *cobra.Command, args []string) {
+		debug, _ := cmd.Flags().GetBool("debug")
+		if debug {
+			fmt.Fprintf(os.Stderr, "cell %s\n", version.Full())
+		}
+	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if len(args) > 0 {
 			return fmt.Errorf("unknown command %q — run 'cell --help' for usage", args[0])
@@ -39,12 +46,20 @@ tools inside a consistent Docker dev environment.`,
 
 func Execute() {
 	if err := rootCmd.Execute(); err != nil {
+		fmt.Fprintf(os.Stderr, "\n cell %s\n", version.Full())
+		baseVer, userVer := runner.ImageVersions(context.Background())
+		if baseVer != "" {
+			fmt.Fprintf(os.Stderr, " Base image: %s\n", baseVer)
+		}
+		if userVer != "" {
+			fmt.Fprintf(os.Stderr, " User image: %s\n", userVer)
+		}
 		os.Exit(1)
 	}
 }
 
 func init() {
-	rootCmd.Version = version.Version
+	rootCmd.Version = version.Full()
 	rootCmd.PersistentFlags().Bool("build", false, "rebuild image before running (forces --no-cache)")
 	rootCmd.PersistentFlags().Bool("dry-run", false, "print docker run argv and exit without running")
 	rootCmd.PersistentFlags().Bool("plain-text", false, "disable spinners, use plain log output (for CI/non-TTY)")
@@ -54,6 +69,7 @@ func init() {
 	rootCmd.PersistentFlags().String("vagrant-provider", "utm", "Vagrant provider (e.g. utm)")
 	rootCmd.PersistentFlags().String("vagrant-box", "", "Vagrant box name override")
 	rootCmd.PersistentFlags().String("base-image", "", "base image for scaffold Dockerfile (default: ghcr.io/dimmkirr/devcell:base-local)")
+	rootCmd.PersistentFlags().String("session-name", "", "session name for persistent home (~/.devcell/<name>)")
 	rootCmd.AddCommand(
 		claudeCmd,
 		codexCmd,
@@ -63,7 +79,6 @@ func init() {
 		initCmd,
 		vncCmd,
 		rdpCmd,
-		chromeCmd,
 		modelsCmd,
 	)
 }
@@ -104,6 +119,7 @@ var cellStringFlags = map[string]bool{
 	"--vagrant-provider": true,
 	"--vagrant-box":      true,
 	"--base-image":       true,
+	"--session-name":     true,
 }
 
 // stripCellFlags removes devcell-specific flags (and their values) from args
@@ -155,6 +171,11 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 		os.Setenv("DEVCELL_BASE_IMAGE", bi)
 	}
 
+	// Override session name via --session-name flag.
+	if sn := scanStringFlag("--session-name"); sn != "" {
+		os.Setenv("DEVCELL_SESSION_NAME", sn)
+	}
+
 	// First-run: scaffold if devcell.toml absent
 	if !scaffold.IsInitialized(c.ConfigDir) {
 		fmt.Printf(" First run — scaffolding %s\n", c.ConfigDir)
@@ -186,7 +207,15 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 
 	cellCfg := cfg.LoadFromOS(c.ConfigDir, c.BaseDir)
 
+	// Resolve available GUI ports — probe and bump if already bound
+	if cellCfg.Cell.GUI {
+		c.ResolveAvailablePorts()
+	}
+
 	if scanFlag("--build") && !scanFlag("--dry-run") {
+		if err := scaffold.RegeneratePackageFiles(c.ConfigDir); err != nil {
+			return fmt.Errorf("regenerate package files: %w", err)
+		}
 		if err := buildImageWithSpinner(c.ConfigDir, true, "Building devcell image", false); err != nil {
 			return err
 		}
@@ -200,6 +229,16 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 	if ux.Verbose {
 		fmt.Printf(" APP_NAME: %s | VNC: localhost:%s | RDP: localhost:%s | HOME: %s\n",
 			c.AppName, c.VNCPort, c.RDPPort, c.CellHome)
+		baseVer, userVer := runner.ImageVersions(context.Background())
+		if baseVer != "" {
+			fmt.Printf(" Base image: %s\n", baseVer)
+		}
+		if userVer != "" {
+			fmt.Printf(" User image: %s\n", userVer)
+		}
+		if baseVer == "" && userVer == "" {
+			fmt.Printf(" Image versions: not available (missing /etc/devcell/*-image-version)\n")
+		}
 	}
 
 	if !ux.Verbose {
@@ -229,6 +268,49 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 		imageID = ""
 	}
 
+	// Inject system prompt for Claude Code — describes container environment,
+	// bind mounts, and host path mappings so Claude understands its runtime context.
+	if binary == "claude" {
+		prompt := runner.BuildSystemPrompt(c, cellCfg)
+		defaultFlags = append(defaultFlags, "--append-system-prompt", prompt)
+	}
+
+	// Resolve git identity from host config (follows symlinks, includes, XDG paths).
+	// Only if no explicit git env or [git] toml section — those take priority in BuildArgv.
+	if os.Getenv("GIT_AUTHOR_NAME") == "" && !cellCfg.Git.HasIdentity() {
+		if extraEnv == nil {
+			extraEnv = make(map[string]string)
+		}
+		if out, err := exec.Command("git", "config", "user.name").Output(); err == nil {
+			if name := strings.TrimSpace(string(out)); name != "" {
+				extraEnv["GIT_AUTHOR_NAME"] = name
+				extraEnv["GIT_COMMITTER_NAME"] = name
+			}
+		}
+		if out, err := exec.Command("git", "config", "user.email").Output(); err == nil {
+			if email := strings.TrimSpace(string(out)); email != "" {
+				extraEnv["GIT_AUTHOR_EMAIL"] = email
+				extraEnv["GIT_COMMITTER_EMAIL"] = email
+			}
+		}
+	}
+
+	// Resolve 1Password items → set in process env so docker inherits via -e KEY
+	var inheritEnv []string
+	if len(cellCfg.Op.Items) > 0 {
+		if _, err := exec.LookPath("op"); err == nil {
+			resolved, err := op.ResolveItems(cellCfg.Op.Items)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "warning: 1Password: %v\n", err)
+			} else {
+				for k, v := range resolved {
+					os.Setenv(k, v)
+					inheritEnv = append(inheritEnv, k)
+				}
+			}
+		}
+	}
+
 	spec := runner.RunSpec{
 		Config:       c,
 		CellCfg:      cellCfg,
@@ -238,6 +320,7 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 		Debug:        ux.Verbose,
 		Image:        imageID,
 		ExtraEnv:     extraEnv,
+		InheritEnv:   inheritEnv,
 	}
 	argv := runner.BuildArgv(spec, runner.OsFS, exec.LookPath)
 
@@ -302,7 +385,6 @@ func scanStringFlag(flag string) string {
 	return ""
 }
 
-
 // buildImageWithSpinner runs docker build with a spinner.
 // In verbose mode (--debug), build output streams to stdout.
 // In quiet mode, output is captured and replayed to stderr only on failure.
@@ -329,6 +411,29 @@ func buildImageWithSpinner(configDir string, noCache bool, label string, silent 
 	} else {
 		sp.Success(label)
 	}
+	return nil
+}
+
+// updateFlakeLockWithSpinner runs nix flake lock/update with a spinner.
+// Same pattern as buildImageWithSpinner.
+func updateFlakeLockWithSpinner(configDir string, lockOnly bool, label string) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	var buf bytes.Buffer
+	var out io.Writer = &buf
+	if ux.Verbose {
+		out = os.Stdout
+	}
+	sp := ux.NewProgressSpinner(label)
+	if err := runner.UpdateFlakeLock(ctx, configDir, lockOnly, ux.Verbose, out); err != nil {
+		sp.Fail(label + " failed")
+		if !ux.Verbose && buf.Len() > 0 {
+			fmt.Fprint(os.Stderr, buf.String())
+		}
+		return err
+	}
+	sp.Success(label)
 	return nil
 }
 

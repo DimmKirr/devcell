@@ -47,38 +47,6 @@ func TestShell_NoDefaultFlags(t *testing.T) {
 	}
 }
 
-// --- chrome argv helper ---
-
-func chromeArgv(cellHome string, extraArgs []string) []string {
-	base := []string{"open", "-na", "Chromium", "--args", "--user-data-dir=" + cellHome + "/.chrome"}
-	return append(base, extraArgs...)
-}
-
-func TestChrome_BasicArgv(t *testing.T) {
-	argv := chromeArgv("/home/bob/.devcell/sandbox", nil)
-	if argv[0] != "open" || argv[1] != "-na" || argv[2] != "Chromium" {
-		t.Errorf("unexpected chrome argv start: %v", argv)
-	}
-	found := false
-	for _, a := range argv {
-		if strings.HasPrefix(a, "--user-data-dir=") {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Errorf("missing --user-data-dir flag: %v", argv)
-	}
-}
-
-func TestChrome_ExtraArgsAppended(t *testing.T) {
-	argv := chromeArgv("/home/bob/.devcell/sandbox", []string{"--incognito"})
-	last := argv[len(argv)-1]
-	if last != "--incognito" {
-		t.Errorf("expected --incognito at end, got: %v", argv)
-	}
-}
-
 // --- behavioural: VNC port determinism ---
 
 func TestVNCPort_SamePaneSamePort(t *testing.T) {

@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-// e2eFormServer is a minimal Node.js HTTP server used by TestMcpPlaywrightE2EFormSecrets.
+// e2eFormServer is a minimal Node.js HTTP server used by TestMcp_PlaywrightE2EFormSecrets.
 // It serves an HTML form at GET / and writes submitted values to /tmp/form-output.txt.
 // The listening port is written to /tmp/server-port.txt once the server is ready.
 const e2eFormServer = `const http = require('http');
@@ -54,7 +54,7 @@ server.listen(0, '127.0.0.1', () => {
 const e2eMcpClient = `#!/usr/bin/env python3
 import subprocess, json, os, sys, re, time
 
-CHROMIUM = '/nix/var/nix/profiles/per-user/devcell/profile/bin/chromium'
+CHROMIUM = '/opt/devcell/.local/state/nix/profiles/profile/bin/chromium'
 USER_DATA = '/tmp/pw-e2e-test'
 
 with open('/tmp/server-port.txt') as f:
@@ -147,10 +147,10 @@ finally:
 
 // ── Playwright MCP ────────────────────────────────────────────────────────────
 
-// TestMcpPlaywrightSecretsFromDotEnv verifies patchright-mcp-cell reads key names from
+// TestMcp_PlaywrightSecretsFromDotEnv verifies patchright-mcp-cell reads key names from
 // $USER_WORKING_DIR/.env and resolves values from the container environment.
 // Only keys present in .env are forwarded — other container env vars are not exposed.
-func TestMcpPlaywrightSecretsFromDotEnv(t *testing.T) {
+func TestMcp_PlaywrightSecretsFromDotEnv(t *testing.T) {
 	c := startContainer(t, map[string]string{
 		"APP_NAME":         "test",
 		"HOST_USER":        hostUser,
@@ -206,152 +206,14 @@ func TestMcpPlaywrightSecretsFromDotEnv(t *testing.T) {
 	t.Logf("PASS: secrets file:\n%s", out)
 }
 
-// TestMcpPlaywrightStagingFileHasEntry — nix-mcp-servers.json must contain a playwright entry
-// with patchright-mcp-cell as the command.
-func TestMcpPlaywrightStagingFileHasEntry(t *testing.T) {
-	c := startContainer(t, map[string]string{"HOST_USER": hostUser, "APP_NAME": "test"})
-
-	raw, code := exec(t, c, []string{"cat", "/etc/claude-code/nix-mcp-servers.json"})
-	if code != 0 {
-		t.Fatalf("FAIL: could not read nix-mcp-servers.json (exit %d)", code)
-	}
-
-	var cfg struct {
-		McpServers map[string]struct {
-			Command string `json:"command"`
-		} `json:"mcpServers"`
-	}
-	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
-		t.Fatalf("FAIL: invalid JSON: %v\n%s", err, raw)
-	}
-
-	entry, ok := cfg.McpServers["playwright"]
-	if !ok {
-		keys := make([]string, 0, len(cfg.McpServers))
-		for k := range cfg.McpServers {
-			keys = append(keys, k)
-		}
-		t.Errorf("FAIL: playwright missing from nix-mcp-servers.json; present keys: [%s]",
-			strings.Join(keys, ", "))
-		return
-	}
-	if entry.Command != "patchright-mcp-cell" {
-		t.Errorf("FAIL: expected command %q, got %q", "patchright-mcp-cell", entry.Command)
-	} else {
-		t.Logf("PASS: playwright entry present, command=%s", entry.Command)
-	}
-}
-
-// TestMcpPlaywrightTempFileCleanup — secrets temp file must be deleted after wrapper exits.
-// Verifies the trap 'rm -f' EXIT in patchright-mcp-cell fires correctly so no temp file leaks.
-func TestMcpPlaywrightTempFileCleanup(t *testing.T) {
-	c := startContainer(t, map[string]string{
-		"HOST_USER":        hostUser,
-		"APP_NAME":         "test",
-		"TEST_PASSWORD":    "hello123",
-		"USER_WORKING_DIR": "/tmp/cleanup-wd",
-	})
-
-	_, code := exec(t, c, []string{"sh", "-c",
-		"mkdir -p /tmp/cleanup-wd && printf 'TEST_PASSWORD=any\n' > /tmp/cleanup-wd/.env"})
-	if code != 0 {
-		t.Fatal("FAIL: could not create test .env file")
-	}
-
-	out, code := exec(t, c, []string{"sh", "-c", `
-		SECRETS_FILE=$(mktemp /tmp/pw-secrets-XXXXXX.env)
-		trap 'rm -f "$SECRETS_FILE"; echo "cleaned:$SECRETS_FILE"' EXIT
-		_ENV_FILE="${USER_WORKING_DIR:-}/.env"
-		if [ -f "$_ENV_FILE" ]; then
-			while IFS= read -r _line || [ -n "$_line" ]; do
-				case "$_line" in '#'*|'') continue ;; esac
-				_key="${_line%%=*}"
-				_key="${_key#export }"
-				[ -z "$_key" ] && continue
-				if _val=$(printenv "$_key" 2>/dev/null); then
-					printf '%s=%s\n' "$_key" "$_val"
-				fi
-			done < "$_ENV_FILE" >> "$SECRETS_FILE"
-		fi
-		echo "created:$SECRETS_FILE"
-		test -f "$SECRETS_FILE" && echo "exists_during" || echo "missing_during"
-		true
-	`})
-	if code != 0 {
-		t.Fatalf("FAIL: wrapper logic failed (exit %d): %s", code, out)
-	}
-	if !strings.Contains(out, "exists_during") {
-		t.Errorf("FAIL: secrets temp file was not created")
-	}
-	if !strings.Contains(out, "cleaned:") {
-		t.Errorf("FAIL: EXIT trap did not fire")
-	}
-
-	var cleaned string
-	for _, line := range strings.Split(out, "\n") {
-		if strings.HasPrefix(line, "cleaned:") {
-			cleaned = strings.TrimPrefix(strings.TrimSpace(line), "cleaned:")
-		}
-	}
-	if cleaned == "" {
-		t.Fatal("FAIL: could not extract temp file path from output")
-	}
-	_, code = exec(t, c, []string{"test", "-f", cleaned})
-	if code == 0 {
-		t.Errorf("FAIL: temp file %q still exists after EXIT", cleaned)
-	} else {
-		t.Logf("PASS: temp file %q cleaned up", cleaned)
-	}
-}
-
-// TestMcpPlaywrightProtocol — patchright-mcp-cell must respond to MCP initialize + tools/list
-// over stdio. The browser is lazily initialised so this works without a display server.
-//
-// @modelcontextprotocol/sdk v1.x uses newline-delimited JSON (one JSON object per line),
-// NOT Content-Length/LSP framing.
-func TestMcpPlaywrightProtocol(t *testing.T) {
-	c := startContainer(t, map[string]string{"HOST_USER": hostUser, "APP_NAME": "test"})
-
-	_, code := exec(t, c, []string{"sh", "-c", "command -v patchright-mcp-cell"})
-	if code != 0 {
-		t.Fatal("FAIL: patchright-mcp-cell not on PATH — is this the ultimate image?")
-	}
-
-	out, code := exec(t, c, []string{"bash", "-c", `
-		INIT='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}'
-		LIST='{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
-		CHROMIUM=/nix/var/nix/profiles/per-user/devcell/profile/bin/chromium
-		TMPDIR_PW=$(mktemp -d /tmp/pw-proto-XXXXXX)
-		trap 'rm -rf "$TMPDIR_PW"' EXIT
-		{ printf "%s\n%s\n" "$INIT" "$LIST"; sleep 5; } \
-		| PLAYWRIGHT_MCP_USER_DATA_DIR="$TMPDIR_PW" timeout 15 patchright-mcp-cell \
-			--headless --browser chromium \
-			--executable-path "$CHROMIUM" \
-			2>/dev/null
-	`})
-	// exit 124 = timeout (server did not auto-exit on EOF) — responses already written to stdout
-	if code != 0 && code != 124 {
-		t.Fatalf("FAIL: patchright-mcp-cell exited %d:\n%s", code, out)
-	}
-	if !strings.Contains(out, `"result"`) {
-		t.Errorf("FAIL: no JSON-RPC result in output (exit %d):\n%s", code, out)
-		return
-	}
-	if !strings.Contains(out, "browser_navigate") {
-		t.Errorf("FAIL: tools/list response missing browser_navigate (exit %d):\n%s", code, out)
-	} else {
-		t.Logf("PASS: playwright-mcp responded with MCP protocol (exit %d)", code)
-	}
-}
-
-// TestMcpPlaywrightE2EFormSecrets — full end-to-end secrets flow:
+// TestMcp_PlaywrightE2EFormSecrets — full end-to-end secrets flow:
 //  1. Container starts with TEST_USERNAME and TEST_PASSWORD env vars; .env lists those keys.
 //  2. Assert playwright is registered in ~/.claude.json (merged by entrypoint).
 //  3. Start a local Node.js HTTP server that serves a login form.
 //  4. Drive patchright-mcp-cell via MCP stdio:
 //     initialize → browser_navigate → browser_snapshot → browser_fill_form (secret names) → browser_click.
 //  5. Assert /tmp/form-output.txt contains the real secret values (not the names).
-func TestMcpPlaywrightE2EFormSecrets(t *testing.T) {
+func TestMcp_PlaywrightE2EFormSecrets(t *testing.T) {
 	const (
 		testUsername = "alice"
 		testPassword = "s3cr3t123"
@@ -453,7 +315,7 @@ func TestMcpPlaywrightE2EFormSecrets(t *testing.T) {
 const e2eStealthDetector = `#!/usr/bin/env python3
 import subprocess, json, os, sys
 
-CHROMIUM = '/nix/var/nix/profiles/per-user/devcell/profile/bin/chromium'
+CHROMIUM = '/opt/devcell/.local/state/nix/profiles/profile/bin/chromium'
 USER_DATA = '/tmp/pw-stealth-test'
 
 # Read init-script path from nix-mcp-servers.json (production args)
@@ -535,7 +397,7 @@ finally:
     proc.wait()
 `
 
-// TestMcpPatchrightUndetected — verifies patchright + stealth init-script make the browser
+// TestMcp_PatchrightUndetected — verifies patchright + stealth init-script make the browser
 // undetectable as automated. Launches patchright-mcp-cell with --init-script (same args
 // Claude Code uses in production via nix-mcp-servers.json), navigates to a page, and asserts:
 //   - navigator.webdriver is undefined (not true)
@@ -543,7 +405,7 @@ finally:
 //   - navigator.plugins.length >= 3 (mock)
 //   - navigator.languages includes "en-US"
 //   - WebGL vendor = "Intel Inc." (if available)
-func TestMcpPatchrightUndetected(t *testing.T) {
+func TestMcp_PatchrightUndetected(t *testing.T) {
 	c := startContainer(t, map[string]string{
 		"HOST_USER":        hostUser,
 		"APP_NAME":         "test",
@@ -596,14 +458,14 @@ func TestMcpPatchrightUndetected(t *testing.T) {
 	}
 
 	var result struct {
-		Webdriver      interface{} `json:"webdriver"`
-		HasChrome      bool        `json:"hasChrome"`
-		HasChromeRT    bool        `json:"hasChromeRuntime"`
-		PluginsCount   int         `json:"pluginsCount"`
-		Languages      string      `json:"languages"`
-		WebGLVendor    string      `json:"webglVendor"`
-		WebGLRenderer  string      `json:"webglRenderer"`
-		WebGLError     string      `json:"webglError"`
+		Webdriver     interface{} `json:"webdriver"`
+		HasChrome     bool        `json:"hasChrome"`
+		HasChromeRT   bool        `json:"hasChromeRuntime"`
+		PluginsCount  int         `json:"pluginsCount"`
+		Languages     string      `json:"languages"`
+		WebGLVendor   string      `json:"webglVendor"`
+		WebGLRenderer string      `json:"webglRenderer"`
+		WebGLError    string      `json:"webglError"`
 	}
 	if err := json.Unmarshal([]byte(stealthJSON), &result); err != nil {
 		t.Fatalf("FAIL: parse stealth JSON: %v\nraw: %s", err, stealthJSON)
@@ -657,88 +519,626 @@ func TestMcpPatchrightUndetected(t *testing.T) {
 	}
 }
 
-// ── NixOS MCP ─────────────────────────────────────────────────────────────────
+// ── Detection Suite ──────────────────────────────────────────────────────────
+//
+// Self-hosted bot detection suite derived from community tools:
+//   - BotD      (github.com/fingerprintjs/BotD)       — automation framework detection
+//   - fpscanner (github.com/antoinevastel/fpscanner)   — headless/selenium artifact checks
+//   - CreepJS   (github.com/AbrahamJuliot/creepjs)     — fingerprint consistency checks
+//   - headless-detector (andriyshevchenko)              — modern headless detection vectors
+//
+// Architecture: Go test → Python MCP client → patchright-mcp-cell → self-hosted HTML page.
+// The HTML page runs all detection checks client-side, stores results in window.__DETECTION.
+// The Python client reads the results via browser_evaluate and outputs DETECTION:{json}.
+// Go subtests assert each detection category independently.
 
-// TestMcpNixosBinaryOnPath — mcp-nixos must be on PATH for the session user.
-func TestMcpNixosBinaryOnPath(t *testing.T) {
-	c := startEnvContainer(t)
-	out, code := asUser(t, c, "command -v mcp-nixos")
+// e2eDetectionPage is a self-hosted bot detection page. It runs all checks client-side
+// and stores structured results in window.__DETECTION. Title changes to "DONE" when complete.
+const e2eDetectionPage = `<!DOCTYPE html>
+<html><head><title>Detection Suite</title></head>
+<body><pre id="status">running...</pre>
+<script>
+(async () => {
+  const r = {};
+
+  // ── BotD: WebDriver detection ──────────────────────────────────────────
+  r.webdriver = navigator.webdriver;
+
+  // ── BotD: Chrome object ────────────────────────────────────────────────
+  r.hasChrome = typeof window.chrome !== 'undefined';
+  r.hasChromeRuntime = !!(window.chrome && window.chrome.runtime);
+
+  // ── fpscanner: Plugins ─────────────────────────────────────────────────
+  r.pluginsCount = navigator.plugins.length;
+  r.pluginsIsPluginArray = navigator.plugins instanceof PluginArray;
+
+  // ── Languages ──────────────────────────────────────────────────────────
+  r.languages = Array.from(navigator.languages);
+
+  // ── WebGL (CreepJS / headless-detector) ────────────────────────────────
+  try {
+    const canvas = document.createElement('canvas');
+    const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+    if (gl) {
+      const ext = gl.getExtension('WEBGL_debug_renderer_info');
+      r.webglAvailable = true;
+      r.webglVendor = ext ? gl.getParameter(ext.UNMASKED_VENDOR_WEBGL) : '';
+      r.webglRenderer = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : '';
+    } else {
+      r.webglAvailable = false;
+    }
+  } catch(e) {
+    r.webglAvailable = false;
+    r.webglError = e.message;
+  }
+
+  // ── Canvas 2D fingerprint (CreepJS) ────────────────────────────────────
+  try {
+    const c = document.createElement('canvas');
+    c.width = 200; c.height = 50;
+    const ctx = c.getContext('2d');
+    ctx.textBaseline = 'top';
+    ctx.font = '14px Arial';
+    ctx.fillStyle = '#f60';
+    ctx.fillRect(125, 1, 62, 20);
+    ctx.fillStyle = '#069';
+    ctx.fillText('devcell-detect', 2, 15);
+    ctx.strokeStyle = 'rgba(102, 204, 0, 0.7)';
+    ctx.arc(50, 25, 20, 0, Math.PI * 2, true);
+    ctx.stroke();
+    const dataURL = c.toDataURL();
+    r.canvasLength = dataURL.length;
+    r.canvasAvailable = true;
+  } catch(e) {
+    r.canvasAvailable = false;
+    r.canvasError = e.message;
+  }
+
+  // ── Audio fingerprint (CreepJS) ────────────────────────────────────────
+  try {
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') await audioCtx.resume();
+    const oscillator = audioCtx.createOscillator();
+    const analyser = audioCtx.createAnalyser();
+    const compressor = audioCtx.createDynamicsCompressor();
+    const gain = audioCtx.createGain();
+    oscillator.type = 'triangle';
+    oscillator.frequency.setValueAtTime(10000, audioCtx.currentTime);
+    compressor.threshold.setValueAtTime(-50, audioCtx.currentTime);
+    compressor.knee.setValueAtTime(40, audioCtx.currentTime);
+    compressor.ratio.setValueAtTime(12, audioCtx.currentTime);
+    compressor.attack.setValueAtTime(0, audioCtx.currentTime);
+    compressor.release.setValueAtTime(0.25, audioCtx.currentTime);
+    oscillator.connect(compressor);
+    compressor.connect(analyser);
+    gain.gain.value = 0;
+    analyser.connect(gain);
+    gain.connect(audioCtx.destination);
+    oscillator.start(0);
+    await new Promise(resolve => setTimeout(resolve, 200));
+    const freqData = new Float32Array(analyser.frequencyBinCount);
+    analyser.getFloatFrequencyData(freqData);
+    let sum = 0;
+    for (let i = 0; i < freqData.length; i++) sum += Math.abs(freqData[i]);
+    r.audioSum = sum;
+    r.audioAvailable = sum > 0;
+    oscillator.stop();
+    audioCtx.close();
+  } catch(e) {
+    r.audioAvailable = false;
+    r.audioError = e.message;
+  }
+
+  // ── Screen / viewport (headless-detector) ──────────────────────────────
+  r.screenWidth = screen.width;
+  r.screenHeight = screen.height;
+  r.colorDepth = screen.colorDepth;
+  r.devicePixelRatio = window.devicePixelRatio;
+  r.outerWidth = window.outerWidth;
+  r.outerHeight = window.outerHeight;
+
+  // ── Codecs (fpscanner) ─────────────────────────────────────────────────
+  const v = document.createElement('video');
+  r.codecH264 = v.canPlayType('video/mp4; codecs="avc1.42E01E"');
+  r.codecWebm = v.canPlayType('video/webm; codecs="vp8"');
+  r.codecOgg = v.canPlayType('audio/ogg; codecs="vorbis"');
+
+  // ── Permissions API (BotD) ─────────────────────────────────────────────
+  try {
+    const perm = await navigator.permissions.query({name: 'notifications'});
+    r.permissionsWorks = true;
+    r.notificationState = perm.state;
+  } catch(e) {
+    r.permissionsWorks = false;
+  }
+
+  // ── navigator.connection (headless-detector) ───────────────────────────
+  r.hasConnection = !!navigator.connection;
+  if (navigator.connection) {
+    r.effectiveType = navigator.connection.effectiveType;
+  }
+
+  // ── Selenium artifacts (fpscanner) ─────────────────────────────────────
+  const seleniumKeys = [
+    'webdriver', '__driver_evaluate', '__webdriver_evaluate',
+    '__selenium_evaluate', '__fxdriver_evaluate', '__driver_unwrapped',
+    '__webdriver_unwrapped', '__selenium_unwrapped', '__fxdriver_unwrapped',
+    '_Selenium_IDE_Recorder', '_selenium', 'calledSelenium',
+    '_WEBDRIVER_ELEM_CACHE', 'ChromeDriverw'
+  ];
+  r.seleniumArtifacts = seleniumKeys.filter(k => k in document || k in window);
+
+  // ── CDP artifacts (BotD) ───────────────────────────────────────────────
+  r.hasCDCArray = !!window.cdc_adoQpoasnfa76pfcZLmcfl_Array;
+  r.hasCDCPromise = !!window.cdc_adoQpoasnfa76pfcZLmcfl_Promise;
+  r.hasCDCSymbol = !!window.cdc_adoQpoasnfa76pfcZLmcfl_Symbol;
+
+  // ── UA consistency ─────────────────────────────────────────────────────
+  r.userAgent = navigator.userAgent;
+  r.platform = navigator.platform;
+  if (navigator.userAgentData) {
+    try {
+      const hea = await navigator.userAgentData.getHighEntropyValues(
+        ['platform', 'architecture', 'platformVersion', 'fullVersionList']
+      );
+      r.uaData = {
+        platform: hea.platform,
+        architecture: hea.architecture,
+        platformVersion: hea.platformVersion
+      };
+    } catch(e) {
+      r.uaDataError = e.message;
+    }
+  }
+
+  // ── Font enumeration (CreepJS) ─────────────────────────────────────────
+  // Check if common system fonts are available via canvas measureText trick.
+  const testFonts = [
+    // Common system fonts (some Windows-only, tests cross-platform coverage)
+    'Arial', 'Courier New', 'Georgia', 'Times New Roman', 'Verdana',
+    'Trebuchet MS', 'Helvetica', 'Roboto', 'Open Sans', 'Lato',
+    // Installed via nix (developer + UI fonts)
+    'Fira Code', 'DejaVu Sans', 'Liberation Mono', 'Noto Sans',
+    'Noto Serif', 'Inter', 'IBM Plex Sans', 'IBM Plex Mono',
+    'Source Sans 3', 'Source Serif 4', 'Montserrat', 'Raleway',
+    'Work Sans', 'Cabin', 'Cantarell', 'Gentium', 'Comic Neue',
+    'Zilla Slab', 'Fira Sans', 'PT Sans', 'Atkinson Hyperlegible',
+    'Quicksand', 'Poppins', 'Rubik', 'Karla', 'Barlow', 'Lexend',
+    'Iosevka', 'Cascadia Code', 'Ubuntu Sans', 'DejaVu Serif',
+    'Liberation Sans', 'Liberation Serif', 'Noto Sans Mono',
+    'DejaVu Sans Mono', 'Noto Color Emoji'
+  ];
+  const baseFonts = ['monospace', 'sans-serif', 'serif'];
+  const testStr = 'mmmmmmmmmmlli';
+  const testSize = '72px';
+  const detectedFonts = [];
+  const fc = document.createElement('canvas');
+  const fctx = fc.getContext('2d');
+  const baseWidths = {};
+  for (const base of baseFonts) {
+    fctx.font = testSize + ' ' + base;
+    baseWidths[base] = fctx.measureText(testStr).width;
+  }
+  for (const font of testFonts) {
+    let detected = false;
+    for (const base of baseFonts) {
+      fctx.font = testSize + ' "' + font + '", ' + base;
+      if (fctx.measureText(testStr).width !== baseWidths[base]) {
+        detected = true;
+        break;
+      }
+    }
+    if (detected) detectedFonts.push(font);
+  }
+  r.detectedFonts = detectedFonts;
+  r.fontCount = detectedFonts.length;
+
+  window.__DETECTION = r;
+  document.getElementById('status').textContent = JSON.stringify(r, null, 2);
+  document.title = 'DONE';
+})();
+</script>
+</body></html>`
+
+// e2eDetectionClient drives patchright-mcp-cell via MCP stdio, navigates to the
+// self-hosted detection page, waits for completion, and reads window.__DETECTION.
+// Outputs "DETECTION:{json}" for the Go test to parse.
+const e2eDetectionClient = `#!/usr/bin/env python3
+import subprocess, json, os, sys, threading, http.server, time, re
+
+# ── Serve detection page ──────────────────────────────────────────────────────
+DETECTION_HTML = open('/tmp/detection-page.html').read()
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/html')
+        self.end_headers()
+        self.wfile.write(DETECTION_HTML.encode())
+    def log_message(self, *a): pass
+
+srv = http.server.HTTPServer(('127.0.0.1', 0), Handler)
+port = srv.server_address[1]
+threading.Thread(target=srv.serve_forever, daemon=True).start()
+print(f'detection-server: port={port}', flush=True)
+
+# ── Read init-script from nix-mcp-servers.json ────────────────────────────────
+with open('/etc/claude-code/nix-mcp-servers.json') as f:
+    cfg = json.load(f)
+pw_args = cfg.get('mcpServers', {}).get('playwright', {}).get('args', [])
+init_script = None
+for i, a in enumerate(pw_args):
+    if a == '--init-script' and i + 1 < len(pw_args):
+        init_script = pw_args[i + 1]
+        break
+if not init_script:
+    print('ERROR: --init-script not found in nix-mcp-servers.json', file=sys.stderr)
+    sys.exit(2)
+print(f'init-script: {init_script}', flush=True)
+
+# ── Start patchright-mcp-cell via MCP stdio ───────────────────────────────────
+env = dict(os.environ)
+env['PLAYWRIGHT_MCP_USER_DATA_DIR'] = '/tmp/pw-detect-suite'
+
+config_path = None
+for i, a in enumerate(pw_args):
+    if a == '--config' and i + 1 < len(pw_args):
+        config_path = pw_args[i + 1]
+        break
+
+cmd = ['patchright-mcp-cell', '--browser', 'chromium',
+       '--init-script', init_script]
+if config_path:
+    cmd.extend(['--config', config_path])
+    print(f'config: {config_path}', flush=True)
+
+proc = subprocess.Popen(
+    cmd,
+    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env)
+
+msg_id = 0
+def send(method, params=None):
+    global msg_id
+    msg_id += 1
+    msg = {'jsonrpc':'2.0','id':msg_id,'method':method}
+    if params: msg['params'] = params
+    proc.stdin.write((json.dumps(msg) + '\n').encode())
+    proc.stdin.flush()
+    return msg_id
+
+def recv():
+    line = proc.stdout.readline()
+    if not line: raise RuntimeError('EOF from patchright-mcp stdout')
+    return json.loads(line)
+
+try:
+    # Initialize
+    send('initialize', {
+        'protocolVersion':'2024-11-05','capabilities':{},
+        'clientInfo':{'name':'detection-suite','version':'0'}})
+    r = recv()
+    print('mcp-init: ' + r.get('result',{}).get('serverInfo',{}).get('name','?'), flush=True)
+
+    # Navigate to detection page
+    send('tools/call', {'name':'browser_navigate',
+        'arguments':{'url': f'http://127.0.0.1:{port}'}})
+    r = recv()
+    if 'error' in r:
+        print(f'ERROR: navigate failed: {r["error"]}', file=sys.stderr)
+        sys.exit(3)
+    print('navigate: ok', flush=True)
+
+    # Wait for detection to complete (title changes to DONE)
+    for attempt in range(30):
+        time.sleep(0.5)
+        send('tools/call', {'name':'browser_evaluate',
+            'arguments':{'function':'() => document.title'}})
+        r = recv()
+        text = r.get('result',{}).get('content',[{}])[0].get('text','')
+        if 'DONE' in text:
+            print('detection: complete', flush=True)
+            break
+    else:
+        print('ERROR: detection page did not complete in 15s', file=sys.stderr)
+        sys.exit(4)
+
+    # Read detection results
+    send('tools/call', {'name':'browser_evaluate',
+        'arguments':{'function':'() => JSON.stringify(window.__DETECTION)'}})
+    r = recv()
+    text = r.get('result',{}).get('content',[{}])[0].get('text','')
+    # browser_evaluate wraps result in markdown; extract JSON from quoted line
+    m = re.search(r'^"(.*)"$', text, re.MULTILINE)
+    if m:
+        text = json.loads('"' + m.group(1) + '"')
+    print('DETECTION:' + text, flush=True)
+
+finally:
+    proc.terminate()
+    proc.wait()
+    srv.shutdown()
+`
+
+// TestMcp_PatchrightDetectionSuite — comprehensive bot detection suite using a self-hosted
+// detection page derived from BotD, fpscanner, CreepJS, and headless-detector.
+// Each detection category is a subtest for independent pass/fail tracking.
+//
+// RED tests (expected to fail until Mesa WebGL + fonts are configured):
+//   - Fingerprint/WebGLAvailable — no WebGL context in headless without software GL flags
+//   - Fingerprint/WebGLVendorSpoofed — depends on WebGL being available
+//   - Fingerprint/WebGLRendererSpoofed — depends on WebGL being available
+//   - Environment/FontCount — too few fonts installed
+func TestMcp_PatchrightDetectionSuite(t *testing.T) {
+	c := startContainer(t, map[string]string{
+		"HOST_USER":        hostUser,
+		"APP_NAME":         "test",
+		"USER_WORKING_DIR": "/tmp/detect-wd",
+	})
+
+	// Verify patchright-mcp-cell is present
+	_, code := exec(t, c, []string{"sh", "-c", "command -v patchright-mcp-cell"})
 	if code != 0 {
-		t.Fatalf("FAIL: mcp-nixos not on PATH (exit %d)", code)
-	}
-	t.Logf("PASS: %s", out)
-}
-
-// TestMcpNixosStagingFileExists — /etc/claude-code/nix-mcp-servers.json must contain nixos entry.
-// This is the staging file baked into the image; entrypoint.sh merges it into ~/.claude.json.
-func TestMcpNixosStagingFileExists(t *testing.T) {
-	c := startEnvContainer(t)
-
-	_, code := exec(t, c, []string{"test", "-f", "/etc/claude-code/nix-mcp-servers.json"})
-	if code != 0 {
-		t.Fatal("FAIL: /etc/claude-code/nix-mcp-servers.json does not exist")
+		t.Fatal("FAIL: patchright-mcp-cell not on PATH")
 	}
 
-	raw, code := exec(t, c, []string{"cat", "/etc/claude-code/nix-mcp-servers.json"})
-	if code != 0 {
-		t.Fatalf("FAIL: could not read nix-mcp-servers.json (exit %d)", code)
+	// Start PulseAudio with null sink — Chromium needs an audio backend
+	// to produce real AudioContext frequency data (otherwise all-zero = bot signal).
+	// Uses -n -F to skip default config (no dbus dependency) and explicitly loads
+	// native-protocol-unix (socket) + null-sink (virtual audio output).
+	exec(t, c, []string{"gosu", hostUser, "mkdir", "-p", "/tmp/pulse-runtime/pulse"})
+	exec(t, c, []string{"gosu", hostUser, "sh", "-c",
+		"dbus-uuidgen > /etc/machine-id 2>/dev/null || true"})
+	_, paCode := exec(t, c, []string{"gosu", hostUser, "sh", "-c",
+		`XDG_RUNTIME_DIR=/tmp/pulse-runtime pulseaudio --daemonize=yes --exit-idle-time=-1 ` +
+			`--disable-shm=true -n ` +
+			`--load="module-null-sink sink_name=NullSink" ` +
+			`--load="module-native-protocol-unix"`,
+	})
+	if paCode != 0 {
+		t.Log("WARNING: PulseAudio not available — AudioContext test may fail")
+	} else {
+		t.Log("PulseAudio started with null sink")
 	}
 
-	var cfg struct {
-		McpServers map[string]json.RawMessage `json:"mcpServers"`
+	// Create empty .env (wrapper expects it)
+	exec(t, c, []string{"sh", "-c", "mkdir -p /tmp/detect-wd && touch /tmp/detect-wd/.env"})
+
+	// Copy detection page and client into container
+	ctx := context.Background()
+	if err := c.CopyToContainer(ctx,
+		[]byte(e2eDetectionPage), "/tmp/detection-page.html", 0o644); err != nil {
+		t.Fatalf("FAIL: copy detection page: %v", err)
 	}
-	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
-		t.Fatalf("FAIL: invalid JSON: %v\n%s", err, raw)
+	if err := c.CopyToContainer(ctx,
+		[]byte(e2eDetectionClient), "/tmp/detection-client.py", 0o755); err != nil {
+		t.Fatalf("FAIL: copy detection client: %v", err)
 	}
 
-	if _, ok := cfg.McpServers["nixos"]; !ok {
-		keys := make([]string, 0, len(cfg.McpServers))
-		for k := range cfg.McpServers {
-			keys = append(keys, k)
+	// Run detection client — set PULSE_SERVER so Chromium finds PulseAudio
+	out, exitCode := exec(t, c, []string{"sh", "-c",
+		"PULSE_SERVER=unix:/tmp/pulse-runtime/pulse/native " +
+			"XDG_RUNTIME_DIR=/tmp/pulse-runtime " +
+			"python3 /tmp/detection-client.py"})
+	t.Logf("detection client output:\n%s", out)
+	if exitCode != 0 {
+		t.Fatalf("FAIL: detection client exited %d", exitCode)
+	}
+
+	// Parse DETECTION:{json} line
+	var detectionJSON string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "DETECTION:") {
+			detectionJSON = strings.TrimPrefix(line, "DETECTION:")
+			break
 		}
-		t.Errorf("FAIL: mcpServers.nixos missing; present keys: [%s]", strings.Join(keys, ", "))
-	} else {
-		t.Logf("PASS: nixos entry present in nix-mcp-servers.json")
 	}
+	if detectionJSON == "" {
+		t.Fatal("FAIL: no DETECTION: line in output")
+	}
+
+	var d struct {
+		// Stealth (init-script)
+		Webdriver      interface{} `json:"webdriver"`
+		HasChrome      bool        `json:"hasChrome"`
+		HasChromeRT    bool        `json:"hasChromeRuntime"`
+		PluginsCount   int         `json:"pluginsCount"`
+		PluginsIsArray bool        `json:"pluginsIsPluginArray"`
+		Languages      []string    `json:"languages"`
+		// WebGL
+		WebGLAvailable bool   `json:"webglAvailable"`
+		WebGLVendor    string `json:"webglVendor"`
+		WebGLRenderer  string `json:"webglRenderer"`
+		WebGLError     string `json:"webglError"`
+		// Canvas
+		CanvasAvailable bool   `json:"canvasAvailable"`
+		CanvasLength    int    `json:"canvasLength"`
+		CanvasError     string `json:"canvasError"`
+		// Audio
+		AudioAvailable bool    `json:"audioAvailable"`
+		AudioSum       float64 `json:"audioSum"`
+		AudioError     string  `json:"audioError"`
+		// Screen
+		ScreenWidth      int     `json:"screenWidth"`
+		ScreenHeight     int     `json:"screenHeight"`
+		ColorDepth       int     `json:"colorDepth"`
+		DevicePixelRatio float64 `json:"devicePixelRatio"`
+		OuterWidth       int     `json:"outerWidth"`
+		OuterHeight      int     `json:"outerHeight"`
+		// Codecs
+		CodecH264 string `json:"codecH264"`
+		CodecWebm string `json:"codecWebm"`
+		CodecOgg  string `json:"codecOgg"`
+		// Permissions
+		PermissionsWorks  bool   `json:"permissionsWorks"`
+		NotificationState string `json:"notificationState"`
+		// Connection
+		HasConnection bool   `json:"hasConnection"`
+		EffectiveType string `json:"effectiveType"`
+		// Artifacts
+		SeleniumArtifacts []string `json:"seleniumArtifacts"`
+		HasCDCArray       bool     `json:"hasCDCArray"`
+		HasCDCPromise     bool     `json:"hasCDCPromise"`
+		HasCDCSymbol      bool     `json:"hasCDCSymbol"`
+		// UA
+		UserAgent string `json:"userAgent"`
+		Platform  string `json:"platform"`
+		UAData    *struct {
+			Platform     string `json:"platform"`
+			Architecture string `json:"architecture"`
+		} `json:"uaData"`
+		UADataError string `json:"uaDataError"`
+		// Fonts
+		DetectedFonts []string `json:"detectedFonts"`
+		FontCount     int      `json:"fontCount"`
+	}
+	if err := json.Unmarshal([]byte(detectionJSON), &d); err != nil {
+		t.Fatalf("FAIL: parse detection JSON: %v\nraw: %s", err, detectionJSON)
+	}
+	t.Logf("Detection results: %s", detectionJSON)
+
+	// ── Stealth subtests (should be GREEN with current init-script) ───────
+
+	t.Run("Stealth/WebDriverUndefined", func(t *testing.T) {
+		if d.Webdriver == true {
+			t.Errorf("navigator.webdriver = true (detected as bot)")
+		}
+	})
+
+	t.Run("Stealth/ChromeObject", func(t *testing.T) {
+		if !d.HasChrome {
+			t.Errorf("window.chrome missing")
+		}
+		if !d.HasChromeRT {
+			t.Errorf("window.chrome.runtime missing")
+		}
+	})
+
+	t.Run("Stealth/Plugins", func(t *testing.T) {
+		if d.PluginsCount < 3 {
+			t.Errorf("plugins.length = %d, want >= 3", d.PluginsCount)
+		}
+		if !d.PluginsIsArray {
+			t.Errorf("plugins not instanceof PluginArray")
+		}
+	})
+
+	t.Run("Stealth/Languages", func(t *testing.T) {
+		found := false
+		for _, l := range d.Languages {
+			if l == "en-US" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("languages = %v, want en-US", d.Languages)
+		}
+	})
+
+	t.Run("Stealth/NoSeleniumArtifacts", func(t *testing.T) {
+		if len(d.SeleniumArtifacts) > 0 {
+			t.Errorf("selenium artifacts found: %v", d.SeleniumArtifacts)
+		}
+	})
+
+	t.Run("Stealth/NoCDPArtifacts", func(t *testing.T) {
+		if d.HasCDCArray || d.HasCDCPromise || d.HasCDCSymbol {
+			t.Errorf("CDP artifacts found: array=%v promise=%v symbol=%v",
+				d.HasCDCArray, d.HasCDCPromise, d.HasCDCSymbol)
+		}
+	})
+
+	// ── Fingerprint subtests (RED until Mesa WebGL configured) ────────────
+
+	t.Run("Fingerprint/WebGLAvailable", func(t *testing.T) {
+		if !d.WebGLAvailable {
+			t.Errorf("WebGL context not available (error: %s) — need software GL flags", d.WebGLError)
+		}
+	})
+
+	t.Run("Fingerprint/WebGLVendorSpoofed", func(t *testing.T) {
+		if !d.WebGLAvailable {
+			t.Errorf("WebGL not available, cannot verify vendor spoof")
+			return
+		}
+		if d.WebGLVendor != "Intel Inc." {
+			t.Errorf("WebGL vendor = %q, want 'Intel Inc.'", d.WebGLVendor)
+		}
+	})
+
+	t.Run("Fingerprint/WebGLRendererSpoofed", func(t *testing.T) {
+		if !d.WebGLAvailable {
+			t.Errorf("WebGL not available, cannot verify renderer spoof")
+			return
+		}
+		if d.WebGLRenderer != "Intel Iris OpenGL Engine" {
+			t.Errorf("WebGL renderer = %q, want 'Intel Iris OpenGL Engine'", d.WebGLRenderer)
+		}
+	})
+
+	t.Run("Fingerprint/Canvas2D", func(t *testing.T) {
+		if !d.CanvasAvailable {
+			t.Errorf("canvas 2D not available: %s", d.CanvasError)
+			return
+		}
+		// A real canvas fingerprint produces a data URL > 1000 chars
+		if d.CanvasLength < 1000 {
+			t.Errorf("canvas dataURL length = %d, want > 1000 (blank canvas?)", d.CanvasLength)
+		}
+	})
+
+	t.Run("Fingerprint/AudioContext", func(t *testing.T) {
+		if !d.AudioAvailable {
+			t.Errorf("audio fingerprint not available: %s", d.AudioError)
+			return
+		}
+		if d.AudioSum == 0 {
+			t.Errorf("audio frequency sum = 0 (no audio data)")
+		}
+	})
+
+	// ── Environment subtests ─────────────────────────────────────────────
+
+	t.Run("Environment/Screen", func(t *testing.T) {
+		if d.ColorDepth < 24 {
+			t.Errorf("colorDepth = %d, want >= 24", d.ColorDepth)
+		}
+		if d.DevicePixelRatio == 0 {
+			t.Errorf("devicePixelRatio = 0")
+		}
+	})
+
+	t.Run("Environment/CodecWebm", func(t *testing.T) {
+		if d.CodecWebm == "" {
+			t.Errorf("WebM codec not supported")
+		}
+	})
+
+	t.Run("Environment/CodecOgg", func(t *testing.T) {
+		if d.CodecOgg == "" {
+			t.Errorf("Ogg codec not supported")
+		}
+	})
+
+	t.Run("Environment/Permissions", func(t *testing.T) {
+		if !d.PermissionsWorks {
+			t.Errorf("Permissions API query failed")
+		}
+	})
+
+	t.Run("Environment/FontCount", func(t *testing.T) {
+		// Real browsers typically detect 10+ fonts from the test set.
+		// Headless with minimal fonts detects < 5.
+		t.Logf("detected fonts (%d): %v", d.FontCount, d.DetectedFonts)
+		if d.FontCount < 23 {
+			t.Errorf("fontCount = %d, want >= 23 (too few fonts installed)", d.FontCount)
+		}
+	})
 }
 
-// TestMcpNixosCommandExecutable — the command in nix-mcp-servers.json must be an executable nix store path.
-func TestMcpNixosCommandExecutable(t *testing.T) {
-	c := startEnvContainer(t)
-
-	raw, code := exec(t, c, []string{"cat", "/etc/claude-code/nix-mcp-servers.json"})
-	if code != 0 {
-		t.Fatalf("FAIL: could not read nix-mcp-servers.json (exit %d)", code)
-	}
-
-	var cfg struct {
-		McpServers map[string]struct {
-			Command string `json:"command"`
-		} `json:"mcpServers"`
-	}
-	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
-		t.Fatalf("FAIL: invalid JSON: %v", err)
-	}
-
-	entry, ok := cfg.McpServers["nixos"]
-	if !ok {
-		t.Fatal("FAIL: nixos entry missing — see TestMcpNixosStagingFileExists")
-	}
-	if !strings.HasPrefix(entry.Command, "/nix/store/") {
-		t.Errorf("FAIL: expected nix store path, got %q", entry.Command)
-	}
-
-	_, code = exec(t, c, []string{"test", "-x", entry.Command})
-	if code != 0 {
-		t.Errorf("FAIL: command %q is not executable", entry.Command)
-	} else {
-		t.Logf("PASS: command %q is executable", entry.Command)
-	}
-}
-
-// TestMcpClaudeJsonBackupOnMerge — when ~/.claude.json pre-exists and backupBeforeMerge=true,
+// TestMcp_ClaudeJsonBackupOnMerge — when ~/.claude.json pre-exists and backupBeforeMerge=true,
 // a timestamped backup must be created before the merge overwrites the file.
-func TestMcpClaudeJsonBackupOnMerge(t *testing.T) {
+func TestMcp_ClaudeJsonBackupOnMerge(t *testing.T) {
 	c := startEnvContainer(t)
 
 	// Confirm the staging file declares backupBeforeMerge=true.
@@ -803,43 +1203,4 @@ func TestMcpClaudeJsonBackupOnMerge(t *testing.T) {
 		t.Errorf("FAIL: merged file should have >1 server (pre-existing + nix)\n%s", out)
 	}
 	t.Logf("PASS: %s", strings.ReplaceAll(strings.TrimSpace(out), "\n", " | "))
-}
-
-// TestMcpClaudeJsonMerge — entrypoint must merge nix MCP servers into ~/.claude.json.
-// Verifies the additive merge model: nix servers land in user config after container start.
-func TestMcpClaudeJsonMerge(t *testing.T) {
-	c := startEnvContainer(t)
-
-	claudeJson := "/home/" + hostUser + "/.claude.json"
-
-	_, code := exec(t, c, []string{"test", "-f", claudeJson})
-	if code != 0 {
-		t.Fatalf("FAIL: %s does not exist after entrypoint", claudeJson)
-	}
-
-	raw, code := exec(t, c, []string{"cat", claudeJson})
-	if code != 0 {
-		t.Fatalf("FAIL: could not read %s (exit %d)", claudeJson, code)
-	}
-
-	var cfg struct {
-		McpServers map[string]json.RawMessage `json:"mcpServers"`
-	}
-	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
-		t.Fatalf("FAIL: %s contains invalid JSON: %v\n%s", claudeJson, err, raw)
-	}
-
-	if len(cfg.McpServers) == 0 {
-		t.Fatalf("FAIL: mcpServers is empty in %s — merge did not run", claudeJson)
-	}
-
-	if _, ok := cfg.McpServers["nixos"]; !ok {
-		keys := make([]string, 0, len(cfg.McpServers))
-		for k := range cfg.McpServers {
-			keys = append(keys, k)
-		}
-		t.Errorf("FAIL: nixos missing from %s; present: [%s]", claudeJson, strings.Join(keys, ", "))
-	} else {
-		t.Logf("PASS: nixos present in %s (%d server(s) total)", claudeJson, len(cfg.McpServers))
-	}
 }

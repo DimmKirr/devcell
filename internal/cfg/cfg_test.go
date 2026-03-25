@@ -3,6 +3,7 @@ package cfg_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/DimmKirr/devcell/internal/cfg"
@@ -243,18 +244,22 @@ mount = "~/work/secrets:/run/secrets:ro"
 	}
 }
 
-// --- Models section ---
+// --- LLM section (replaces [claude] + [models]) ---
 
-func TestLoadFile_ModelsSection(t *testing.T) {
+func TestLoadFile_LLMSection(t *testing.T) {
 	dir := t.TempDir()
 	writeTOML(t, dir, "devcell.toml", `
-[models]
+[llm]
+use_ollama = true
+system_prompt = "This project uses Go 1.22."
+
+[llm.models]
 default = "ollama/deepseek-r1:32b"
 
-[models.providers.ollama]
+[llm.models.providers.ollama]
 models = ["deepseek-r1:32b", "qwen3:8b"]
 
-[models.providers.lmstudio]
+[llm.models.providers.lmstudio]
 base_url = "http://host.docker.internal:1235/v1"
 models = ["deepseek-r1:32b"]
 `)
@@ -262,10 +267,16 @@ models = ["deepseek-r1:32b"]
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Models.Default != "ollama/deepseek-r1:32b" {
-		t.Errorf("default: want ollama/deepseek-r1:32b, got %q", c.Models.Default)
+	if !c.LLM.UseOllama {
+		t.Error("expected UseOllama=true")
 	}
-	ollama, ok := c.Models.Providers["ollama"]
+	if c.LLM.SystemPrompt != "This project uses Go 1.22." {
+		t.Errorf("system_prompt: got %q", c.LLM.SystemPrompt)
+	}
+	if c.LLM.Models.Default != "ollama/deepseek-r1:32b" {
+		t.Errorf("default: want ollama/deepseek-r1:32b, got %q", c.LLM.Models.Default)
+	}
+	ollama, ok := c.LLM.Models.Providers["ollama"]
 	if !ok {
 		t.Fatal("ollama provider not found")
 	}
@@ -275,7 +286,7 @@ models = ["deepseek-r1:32b"]
 	if ollama.BaseURL != "" {
 		t.Errorf("ollama base_url should be empty (use default), got %q", ollama.BaseURL)
 	}
-	lms, ok := c.Models.Providers["lmstudio"]
+	lms, ok := c.LLM.Models.Providers["lmstudio"]
 	if !ok {
 		t.Fatal("lmstudio provider not found")
 	}
@@ -287,96 +298,123 @@ models = ["deepseek-r1:32b"]
 	}
 }
 
-func TestLoadFile_ModelsEmpty(t *testing.T) {
-	dir := t.TempDir()
-	writeTOML(t, dir, "devcell.toml", `[cell]`)
-	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c.Models.Default != "" {
-		t.Errorf("expected empty default, got %q", c.Models.Default)
-	}
-	if len(c.Models.Providers) != 0 {
-		t.Errorf("expected no providers, got %v", c.Models.Providers)
-	}
-}
-
-func TestMerge_ModelsProjectWins(t *testing.T) {
-	global := cfg.CellConfig{
-		Models: cfg.ModelsSection{
-			Default: "ollama/qwen3:8b",
-			Providers: map[string]cfg.LLMProvider{
-				"ollama": {Models: []string{"qwen3:8b"}},
-			},
-		},
-	}
-	project := cfg.CellConfig{
-		Models: cfg.ModelsSection{
-			Default: "ollama/deepseek-r1:32b",
-			Providers: map[string]cfg.LLMProvider{
-				"ollama":   {Models: []string{"deepseek-r1:32b"}},
-				"lmstudio": {Models: []string{"deepseek-r1:32b"}},
-			},
-		},
-	}
-	merged := cfg.Merge(global, project)
-	if merged.Models.Default != "ollama/deepseek-r1:32b" {
-		t.Errorf("default: project should win, got %q", merged.Models.Default)
-	}
-	if len(merged.Models.Providers) != 2 {
-		t.Errorf("want 2 providers, got %d", len(merged.Models.Providers))
-	}
-	if merged.Models.Providers["ollama"].Models[0] != "deepseek-r1:32b" {
-		t.Errorf("ollama models should be project's, got %v", merged.Models.Providers["ollama"].Models)
-	}
-}
-
-// --- Claude section ---
-
-func TestLoadFile_ClaudeUseOllama(t *testing.T) {
+func TestLoadFile_LLMMultilineSystemPrompt(t *testing.T) {
 	dir := t.TempDir()
 	writeTOML(t, dir, "devcell.toml", `
-[claude]
-use_ollama = true
+[llm]
+system_prompt = """
+This project uses PostgreSQL 16 with pgx/v5.
+API endpoints follow REST conventions at /api/v2/.
+"""
 `)
 	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !c.Claude.UseOllama {
-		t.Error("expected UseOllama=true after parsing use_ollama=true")
+	if c.LLM.SystemPrompt == "" {
+		t.Fatal("expected non-empty system_prompt")
+	}
+	if !contains(c.LLM.SystemPrompt, "PostgreSQL 16") {
+		t.Errorf("system_prompt missing PostgreSQL 16: %q", c.LLM.SystemPrompt)
+	}
+	if !contains(c.LLM.SystemPrompt, "/api/v2/") {
+		t.Errorf("system_prompt missing /api/v2/: %q", c.LLM.SystemPrompt)
 	}
 }
 
-func TestLoadFile_ClaudeDefaultsFalse(t *testing.T) {
+func TestLoadFile_LLMDefaultsEmpty(t *testing.T) {
 	dir := t.TempDir()
 	writeTOML(t, dir, "devcell.toml", `[cell]`)
 	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Claude.UseOllama {
+	if c.LLM.UseOllama {
 		t.Error("expected UseOllama=false when not set")
+	}
+	if c.LLM.SystemPrompt != "" {
+		t.Errorf("expected empty system_prompt, got %q", c.LLM.SystemPrompt)
+	}
+	if c.LLM.Models.Default != "" {
+		t.Errorf("expected empty default, got %q", c.LLM.Models.Default)
+	}
+	if len(c.LLM.Models.Providers) != 0 {
+		t.Errorf("expected no providers, got %v", c.LLM.Models.Providers)
 	}
 }
 
-func TestMerge_ClaudeProjectEnablesOverGlobal(t *testing.T) {
-	global := cfg.CellConfig{Claude: cfg.ClaudeSection{UseOllama: false}}
-	project := cfg.CellConfig{Claude: cfg.ClaudeSection{UseOllama: true}}
+func TestMerge_LLMUseOllamaProjectWins(t *testing.T) {
+	global := cfg.CellConfig{LLM: cfg.LLMSection{UseOllama: false}}
+	project := cfg.CellConfig{LLM: cfg.LLMSection{UseOllama: true}}
 	merged := cfg.Merge(global, project)
-	if !merged.Claude.UseOllama {
+	if !merged.LLM.UseOllama {
 		t.Error("expected project use_ollama=true to win over global false")
 	}
 }
 
-func TestMerge_ClaudeGlobalKeptWhenProjectUnset(t *testing.T) {
-	global := cfg.CellConfig{Claude: cfg.ClaudeSection{UseOllama: true}}
+func TestMerge_LLMGlobalKeptWhenProjectUnset(t *testing.T) {
+	global := cfg.CellConfig{LLM: cfg.LLMSection{UseOllama: true}}
 	project := cfg.CellConfig{}
 	merged := cfg.Merge(global, project)
-	if !merged.Claude.UseOllama {
+	if !merged.LLM.UseOllama {
 		t.Error("expected global use_ollama=true to be preserved when project unset")
 	}
+}
+
+func TestMerge_LLMSystemPromptProjectReplaces(t *testing.T) {
+	global := cfg.CellConfig{LLM: cfg.LLMSection{SystemPrompt: "global context"}}
+	project := cfg.CellConfig{LLM: cfg.LLMSection{SystemPrompt: "project context"}}
+	merged := cfg.Merge(global, project)
+	if merged.LLM.SystemPrompt != "project context" {
+		t.Errorf("want project context, got %q", merged.LLM.SystemPrompt)
+	}
+}
+
+func TestMerge_LLMSystemPromptGlobalKeptWhenProjectEmpty(t *testing.T) {
+	global := cfg.CellConfig{LLM: cfg.LLMSection{SystemPrompt: "global context"}}
+	project := cfg.CellConfig{}
+	merged := cfg.Merge(global, project)
+	if merged.LLM.SystemPrompt != "global context" {
+		t.Errorf("want global context, got %q", merged.LLM.SystemPrompt)
+	}
+}
+
+func TestMerge_LLMModelsProjectWins(t *testing.T) {
+	global := cfg.CellConfig{
+		LLM: cfg.LLMSection{
+			Models: cfg.LLMModelsSection{
+				Default: "ollama/qwen3:8b",
+				Providers: map[string]cfg.LLMProvider{
+					"ollama": {Models: []string{"qwen3:8b"}},
+				},
+			},
+		},
+	}
+	project := cfg.CellConfig{
+		LLM: cfg.LLMSection{
+			Models: cfg.LLMModelsSection{
+				Default: "ollama/deepseek-r1:32b",
+				Providers: map[string]cfg.LLMProvider{
+					"ollama":   {Models: []string{"deepseek-r1:32b"}},
+					"lmstudio": {Models: []string{"deepseek-r1:32b"}},
+				},
+			},
+		},
+	}
+	merged := cfg.Merge(global, project)
+	if merged.LLM.Models.Default != "ollama/deepseek-r1:32b" {
+		t.Errorf("default: project should win, got %q", merged.LLM.Models.Default)
+	}
+	if len(merged.LLM.Models.Providers) != 2 {
+		t.Errorf("want 2 providers, got %d", len(merged.LLM.Models.Providers))
+	}
+	if merged.LLM.Models.Providers["ollama"].Models[0] != "deepseek-r1:32b" {
+		t.Errorf("ollama models should be project's, got %v", merged.LLM.Models.Providers["ollama"].Models)
+	}
+}
+
+func contains(s, sub string) bool {
+	return len(s) >= len(sub) && len(sub) > 0 && strings.Contains(s, sub)
 }
 
 // --- Git section ---
@@ -470,5 +508,52 @@ func TestGitSection_ExplicitCommitterOverridesAuthor(t *testing.T) {
 	}
 	if g.ResolvedCommitterEmail() != "bot@ci.com" {
 		t.Errorf("want bot@ci.com, got %q", g.ResolvedCommitterEmail())
+	}
+}
+
+// --- Op section ---
+
+func TestLoadFile_OpSection(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[op]
+items = ["prod-nmd-trips", "dev-api-keys"]
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Op.Items) != 2 {
+		t.Fatalf("want 2 op items, got %d", len(c.Op.Items))
+	}
+	if c.Op.Items[0] != "prod-nmd-trips" || c.Op.Items[1] != "dev-api-keys" {
+		t.Errorf("unexpected op items: %v", c.Op.Items)
+	}
+}
+
+func TestLoadFile_OpDefaultsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `[cell]`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Op.Items) != 0 {
+		t.Errorf("expected no op items when [op] not set, got %v", c.Op.Items)
+	}
+}
+
+func TestMerge_OpItemsAccumulateDeduped(t *testing.T) {
+	global := cfg.CellConfig{Op: cfg.OpSection{Items: []string{"shared-keys", "global-only"}}}
+	project := cfg.CellConfig{Op: cfg.OpSection{Items: []string{"shared-keys", "project-only"}}}
+	merged := cfg.Merge(global, project)
+	want := []string{"shared-keys", "global-only", "project-only"}
+	if len(merged.Op.Items) != len(want) {
+		t.Fatalf("want %v, got %v", want, merged.Op.Items)
+	}
+	for i, w := range want {
+		if merged.Op.Items[i] != w {
+			t.Errorf("item[%d]: want %q, got %q", i, w, merged.Op.Items[i])
+		}
 	}
 }

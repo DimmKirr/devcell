@@ -10,6 +10,7 @@ import (
 type CellSection struct {
 	ImageTag string `toml:"image_tag"`
 	GUI      bool   `toml:"gui"`
+	Timezone string `toml:"timezone"` // IANA tz (e.g. "Europe/Prague"); default: host $TZ
 }
 
 // VolumeMount holds a single [[volumes]] entry.
@@ -23,22 +24,23 @@ type PackagesSection struct {
 	Python map[string]string `toml:"python"`
 }
 
-// LLMProvider holds a single provider entry under [models.providers.<name>].
+// LLMProvider holds a single provider entry under [llm.models.providers.<name>].
 type LLMProvider struct {
 	BaseURL string   `toml:"base_url"`
 	Models  []string `toml:"models"`
 }
 
-// ModelsSection holds [models] config — generic LLM provider/model declarations
-// denormalized into agent-specific config files (opencode.json, etc.) at scaffold time.
-type ModelsSection struct {
-	Default   string                  `toml:"default"`
-	Providers map[string]LLMProvider  `toml:"providers"`
+// LLMModelsSection holds [llm.models] config — provider/model declarations.
+type LLMModelsSection struct {
+	Default   string                 `toml:"default"`
+	Providers map[string]LLMProvider `toml:"providers"`
 }
 
-// ClaudeSection holds [claude] config.
-type ClaudeSection struct {
-	UseOllama bool `toml:"use_ollama"`
+// LLMSection holds [llm] config — all AI agent settings in one place.
+type LLMSection struct {
+	SystemPrompt string           `toml:"system_prompt"`
+	UseOllama    bool             `toml:"use_ollama"`
+	Models       LLMModelsSection `toml:"models"`
 }
 
 // GitSection holds [git] config for git identity inside the container.
@@ -71,16 +73,21 @@ func (g GitSection) ResolvedCommitterEmail() string {
 	return g.AuthorEmail
 }
 
+// OpSection holds [op] config for 1Password secret injection.
+type OpSection struct {
+	Items []string `toml:"items"` // 1Password item names to resolve via `op item get`
+}
+
 // CellConfig is the merged configuration from all TOML layers.
 type CellConfig struct {
 	Cell     CellSection
-	Claude   ClaudeSection
+	LLM      LLMSection `toml:"llm"`
 	Git      GitSection `toml:"git"`
+	Op       OpSection  `toml:"op"`
 	Env      map[string]string
 	Mise     map[string]string `toml:"mise"` // [mise] — keys map to MISE_<UPPER_KEY> env vars
 	Volumes  []VolumeMount
 	Packages PackagesSection
-	Models   ModelsSection `toml:"models"`
 }
 
 // LoadFile parses a TOML file into CellConfig.
@@ -133,11 +140,17 @@ func Merge(global, project CellConfig) CellConfig {
 	if project.Cell.GUI {
 		out.Cell.GUI = true
 	}
+	if project.Cell.Timezone != "" {
+		out.Cell.Timezone = project.Cell.Timezone
+	}
 
-	// Claude: project wins when true
-	out.Claude = global.Claude
-	if project.Claude.UseOllama {
-		out.Claude.UseOllama = true
+	// LLM: project wins for scalars, providers accumulate
+	out.LLM = global.LLM
+	if project.LLM.SystemPrompt != "" {
+		out.LLM.SystemPrompt = project.LLM.SystemPrompt
+	}
+	if project.LLM.UseOllama {
+		out.LLM.UseOllama = true
 	}
 
 	// Git: project wins when non-zero
@@ -155,21 +168,32 @@ func Merge(global, project CellConfig) CellConfig {
 		out.Git.CommitterEmail = project.Git.CommitterEmail
 	}
 
+	// Op items: accumulate, project appended after global (deduped)
+	seen := make(map[string]bool, len(global.Op.Items))
+	for _, item := range global.Op.Items {
+		out.Op.Items = append(out.Op.Items, item)
+		seen[item] = true
+	}
+	for _, item := range project.Op.Items {
+		if !seen[item] {
+			out.Op.Items = append(out.Op.Items, item)
+		}
+	}
+
 	// Slices accumulate: global first, then project
 	out.Volumes = append(global.Volumes, project.Volumes...)
 
-	// Models: project default wins, providers accumulate (project wins on key conflict)
-	out.Models = global.Models
-	if project.Models.Default != "" {
-		out.Models.Default = project.Models.Default
+	// LLM models: project default wins, providers accumulate (project wins on key conflict)
+	if project.LLM.Models.Default != "" {
+		out.LLM.Models.Default = project.LLM.Models.Default
 	}
-	if len(global.Models.Providers) > 0 || len(project.Models.Providers) > 0 {
-		out.Models.Providers = make(map[string]LLMProvider)
-		for k, v := range global.Models.Providers {
-			out.Models.Providers[k] = v
+	if len(global.LLM.Models.Providers) > 0 || len(project.LLM.Models.Providers) > 0 {
+		out.LLM.Models.Providers = make(map[string]LLMProvider)
+		for k, v := range global.LLM.Models.Providers {
+			out.LLM.Models.Providers[k] = v
 		}
-		for k, v := range project.Models.Providers {
-			out.Models.Providers[k] = v
+		for k, v := range project.LLM.Models.Providers {
+			out.LLM.Models.Providers[k] = v
 		}
 	}
 

@@ -16,12 +16,12 @@ var buildCmd = &cobra.Command{
 }
 
 func init() {
-	buildCmd.Flags().Bool("no-cache", false, "disable Docker layer cache (full rebuild)")
+	buildCmd.Flags().Bool("update", false, "update nix flake inputs and rebuild without cache")
 }
 
 func runBuild(cmd *cobra.Command, _ []string) error {
 	applyOutputFlags()
-	noCache, _ := cmd.Flags().GetBool("no-cache")
+	update, _ := cmd.Flags().GetBool("update")
 
 	c, err := config.LoadFromOS()
 	if err != nil {
@@ -35,7 +35,18 @@ func runBuild(cmd *cobra.Command, _ []string) error {
 		}
 	}
 
-	if err := buildImageWithSpinner(c.ConfigDir, noCache, "Building devcell image", false); err != nil {
+	// Regenerate package.json and pyproject.toml from devcell.toml.
+	if err := scaffold.RegeneratePackageFiles(c.ConfigDir); err != nil {
+		return fmt.Errorf("regenerate package files: %w", err)
+	}
+
+	if update {
+		if err := updateFlakeLockWithSpinner(c.ConfigDir, false, "Updating nix flake inputs"); err != nil {
+			return err
+		}
+	}
+
+	if err := buildImageWithSpinner(c.ConfigDir, update, "Building devcell image", false); err != nil {
 		return err
 	}
 	return nil

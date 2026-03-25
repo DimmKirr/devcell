@@ -1,6 +1,17 @@
 # syntax=docker/dockerfile:1
 
 ###############################################################################
+# Stage: builder
+# Compile the cell CLI binary from repo source (CI context = repo root).
+###############################################################################
+FROM public.ecr.aws/docker/library/golang:1.24-alpine AS builder
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -o /cell ./cmd
+
+###############################################################################
 # Stage: base
 # Apt + user creation + nix + home-manager. Published as base image.
 # User Dockerfiles apply profiles via their own flake.nix.
@@ -42,6 +53,8 @@ RUN \
     chown -R ${USER_UID}:${USER_GID} /opt/devcell && \
     echo "${USER_NAME} ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 
+COPY --from=builder --chmod=755 /cell /opt/devcell/.local/bin/cell
+
 RUN mkdir -p /config /data /opt/mise /opt/npm-tools /opt/python-tools \
              /opt/devcell/.config/devcell && \
     chown -R ${USER_UID}:${USER_GID} /config /data /opt/mise /opt/npm-tools /opt/python-tools \
@@ -52,7 +65,7 @@ RUN mkdir -p /config /data /opt/mise /opt/npm-tools /opt/python-tools \
 # nix's seccomp BPF program with EINVAL (kernel compatibility issue).
 # Docker's own isolation is sufficient for build containers.
 RUN mkdir -p /etc/nix && \
-    printf 'sandbox = false\nfilter-syscalls = false\nsandbox-fallback = true\nexperimental-features = nix-command flakes\n' \
+    printf 'sandbox = false\nfilter-syscalls = false\nsandbox-fallback = true\nexperimental-features = nix-command flakes\nmax-substitution-jobs = 128\nhttp-connections = 128\n' \
         > /etc/nix/nix.conf
 
 USER ${USER_UID}:${USER_GID}
@@ -72,31 +85,40 @@ ENV USER=${USER_NAME}
 RUN export NIX_CONFIG="$(printf 'experimental-features = nix-command flakes\nsandbox = false\nfilter-syscalls = false\nsandbox-fallback = true')" && \
     curl -L https://nixos.org/nix/install | sh -s -- --no-daemon && \
     mkdir -p "${HOME}/.config/nix" && \
-    printf 'experimental-features = nix-command flakes\nsandbox = false\nfilter-syscalls = false\nsandbox-fallback = true\n' \
+    printf 'experimental-features = nix-command flakes\nsandbox = false\nfilter-syscalls = false\nsandbox-fallback = true\nmax-substitution-jobs = 128\nhttp-connections = 128\n' \
         > "${HOME}/.config/nix/nix.conf"
 
 # Nix 2.15+ uses XDG paths. Add nix-profile to PATH for subsequent RUN commands.
 ENV PATH="${HOME}/.nix-profile/bin:${PATH}"
 
-# Install home-manager and create nix per-user profile compat symlink.
+# Install home-manager.
 # Pin nixpkgs to the exact commit from nixhome/flake.lock to avoid GitHub API
 # branch→commit resolution (anonymous rate limit is 60 req/hr per IP; shared
 # GHA runners exhaust this). Update this hash when bumping nixhome/flake.lock.
 ARG NIXPKGS_REV=c217913993d6c6f6805c3b1a3bda5e639adfde6d
-RUN nix profile install "github:NixOS/nixpkgs/${NIXPKGS_REV}#home-manager" && \
-    mkdir -p /nix/var/nix/profiles/per-user/devcell && \
-    ln -sfT "$(readlink -f $HOME/.nix-profile)" \
-            /nix/var/nix/profiles/per-user/devcell/profile
+RUN nix profile install "github:NixOS/nixpkgs/${NIXPKGS_REV}#home-manager"
 
 ENV MISE_DATA_DIR=/opt/mise
+# Use home-manager's native profile path — automatically updated on every
+# `home-manager switch`, no manual symlink management needed.
 # Mise installs go to /opt/mise/installs/<tool>/<ver>/bin. Child stages create
 # stable symlinks (/opt/mise/<tool> → installs/<tool>/<ver>) and append to PATH
 # so that tools are available without shims (shims need `mise exec` resolution
 # which fails in plain /bin/sh RUN steps).
-ENV PATH="/nix/var/nix/profiles/per-user/devcell/profile/bin:${PATH}"
+ENV PATH="/opt/devcell/.local/state/nix/profiles/profile/bin:${PATH}"
+
+# Stamp base image version (commit SHA + build date) — needs root for /etc
+USER 0
+ARG GIT_COMMIT=unknown
+RUN mkdir -p /etc/devcell && \
+    chown ${USER_UID}:${USER_GID} /etc/devcell && \
+    echo "${GIT_COMMIT}-$(date -u +%Y%m%dT%H%M%SZ)" > /etc/devcell/base-image-version
 
 # Entrypoint last — changes here don't bust the nix/home-manager cache above
 COPY --chmod=755 images/entrypoint.sh /usr/local/bin/entrypoint.sh
+
+# Restore to devcell user — child stages (go, node, etc.) inherit this USER
+USER ${USER_UID}:${USER_GID}
 
 WORKDIR /
 
@@ -115,8 +137,6 @@ COPY --chown=${USER_UID}:${USER_GID} nixhome/ /opt/nixhome/
 RUN ARCH=$(uname -m) && \
     [ "$ARCH" = "aarch64" ] && ARCH_SUFFIX="-aarch64" || ARCH_SUFFIX="" && \
     home-manager switch --flake "/opt/nixhome#devcell-go${ARCH_SUFFIX}" && \
-    ln -sfT "$(readlink -f $HOME/.nix-profile)" \
-            /nix/var/nix/profiles/per-user/devcell/profile && \
     cd "$HOME" && MISE_DATA_DIR=/opt/mise MISE_YES=1 mise install && \
     for tool_dir in /opt/mise/installs/*/; do \
       tool=$(basename "$tool_dir"); \
@@ -138,8 +158,6 @@ COPY --chown=${USER_UID}:${USER_GID} nixhome/ /opt/nixhome/
 RUN ARCH=$(uname -m) && \
     [ "$ARCH" = "aarch64" ] && ARCH_SUFFIX="-aarch64" || ARCH_SUFFIX="" && \
     home-manager switch --flake "/opt/nixhome#devcell-node${ARCH_SUFFIX}" && \
-    ln -sfT "$(readlink -f $HOME/.nix-profile)" \
-            /nix/var/nix/profiles/per-user/devcell/profile && \
     cd "$HOME" && MISE_DATA_DIR=/opt/mise MISE_YES=1 mise install && \
     for tool_dir in /opt/mise/installs/*/; do \
       tool=$(basename "$tool_dir"); \
@@ -160,9 +178,7 @@ ARG USER_GID=1000
 COPY --chown=${USER_UID}:${USER_GID} nixhome/ /opt/nixhome/
 RUN ARCH=$(uname -m) && \
     [ "$ARCH" = "aarch64" ] && ARCH_SUFFIX="-aarch64" || ARCH_SUFFIX="" && \
-    home-manager switch --flake "/opt/nixhome#devcell-python${ARCH_SUFFIX}" && \
-    ln -sfT "$(readlink -f $HOME/.nix-profile)" \
-            /nix/var/nix/profiles/per-user/devcell/profile
+    home-manager switch --flake "/opt/nixhome#devcell-python${ARCH_SUFFIX}"
 
 ENV DEVCELL_PROFILE=devcell-python
 
@@ -171,11 +187,6 @@ SHELL ["/bin/bash", "-c"]
 RUN cd /opt/python-tools && uv sync
 SHELL ["/bin/sh", "-c"]
 ENV PATH="/opt/python-tools/.venv/bin:${PATH}"
-
-ENV PLAYWRIGHT_MCP_BROWSER=chromium
-ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
-ENV PLAYWRIGHT_BROWSERS_PATH=0
-ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH="/nix/var/nix/profiles/per-user/devcell/profile/bin/chromium"
 
 ###############################################################################
 # Stage: electronics
@@ -188,9 +199,7 @@ ARG USER_GID=1000
 COPY --chown=${USER_UID}:${USER_GID} nixhome/ /opt/nixhome/
 RUN ARCH=$(uname -m) && \
     [ "$ARCH" = "aarch64" ] && ARCH_SUFFIX="-aarch64" || ARCH_SUFFIX="" && \
-    home-manager switch --flake "/opt/nixhome#devcell-electronics${ARCH_SUFFIX}" && \
-    ln -sfT "$(readlink -f $HOME/.nix-profile)" \
-            /nix/var/nix/profiles/per-user/devcell/profile
+    home-manager switch --flake "/opt/nixhome#devcell-electronics${ARCH_SUFFIX}"
 
 ENV DEVCELL_PROFILE=devcell-electronics
 
@@ -206,8 +215,6 @@ COPY --chown=${USER_UID}:${USER_GID} nixhome/ /opt/nixhome/
 RUN ARCH=$(uname -m) && \
     [ "$ARCH" = "aarch64" ] && ARCH_SUFFIX="-aarch64" || ARCH_SUFFIX="" && \
     home-manager switch --flake "/opt/nixhome#devcell-fullstack${ARCH_SUFFIX}" && \
-    ln -sfT "$(readlink -f $HOME/.nix-profile)" \
-            /nix/var/nix/profiles/per-user/devcell/profile && \
     cd "$HOME" && MISE_DATA_DIR=/opt/mise MISE_YES=1 mise install && \
     for tool_dir in /opt/mise/installs/*/; do \
       tool=$(basename "$tool_dir"); \
@@ -232,11 +239,11 @@ RUN cd /opt/python-tools && uv sync
 SHELL ["/bin/sh", "-c"]
 ENV PATH="/opt/python-tools/.venv/bin:${PATH}"
 
-# Playwright runtime env
-ENV PLAYWRIGHT_MCP_BROWSER=chromium
-ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
-ENV PLAYWRIGHT_BROWSERS_PATH=0
-ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH="/nix/var/nix/profiles/per-user/devcell/profile/bin/chromium"
+# Patchright browser — download its own patched Chromium (stealth: no webdriver leak).
+# Do NOT set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH — that overrides the patched binary.
+# System deps are provided by nix (desktop/default.nix) via LD_LIBRARY_PATH in the
+# patchright-mcp-cell wrapper — no apt install-deps needed.
+RUN cd /opt/npm-tools && npx patchright install chromium
 
 ###############################################################################
 # Stage: ultimate
@@ -248,9 +255,7 @@ ARG USER_UID=1000
 ARG USER_GID=1000
 RUN ARCH=$(uname -m) && \
     [ "$ARCH" = "aarch64" ] && ARCH_SUFFIX="-aarch64" || ARCH_SUFFIX="" && \
-    home-manager switch --flake "/opt/nixhome#devcell-ultimate${ARCH_SUFFIX}" && \
-    ln -sfT "$(readlink -f $HOME/.nix-profile)" \
-            /nix/var/nix/profiles/per-user/devcell/profile
+    home-manager switch --flake "/opt/nixhome#devcell-ultimate${ARCH_SUFFIX}"
 
 ENV DEVCELL_PROFILE=devcell-ultimate
 ENV DEVCELL_GUI_ENABLED=true
