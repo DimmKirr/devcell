@@ -10,10 +10,25 @@
     packer
     terraform-docs
     terraform-plugin-docs  # generates/validates Terraform provider docs (use: tfplugindocs)
+    kubernetes-helm  # Kubernetes package manager (use: helm)
   ];
 
   devcell.managedMcp.servers.opentofu = {
     command = "opentofu-mcp-server";
     args = [];
+  };
+
+  # Linear — remote HTTP MCP server.
+  # Auth: OAuth 2.1 flow on first use (run /mcp in Claude session to authenticate).
+  devcell.managedMcp.servers."linear-server" = {
+    type = "http";
+    url = "https://mcp.linear.app/mcp";
+  };
+
+  # Notion — remote HTTP MCP server.
+  # Auth: OAuth 2.1 flow on first use (run /mcp in Claude session to authenticate).
+  devcell.managedMcp.servers.notion = {
+    type = "http";
+    url = "https://mcp.notion.com/mcp";
   };
 }

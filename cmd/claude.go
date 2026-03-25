@@ -20,7 +20,7 @@ args are forwarded to the claude binary unchanged.
 Use --ollama to route Claude Code through a local ollama instance
 (Anthropic Messages API compatibility). This sets ANTHROPIC_BASE_URL
 to point at ollama on the host. Can also be enabled permanently via
-use_ollama = true in the [claude] section of devcell.toml.
+use_ollama = true in the [llm] section of devcell.toml.
 
 Examples:
 
@@ -44,7 +44,7 @@ func claudeEnv() map[string]string {
 		c, err := config.LoadFromOS()
 		if err == nil {
 			cellCfg := cfg.LoadFromOS(c.ConfigDir, c.BaseDir)
-			useOllama = cellCfg.Claude.UseOllama
+			useOllama = cellCfg.LLM.UseOllama
 		}
 	}
 
@@ -56,7 +56,7 @@ func claudeEnv() map[string]string {
 		fmt.Fprintf(os.Stderr, " claude: ollama mode enabled, redirecting API to host ollama\n")
 	}
 	return map[string]string{
-		"ANTHROPIC_BASE_URL":                      "http://host.docker.internal:11434",
+		"ANTHROPIC_BASE_URL":                       "http://host.docker.internal:11434",
 		"ANTHROPIC_AUTH_TOKEN":                     "ollama",
 		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
 	}

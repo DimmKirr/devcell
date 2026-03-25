@@ -1,0 +1,28 @@
+# .devcell.toml — project-level DevCell overrides (merged on top of ~/.config/devcell/devcell.toml)
+
+# [cell]
+# image_tag = "latest-go"
+# gui = true
+# timezone = "Europe/Prague"
+
+# Project context injected into all AI agents (Claude, Codex, OpenCode).
+# Sits on top of CLAUDE.md — use for personal/local instructions not checked into the repo.
+# [llm]
+# system_prompt = """
+# This project uses PostgreSQL 16 with pgx/v5.
+# API endpoints follow REST conventions at /api/v2/.
+# """
+
+# 1Password items whose fields are passed into the container as env vars.
+# Requires `op` CLI on the host. Each field in the item becomes an env var:
+# e.g. a field labeled "API_KEY" with value "sk-123" → env var API_KEY=sk-123.
+# [op]
+# items = ["my-project-secrets"]
+
+# Extra environment variables forwarded into the container.
+# [env]
+# MY_VAR = "value"
+
+# Extra volume mounts appended to docker run.
+# [[volumes]]
+# mount = "~/work/secrets:/run/secrets:ro"

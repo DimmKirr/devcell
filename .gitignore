@@ -2,7 +2,7 @@
 .worktrees
 nixhome/user.nix
 .venv
-.env
+.env.devcell
 *.egg-info
 python-tools
 .vagrant
@@ -17,3 +17,5 @@ web/.astro
 web/src/content/cell/
 bin/
 .playwright-mcp
+test/testdata/**/nixhome
+test/results

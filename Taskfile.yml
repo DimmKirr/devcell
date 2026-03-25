@@ -4,64 +4,77 @@ version: '3'
 vars:
   GIT_COMMIT_HASH:
     sh: git rev-parse --short HEAD 2>/dev/null || echo "unknown"
-  CELL_LDFLAGS: -s -w -X github.com/DimmKirr/devcell/internal/version.GitCommit={{.GIT_COMMIT_HASH}}
-
-  PORT: '{{.PORT | default "9090"}}'
-  HTTP_HOST: '{{.HTTP_HOST | default "0.0.0.0"}}'
-  DOCKER_ARGS: '{{.DOCKER_ARGS }}'
-
-  DOCKERFILE: "Dockerfile"
-  IMAGE_TAG: "latest-ultimate"
-
-
-  APP_NAME: '{{base .USER_WORKING_DIR}}-{{env "CELL_ID" | default (env "TMUX_PANE" | replace "%" "" | default "0")}}'
-  WORKSPACE: "{{.APP_NAME}}"
-  BINARY_NAME: "{{.APP_NAME}}"
-
-  DEVCELL_DIR: '{{env "DEVCELL_DIR" | default (printf "%s/dev/dimmkirr/devcell" .HOME)}}'
-
-  CELL_HOME: '{{.HOME}}/.devcell/{{ env "TMUX_SESSION_NAME" | default "sandbox"}}'
-  PORT_PREFIX: '{{env "SESSION_PORT_PREFIX" | default ""}}{{env "CELL_ID" | default (env "TMUX_PANE" | replace "%" "" | default "")}}'
-  BASE_DIR: "{{ default .USER_WORKING_DIR }}"
+  BUILD_DATE:
+    sh: date -u +%Y%m%dT%H%M%SZ
+  CELL_LDFLAGS: -s -w -X github.com/DimmKirr/devcell/internal/version.GitCommit={{.GIT_COMMIT_HASH}} -X github.com/DimmKirr/devcell/internal/version.BuildDate={{.BUILD_DATE}}
 
 env:
-  APP_NAME: "{{.APP_NAME}}"
-  BASE_DIR: "{{.BASE_DIR}}"
-  USER_WORKING_DIR: "{{.USER_WORKING_DIR}}"
-  DOCKERFILE: "{{.DOCKERFILE}}"
-  IMAGE_TAG: "{{.IMAGE_TAG}}"
-
-  PORT_PREFIX: "{{.PORT_PREFIX}}"
-  EXT_VNC_PORT: "{{.PORT_PREFIX}}50"
-
-  PORT: "{{.PORT}}"
   BUILDKIT_PROGRESS: plain
-  CELL_HOME: "{{.CELL_HOME}}"
-
-###
-# Include this via:
-# includes:
-#   claude:
-#     taskfile: ~/dev/Taskfile.yml
-#     flatten: true
 
 tasks:
 
-  chrome:
-    desc: Open Chromium with project-scoped profile (saves cookies/passwords to .chrome/)
+  cell:build:
+    desc: Build cell CLI binary
+    dir: "{{.TASKFILE_DIR}}"
+    cmds:
+      - CGO_ENABLED=0 go build -ldflags "{{.CELL_LDFLAGS}}" -o ~/.local/bin/cell ./cmd/
+
+  cell:install:
+    aliases: [install]
+    desc: Build and install cell binary to ~/.local/bin/cell
+    dir: "{{.TASKFILE_DIR}}"
+    cmds:
+      - task: cell:build
+      - mkdir -p ~/.local/bin
+      - echo "Installed to ~/.local/bin/cell"
+
+  image:build:base:
+    desc: Build local base images into local Docker daemon (host platform only, no push)
+    aliases: [image:build, bake:local]
     silent: true
     cmds:
-      - |
-        echo "Opening Chromium with profile: {{.CELL_HOME}}/.chrome"
-        open -na "Chromium" --args --user-data-dir="{{.CELL_HOME}}/.chrome" {{.CLI_ARGS}}
+      - USER_UID=$(id -u) USER_GID=$(id -g) GIT_COMMIT={{.GIT_COMMIT_HASH}} PLATFORMS="" docker buildx bake --file {{.TASKFILE_DIR}}/docker-bake.hcl --load local {{.CLI_ARGS}}
+
+  image:build:ultimate:
+    desc: Build ultimate base image locally (FROM base, adds nix ultimate stack + KiCad)
+    silent: true
+    cmds:
+      - USER_UID=$(id -u) USER_GID=$(id -g) GIT_COMMIT={{.GIT_COMMIT_HASH}} PLATFORMS="" docker buildx bake --file {{.TASKFILE_DIR}}/docker-bake.hcl --load local-ultimate {{.CLI_ARGS}}
+
+  image:build:user-local:dev:
+    desc: "Build user image for dev/test (wraps: cell init --force --yes --local-nixhome)"
+    aliases: [image:dev]
+    dir: "{{.TASKFILE_DIR}}"
+    env:
+      XDG_CONFIG_HOME: "{{.TASKFILE_DIR}}/test/testdata/devcell-config-simple"
+      DEVCELL_BASE_IMAGE: "ghcr.io/dimmkirr/devcell:base-local"
+      DEVCELL_NIXHOME_PATH: "{{.TASKFILE_DIR}}/nixhome"
+    cmds:
+      - cell build --debug {{.CLI_ARGS}}
+
+  image:build:user-local:force:
+    desc: "Build user image for dev/test (wraps: cell init --force --yes --local-nixhome)"
+    aliases: [image:dev]
+    dir: "{{.TASKFILE_DIR}}"
+    env:
+      XDG_CONFIG_HOME: "{{.TASKFILE_DIR}}/test/testdata/devcell-config-simple"
+      DEVCELL_BASE_IMAGE: "ghcr.io/dimmkirr/devcell:base-local"
+    cmds:
+      - cell init --force --yes --local-nixhome {{.TASKFILE_DIR}}/nixhome --debug {{.CLI_ARGS}}
+
+  image:push:
+    desc: Build ci group and push to registry (multi-arch)
+    silent: true
+    cmds:
+      - GIT_COMMIT={{.GIT_COMMIT_HASH}} docker buildx bake --file {{.TASKFILE_DIR}}/docker-bake.hcl --push ci {{.CLI_ARGS}}
 
   nix:validate:
-    desc: Validate all nixhome profiles — syntax check then attr check (no build, no activation)
+    desc: Validate all nixhome stacks — syntax check then attr check (no build, no activation)
     dir: "{{.TASKFILE_DIR}}"
     cmds:
       - |
         set -e
-        NIX_BIN=/nix/var/nix/profiles/per-user/devcell/profile/bin
+        NIX_BIN=/opt/devcell/.local/state/nix/profiles/profile/bin
         FLAKE="{{.TASKFILE_DIR}}/nixhome"
 
         echo "=== 1/2 Syntax check (nix-instantiate --parse) ==="
@@ -81,8 +94,8 @@ tasks:
         echo "=== 2/2 Attr check (nix eval, no build) ==="
         ARCH=$(uname -m)
         [ "$ARCH" = "aarch64" ] && SUFFIX="-aarch64" || SUFFIX=""
-        for profile in base go node python fullstack electronics ultimate; do
-          CFG="devcell-${profile}${SUFFIX}"
+        for stack in base go node python fullstack electronics ultimate; do
+          CFG="devcell-${stack}${SUFFIX}"
           printf "  %-40s" "$CFG"
           COUNT=$(sudo "$NIX_BIN/nix" eval \
             "${FLAKE}#homeConfigurations.${CFG}.config.home.packages" \
@@ -93,55 +106,34 @@ tasks:
               --apply 'builtins.length' --json 2>&1 | grep 'error:' >&2; exit 1; }
         done
         echo ""
-        echo "All profiles valid."
+        echo "All stacks valid."
 
-  build:image:
-    desc: Build local group into local Docker daemon (host platform only, no push)
-    aliases: [build:image, bake:local]
-    silent: true
-    cmds:
-      - USER_UID=$(id -u) USER_GID=$(id -g) PLATFORMS="" docker buildx bake --file {{.DEVCELL_DIR}}/docker-bake.hcl --load local {{.CLI_ARGS}}
-
-  bake:ci:
-    desc: Build ci group and push to registry (multi-arch)
-    silent: true
-    cmds:
-      - docker buildx bake --file {{.DEVCELL_DIR}}/docker-bake.hcl --push ci {{.CLI_ARGS}}
-
-  web:docs:
-    desc: Generate cell CLI markdown reference for the website (requires Go)
-    silent: true
-    dir: "{{.DEVCELL_DIR}}"
-    cmds:
-      - go run $(ls cmd/*.go | grep -Ev '(_test|main)\.go') web/src/content/cell
-
-  web:start:
-    desc: Start Astro dev server for the DevCell landing page
-    silent: true
-    dir: "{{.DEVCELL_DIR}}/web"
-    cmds:
-      - npm install
-      - npm run dev
-
-  install:
-    desc: Install cell binary to ~/.local/bin/cell
-    dir: "{{.DEVCELL_DIR}}"
-    cmds:
-      - mkdir -p ~/.local/bin
-      - task: build
-      - echo "Installed to ~/.local/bin/cell"
-
-  build:
-    desc: Build cell binary to bin/cell
-    aliases: [cell:build]
-    dir: "{{.DEVCELL_DIR}}"
-    cmds:
-      - CGO_ENABLED=0 go build -ldflags "{{.CELL_LDFLAGS}}" -o ~/.local/bin/cell ./cmd/
-
-  ########################################################################################################################
   test:
     desc: Run the full container integration test suite
     silent: true
     cmds:
       - go test -v -timeout 120s ./test/... {{.CLI_ARGS}}
 
+  test:vagrant:
+    desc: Run E2E install test in a clean Debian VM (QEMU). Requires vagrant + vagrant-qemu plugin.
+    dir: "{{.TASKFILE_DIR}}/test/vagrant"
+    cmds:
+      - vagrant up --provider=qemu
+      - defer: vagrant destroy -f
+    env:
+      CELL_VERSION: '{{.CELL_VERSION | default "0.0.0"}}'
+
+  web:docs:
+    desc: Generate cell CLI markdown reference for the website (requires Go)
+    silent: true
+    dir: "{{.TASKFILE_DIR}}"
+    cmds:
+      - go run $(ls cmd/*.go | grep -Ev '(_test|main)\.go') web/src/content/cell
+
+  web:start:
+    desc: Start Astro dev server for the DevCell landing page
+    silent: true
+    dir: "{{.TASKFILE_DIR}}/web"
+    cmds:
+      - npm install
+      - npm run dev

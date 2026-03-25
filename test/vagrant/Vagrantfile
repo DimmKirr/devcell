@@ -1,0 +1,47 @@
+# E2E install test: clean Debian Linux VM via QEMU.
+# Validates: Homebrew install → cell claude --version → image pull → version output.
+#
+# Usage:
+#   vagrant up --provider=qemu
+#   vagrant destroy -f
+#
+# Prerequisites:
+#   vagrant plugin install vagrant-qemu
+#
+# Environment variables:
+#   CELL_VERSION  — devcell version to test (default: 0.0.0)
+
+CELL_VERSION = ENV["CELL_VERSION"] || "0.0.0"
+
+Vagrant.configure("2") do |config|
+  config.vm.box = "generic/debian12"
+  config.vm.hostname = "devcell-e2e"
+
+  # SSH over QEMU user-mode networking can be slow
+  config.vm.boot_timeout = 600
+  config.ssh.connect_timeout = 60
+  config.ssh.insert_key = false
+
+  # Auto-detect QEMU share dir (firmware, EFI vars) — works with Nix and Homebrew installs
+  qemu_bin = `which qemu-system-aarch64 2>/dev/null`.strip
+  qemu_share = if !qemu_bin.empty?
+    real = `realpath #{qemu_bin}`.strip
+    File.join(File.dirname(File.dirname(real)), "share", "qemu")
+  else
+    "/opt/homebrew/share/qemu"
+  end
+
+  config.vm.provider "qemu" do |qe|
+    qe.memory = "4096"
+    qe.cpus = 2
+    qe.ssh_port = 50022
+    qe.qemu_dir = qemu_share
+  end
+
+  # Forward nothing — this is a disposable test VM
+
+  config.vm.provision "shell",
+    path: "test-install.sh",
+    env: { "CELL_VERSION" => CELL_VERSION },
+    privileged: false
+end

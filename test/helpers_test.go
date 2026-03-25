@@ -33,6 +33,14 @@ var (
 	electronicsOnce sync.Once
 	electronicsTag  string
 	electronicsErr  error
+
+	testdataOnce sync.Once
+	testdataTag  string
+	testdataErr  error
+
+	// runDir is the per-run results directory: test/results/<datetime>-<sha>/
+	runDir     string
+	runDirOnce sync.Once
 )
 
 // TestMain cleans up locally-built test images after all tests complete.
@@ -47,14 +55,20 @@ func TestMain(m *testing.M) {
 	if electronicsTag != "" {
 		osexec.Command("docker", "rmi", electronicsTag).Run()
 	}
+	if testdataTag != "" {
+		osexec.Command("docker", "rmi", testdataTag).Run()
+	}
 	os.Exit(code)
 }
 
 // shortSHA returns the abbreviated commit hash of HEAD.
+// Falls back to a timestamp if git is unavailable (e.g. broken system gitconfig).
 func shortSHA() string {
-	out, err := osexec.Command("git", "rev-parse", "--short", "HEAD").Output()
+	cmd := osexec.Command("git", "rev-parse", "--short", "HEAD")
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1")
+	out, err := cmd.Output()
 	if err != nil {
-		panic(fmt.Sprintf("git rev-parse: %v", err))
+		return fmt.Sprintf("dev%s", time.Now().Format("150405"))
 	}
 	return strings.TrimSpace(string(out))
 }
@@ -77,12 +91,24 @@ func buildLocalImage(target, tagPrefix string) (string, error) {
 	return tag, nil
 }
 
-// image returns the ultimate image tag for tests.
-// Uses DEVCELL_TEST_IMAGE if set (CI); otherwise builds local-ultimate once with a unique tag.
+// image returns the test image tag.
+// Priority:
+//  1. DEVCELL_TEST_IMAGE env var (CI or explicit override)
+//  2. Build from testdata Dockerfile (home-manager switch on top of ultimate-local,
+//     uses current nixhome/ so local changes are tested)
+//  3. Fallback: build local-ultimate from scratch (slow, no nixhome iteration)
 func image() string {
 	if img := os.Getenv("DEVCELL_TEST_IMAGE"); img != "" {
 		return img
 	}
+	// Build from testdata Dockerfile if ultimate-local base exists.
+	// This re-applies home-manager switch with current nixhome/ (~53s),
+	// so config changes are tested on every run.
+	const ultimateLocal = "ghcr.io/dimmkirr/devcell:ultimate-local"
+	if imageExists(ultimateLocal) {
+		return testdataImage()
+	}
+	// Fallback: build from scratch (slow)
 	ultimateOnce.Do(func() {
 		ultimateTag, ultimateErr = buildLocalImage("local-ultimate", "devcell-test")
 	})
@@ -90,6 +116,11 @@ func image() string {
 		panic(fmt.Sprintf("image: %v", ultimateErr))
 	}
 	return ultimateTag
+}
+
+// imageExists checks if a Docker image exists locally.
+func imageExists(tag string) bool {
+	return osexec.Command("docker", "image", "inspect", tag).Run() == nil
 }
 
 // baseImage returns the base image tag for entrypoint tests.
@@ -110,7 +141,7 @@ func baseImage() string {
 // ── Electronics image (base + home-manager switch devcell-electronics) ────────
 //
 // Builds a user-level image following the scaffold Dockerfile pattern:
-//   1. FROM base image (nix + home-manager, no profile)
+//   1. FROM base image (nix + home-manager, no stack)
 //   2. Copy local nixhome/ flake
 //   3. home-manager switch --flake .#devcell-electronics (smallest profile with desktop module)
 //   4. npm install patchright-mcp (provides mcp-server-patchright binary)
@@ -128,7 +159,7 @@ RUN ARCH=$(uname -m) && \
       --flake "/opt/devcell/.config/devcell#devcell-electronics${ARCH_SUFFIX}" \
       --impure && \
     ln -sfT "$(readlink -f /opt/devcell/.nix-profile)" \
-            /nix/var/nix/profiles/per-user/devcell/profile
+            /opt/devcell/.local/state/nix/profiles/profile
 
 COPY --chown=devcell:usergroup package.json /opt/npm-tools/
 RUN cd /opt/npm-tools && npm install
@@ -136,7 +167,7 @@ ENV PATH="/opt/npm-tools/node_modules/.bin:${PATH}"
 `
 
 const elecFlakeNix = `{
-  description = "DevCell electronics test profile";
+  description = "DevCell electronics test stack";
   inputs.devcell.url = "path:./nixhome";
   outputs = { self, devcell, ... }: {
     homeConfigurations = devcell.homeConfigurations;
@@ -220,7 +251,7 @@ func copyDirRecursive(src, dst string) error {
 
 // electronicsImage returns the electronics image tag.
 // Uses DEVCELL_TEST_ELECTRONICS_IMAGE if set (CI); otherwise builds once from
-// base + local nixhome with devcell-electronics profile.
+// base + local nixhome with devcell-electronics stack.
 func electronicsImage() string {
 	if img := os.Getenv("DEVCELL_TEST_ELECTRONICS_IMAGE"); img != "" {
 		return img
@@ -264,6 +295,80 @@ func startElectronicsEnvContainer(t *testing.T) testcontainers.Container {
 		"HOST_USER": hostUser,
 		"APP_NAME":  "test",
 	})
+}
+
+// ── Testdata image (ultimate-local + home-manager switch with local nix cache) ─
+//
+// Builds from the testdata Dockerfile which:
+//   1. FROM ultimate-local (pre-built base with full nix store)
+//   2. Copies testdata config + current nixhome/ into the image
+//   3. home-manager switch using local /nix store as substituter (fast, no network)
+//   4. Installs mise runtimes, npm tools, python tools
+//
+// This is the correct image for iterating on nixhome changes — it re-applies
+// home-manager on top of the cached nix store, so config changes are tested.
+
+const testdataDir = "testdata/devcell-config-simple/devcell"
+
+// testRunDir returns the per-run results directory, creating it on first call.
+// Layout: test/results/<YYYYMMDD-HHMMSS>-<sha>/
+func testRunDir() string {
+	runDirOnce.Do(func() {
+		ts := time.Now().Format("20060102-150405")
+		runDir = filepath.Join("results", ts+"-"+shortSHA())
+		if err := os.MkdirAll(runDir, 0755); err != nil {
+			panic(fmt.Sprintf("create run dir: %v", err))
+		}
+		log.Printf("Test run dir: %s", runDir)
+	})
+	return runDir
+}
+
+// buildTestdataImage builds from the testdata Dockerfile with current nixhome.
+// The build context is persisted in testRunDir()/build-context/ for inspection.
+func buildTestdataImage() (string, error) {
+	dir := filepath.Join(testRunDir(), "build-context")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return "", fmt.Errorf("mkdir build-context: %w", err)
+	}
+
+	// Copy testdata build context.
+	if err := copyDirRecursive(testdataDir, dir); err != nil {
+		return "", fmt.Errorf("copy testdata: %w", err)
+	}
+
+	// Replace testdata nixhome with current repo nixhome for iteration.
+	nixhomeDst := filepath.Join(dir, "nixhome")
+	os.RemoveAll(nixhomeDst)
+	if err := copyDirRecursive(filepath.Join("..", "nixhome"), nixhomeDst); err != nil {
+		return "", fmt.Errorf("copy nixhome: %w", err)
+	}
+
+	tag := fmt.Sprintf("devcell-test-testdata:%s-%s", shortSHA(), time.Now().Format("20060102T150405"))
+	log.Printf("Building testdata image: %s", tag)
+	cmd := osexec.Command("docker", "build", "--progress=plain", "-t", tag, dir)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("build testdata: %w", err)
+	}
+	return tag, nil
+}
+
+// testdataImage returns the testdata image tag.
+// Uses DEVCELL_TEST_TESTDATA_IMAGE if set; otherwise builds once from
+// ultimate-local + current nixhome via home-manager switch.
+func testdataImage() string {
+	if img := os.Getenv("DEVCELL_TEST_TESTDATA_IMAGE"); img != "" {
+		return img
+	}
+	testdataOnce.Do(func() {
+		testdataTag, testdataErr = buildTestdataImage()
+	})
+	if testdataErr != nil {
+		panic(fmt.Sprintf("testdataImage: %v", testdataErr))
+	}
+	return testdataTag
 }
 
 func startContainer(t *testing.T, env map[string]string) testcontainers.Container {

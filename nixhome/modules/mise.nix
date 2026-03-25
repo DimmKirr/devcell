@@ -33,12 +33,27 @@ in {
       '';
     };
 
-    home.file.".tool-versions" = lib.mkIf (cfg.tools != {}) {
-      text = toolVersionsContent + "\n";
-    };
+    # .tool-versions is written to /etc/devcell/ (not home.file) to avoid
+    # nix creating a dangling symlink at $HOME. The entrypoint fragment
+    # copies it to $HOME at runtime; build-time mise install reads it
+    # from /opt/devcell/ via the activation-generated copy.
+    home.activation.writeToolVersions = lib.mkIf (cfg.tools != {}) (
+      lib.hm.dag.entryAfter ["writeBoundary"] ''
+        export PATH="/usr/bin:/bin:$PATH"
+        $DRY_RUN_CMD mkdir -p /etc/devcell
+        echo ${lib.escapeShellArg (toolVersionsContent + "\n")} | $DRY_RUN_CMD tee /etc/devcell/tool-versions > /dev/null
+        $DRY_RUN_CMD cp /etc/devcell/tool-versions "$HOME/.tool-versions" 2>/dev/null || true
+      ''
+    );
 
     home.file.".default-npm-packages" = lib.mkIf (cfg.defaultNpmPackages != []) {
       text = lib.concatStringsSep "\n" cfg.defaultNpmPackages + "\n";
+    };
+
+    # ── Entrypoint fragment: mise setup ──────────────────────────────────────
+    home.file.".config/devcell/entrypoint.d/10-mise.sh" = {
+      executable = true;
+      source = ./fragments/10-mise.sh;
     };
   };
 }

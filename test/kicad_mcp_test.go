@@ -3,7 +3,7 @@ package container_test
 // kicad_mcp_test.go — tests for the kicad-mcp MCP server in the electronics profile.
 // Run against the electronics image:
 //
-//	DEVCELL_TEST_IMAGE=ghcr.io/dimmkirr/devcell:latest-electronics go test -v -run TestKicadMcp ./...
+//	DEVCELL_TEST_IMAGE=ghcr.io/dimmkirr/devcell:latest-electronics go test -v -run TestKicad_Mcp ./...
 
 import (
 	"encoding/json"
@@ -11,7 +11,7 @@ import (
 	"testing"
 )
 
-func TestKicadMcp(t *testing.T) {
+func TestKicad_Mcp(t *testing.T) {
 	c := startContainer(t, map[string]string{"HOST_USER": hostUser})
 
 	// ── 1. Binary on PATH ─────────────────────────────────────────────────────

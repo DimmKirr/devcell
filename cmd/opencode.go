@@ -31,7 +31,7 @@ All additional args are forwarded to the opencode binary unchanged.
 
 On first run, if no opencode config exists at $CELL_HOME/.config/opencode/,
 locally available ollama models are auto-detected and written there.
-When [models] is configured in devcell.toml, those models are used instead.
+When [llm.models] is configured in devcell.toml, those models are used instead.
 
 Examples:
 
@@ -95,20 +95,20 @@ func opencodeEnv() map[string]string {
 			fmt.Fprintf(os.Stderr, " opencode: config load failed, using minimal config\n")
 		}
 		return map[string]string{
-			"OPENCODE_CONFIG_CONTENT": string(buildOpencodeJSON(cfg.ModelsSection{})),
+			"OPENCODE_CONFIG_CONTENT": string(buildOpencodeJSON(cfg.LLMModelsSection{})),
 		}
 	}
 
-	// Resolve models: devcell.toml [models] > auto-detect ollama > empty.
+	// Resolve models: devcell.toml [llm.models] > auto-detect ollama > empty.
 	cellCfg := cfg.LoadFromOS(c.ConfigDir, c.BaseDir)
-	models := cellCfg.Models
+	models := cellCfg.LLM.Models
 	if len(models.Providers) > 0 {
 		if dbg {
-			fmt.Fprintf(os.Stderr, " opencode: using models from devcell.toml [models]\n")
+			fmt.Fprintf(os.Stderr, " opencode: using models from devcell.toml [llm.models]\n")
 		}
 	} else {
 		if dbg {
-			fmt.Fprintf(os.Stderr, " opencode: no [models] in devcell.toml, probing ollama...\n")
+			fmt.Fprintf(os.Stderr, " opencode: no [llm.models] in devcell.toml, probing ollama...\n")
 		}
 		models = autoDetectOllamaModels()
 	}
@@ -185,30 +185,30 @@ func mergeOpencodeConfig(path string, newData []byte, dbg bool) ([]byte, error) 
 }
 
 // autoDetectOllamaModels probes the local ollama instance for available models,
-// ranks them by SWE-bench fallback ratings, and returns a ModelsSection with
+// ranks them by SWE-bench fallback ratings, and returns a LLMModelsSection with
 // all detected models and the #1 ranked model as default.
-func autoDetectOllamaModels() cfg.ModelsSection {
+func autoDetectOllamaModels() cfg.LLMModelsSection {
 	dbg := scanFlag("--debug")
 	ctx := context.Background()
 	if !ollama.Detect(ctx, ollama.DefaultBaseURL) {
 		if dbg {
 			fmt.Fprintf(os.Stderr, " opencode: ollama not detected at %s\n", ollama.DefaultBaseURL)
 		}
-		return cfg.ModelsSection{}
+		return cfg.LLMModelsSection{}
 	}
 	models, err := ollama.FetchModels(ctx, ollama.DefaultBaseURL)
 	if err != nil || len(models) == 0 {
 		if dbg {
 			fmt.Fprintf(os.Stderr, " opencode: no models found from ollama\n")
 		}
-		return cfg.ModelsSection{}
+		return cfg.LLMModelsSection{}
 	}
 	if dbg {
 		fmt.Fprintf(os.Stderr, " opencode: found %d models from ollama\n", len(models))
 	}
 	ranked := ollama.RankModels(models, 0, nil, nil)
 	if len(ranked) == 0 {
-		return cfg.ModelsSection{}
+		return cfg.LLMModelsSection{}
 	}
 
 	if dbg {
@@ -225,7 +225,7 @@ func autoDetectOllamaModels() cfg.ModelsSection {
 
 	// Only provide the model list — don't auto-select a default.
 	// The user picks in opencode's UI, or sets [models] default in devcell.toml.
-	return cfg.ModelsSection{
+	return cfg.LLMModelsSection{
 		Providers: map[string]cfg.LLMProvider{
 			"ollama": {Models: names},
 		},
@@ -265,17 +265,17 @@ type opencodeJSON struct {
 
 type opencodeProviderJSON struct {
 	NPM     string                       `json:"npm"`
-	Options map[string]string             `json:"options"`
-	Models  map[string]opencodeModelJSON  `json:"models"`
+	Options map[string]string            `json:"options"`
+	Models  map[string]opencodeModelJSON `json:"models"`
 }
 
 type opencodeModelJSON struct {
 	Name string `json:"name"`
 }
 
-// buildOpencodeJSON generates opencode config JSON from the [models] section.
+// buildOpencodeJSON generates opencode config JSON from the [llm.models] section.
 // Always includes permission:"allow" for sandbox auto-approval.
-func buildOpencodeJSON(ms cfg.ModelsSection) []byte {
+func buildOpencodeJSON(ms cfg.LLMModelsSection) []byte {
 	doc := opencodeJSON{
 		Schema:     "https://opencode.ai/config.json",
 		Permission: "allow",

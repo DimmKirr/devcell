@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"net"
 	"strconv"
 	"strings"
 	"testing"
@@ -71,6 +72,20 @@ func TestAppName_WithSpaces(t *testing.T) {
 }
 
 // --- SessionName / CellHome ---
+
+func TestCellHome_WithDevcellSessionName(t *testing.T) {
+	c := config.Load("/cwd", env("DEVCELL_SESSION_NAME", "myproject", "HOME", "/home/bob"))
+	if c.CellHome != "/home/bob/.devcell/myproject" {
+		t.Errorf("want /home/bob/.devcell/myproject, got %q", c.CellHome)
+	}
+}
+
+func TestCellHome_DevcellSessionOverridesTmux(t *testing.T) {
+	c := config.Load("/cwd", env("DEVCELL_SESSION_NAME", "override", "TMUX_SESSION_NAME", "work", "HOME", "/home/bob"))
+	if c.CellHome != "/home/bob/.devcell/override" {
+		t.Errorf("want /home/bob/.devcell/override, got %q", c.CellHome)
+	}
+}
 
 func TestCellHome_WithTmuxSession(t *testing.T) {
 	c := config.Load("/cwd", env("TMUX_SESSION_NAME", "work", "HOME", "/home/bob"))
@@ -164,6 +179,37 @@ func TestImage_Default(t *testing.T) {
 	c := config.Load("/cwd", env())
 	if c.Image != "ghcr.io/dimmkirr/devcell:latest-ultimate" {
 		t.Errorf("unexpected default image: %q", c.Image)
+	}
+}
+
+// --- ResolveAvailablePorts ---
+
+func TestResolveAvailablePorts_FreePortUnchanged(t *testing.T) {
+	c := config.Load("/cwd", env("CELL_ID", "3"))
+	orig := c.VNCPort
+	c.ResolveAvailablePorts()
+	// Port 350 is almost certainly free in test — should stay the same
+	if c.VNCPort != orig {
+		t.Errorf("free port should not change: want %s, got %s", orig, c.VNCPort)
+	}
+}
+
+func TestResolveAvailablePorts_OccupiedPortBumps(t *testing.T) {
+	c := config.Load("/cwd", env("CELL_ID", "3"))
+	// Occupy the preferred VNC port
+	ln, err := net.Listen("tcp", ":"+c.VNCPort)
+	if err != nil {
+		t.Skipf("cannot bind port %s: %v", c.VNCPort, err)
+	}
+	defer ln.Close()
+
+	c.ResolveAvailablePorts()
+	if c.VNCPort == "350" {
+		t.Error("VNCPort should have been bumped away from occupied 350")
+	}
+	port, err := strconv.Atoi(c.VNCPort)
+	if err != nil || port <= 350 {
+		t.Errorf("VNCPort should be > 350, got %q", c.VNCPort)
 	}
 }
 

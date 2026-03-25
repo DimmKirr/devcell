@@ -1,20 +1,28 @@
 FROM {{BASE_IMAGE}}
 
-# Copy the user's flake (fetches nixhome from GitHub).
-# Edit flake.nix to customise packages, then run 'cell build'.
-COPY --chown=devcell:usergroup flake.nix /opt/devcell/.config/devcell/
+# Stamp user image version (commit SHA + build date)
+ARG GIT_COMMIT=unknown
+USER 0
+RUN mkdir -p /etc/devcell && \
+    echo "${GIT_COMMIT}-$(date -u +%Y%m%dT%H%M%SZ)" > /etc/devcell/user-image-version
+USER devcell
 
-# Activate the profile and install language runtimes.
+# Copy flake + lock. The glob (flake.*) makes flake.lock optional — first build
+# won't have one yet; nix creates it and subsequent builds reuse it, pinning
+# inputs so the base image's /nix/store paths are found without re-downloading.
+COPY --chown=devcell:usergroup flake.* /opt/devcell/.config/devcell/
+
+# Activate the nix profile.
 # NIX_REFRESH is set to "--refresh" by `cell build --no-cache` to bust nix flake cache.
 ARG NIX_REFRESH=""
 RUN ARCH=$(uname -m) && \
     [ "$ARCH" = "aarch64" ] && ARCH_SUFFIX="-aarch64" || ARCH_SUFFIX="" && \
     home-manager switch \
       --flake "/opt/devcell/.config/devcell#devcell-ultimate${ARCH_SUFFIX}" \
-      --impure $NIX_REFRESH && \
-    ln -sfT "$(readlink -f /opt/devcell/.nix-profile)" \
-            /nix/var/nix/profiles/per-user/devcell/profile && \
-    (mkdir -p /opt/mise 2>/dev/null || sudo mkdir -p /opt/mise) && \
+      --impure $NIX_REFRESH
+
+# Install language runtimes via mise (separate layer — cached when only nix config changes).
+RUN (mkdir -p /opt/mise 2>/dev/null || sudo mkdir -p /opt/mise) && \
     cd /opt/devcell && MISE_DATA_DIR=/opt/mise MISE_YES=1 mise install && \
     for tool_dir in /opt/mise/installs/*/; do \
       tool=$(basename "$tool_dir"); \

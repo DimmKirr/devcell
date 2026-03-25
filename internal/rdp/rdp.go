@@ -44,8 +44,8 @@ func RDPUrl(port string) string {
 }
 
 // RoyalTSXUrl returns a Royal TSX URI for the given port and credentials.
-// macOS format: rtsx://rdp://user:pass@host:port
-// (query string params not supported on macOS)
+// Note: macOS Royal TSX does not support property_* query params in adhoc URIs.
+// Retina must be enabled via Application → Default Settings → Remote Desktop → Display.
 func RoyalTSXUrl(port, user, password string) string {
 	return "rtsx://rdp://" + user + ":" + password + "@127.0.0.1:" + port
 }

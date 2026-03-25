@@ -1,5 +1,5 @@
 {
-  description = "devcell container tool profiles";
+  description = "devcell container tool stacks";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
@@ -36,7 +36,7 @@
       nixCfg = {
         inherit system;
         config.allowUnfreePredicate = pkg:
-          builtins.elem (lib.getName pkg) ["claude-code" "packer" "terraform"];
+          builtins.elem (lib.getName pkg) ["claude-code" "corefonts" "packer" "terraform"];
       };
       pkgsUnstable = import nixpkgs-unstable nixCfg;
       pkgsEdge = import nixpkgs-edge nixCfg;
@@ -55,19 +55,19 @@
           ++ modules;
       };
 
-    # Map of profile name → module list
-    profiles = {
-      "devcell-base" = [./profiles/base.nix];
-      "devcell-go" = [./profiles/go.nix];
-      "devcell-node" = [./profiles/node.nix];
-      "devcell-python" = [./profiles/python.nix];
-      "devcell-fullstack" = [./profiles/fullstack.nix];
-      "devcell-electronics" = [./profiles/electronics.nix];
-      "devcell-ultimate" = [./profiles/ultimate.nix];
+    # Map of stack name → module list
+    stacks = {
+      "devcell-base" = [./stacks/base.nix];
+      "devcell-go" = [./stacks/go.nix];
+      "devcell-node" = [./stacks/node.nix];
+      "devcell-python" = [./stacks/python.nix];
+      "devcell-fullstack" = [./stacks/fullstack.nix];
+      "devcell-electronics" = [./stacks/electronics.nix];
+      "devcell-ultimate" = [./stacks/ultimate.nix];
     };
 
     # Generate homeConfigurations for x86_64-linux and aarch64-linux.
-    # aarch64 variants use a "-aarch64" suffix so the Dockerfile can select
+    # aarch64 stacks use a "-aarch64" suffix so the Dockerfile can select
     # the right config via TARGETARCH:
     #   ARCH_SUFFIX=$([ "$TARGETARCH" = "arm64" ] && echo "-aarch64" || echo "")
     #   home-manager switch --flake .#devcell-fullstack${ARCH_SUFFIX}
@@ -80,7 +80,7 @@
           // {"${name}-aarch64" = mkHome "aarch64-linux" mods;}
       )
       {}
-      profiles;
+      stacks;
   in {
     homeConfigurations = mkAllConfigs;
 

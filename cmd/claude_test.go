@@ -76,14 +76,14 @@ func TestClaude_NoOllama_NoEnv(t *testing.T) {
 	}
 }
 
-// TestClaude_ConfigUseOllama_InjectsEnv verifies that [claude] use_ollama=true
+// TestClaude_ConfigUseOllama_InjectsEnv verifies that [llm] use_ollama=true
 // in devcell.toml injects the ollama env vars.
 func TestClaude_ConfigUseOllama_InjectsEnv(t *testing.T) {
 	home := scaffoldedHome(t)
 
 	cfgDir := filepath.Join(home, ".config", "devcell")
 	tomlContent := `[cell]
-[claude]
+[llm]
 use_ollama = true
 `
 	if err := os.WriteFile(filepath.Join(cfgDir, "devcell.toml"), []byte(tomlContent), 0644); err != nil {

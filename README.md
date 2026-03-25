@@ -1,208 +1,126 @@
 # DevCell
 
-Containerized environment for running AI coding agents (Claude Code, Codex, OpenCode) in isolation with a consistent, reproducible toolchain.
+Your AI agent can `rm -rf /` and you're fine.
 
-Agents run with full permissions inside the container — your host stays clean.
+DevCell is a containerized sandbox for AI coding agents. Run Claude Code, Codex, or OpenCode with full auto-approve. Your SSH keys, other repos, and host credentials stay out of reach.
 
 ## Quickstart
 
+**Prerequisites:** [Docker Desktop](https://www.docker.com/products/docker-desktop/) or Docker Engine.
+
 ```bash
-brew tap DimmKirr/tap
-brew install devcell
+brew install DimmKirr/tap/devcell
+cd your-project
 cell claude
 ```
 
-On first run, `cell` scaffolds `~/.config/devcell/devcell.toml` and prompts to build the image (~5 min).
+On first run, `cell` scaffolds `~/.config/devcell/devcell.toml` and builds the image (~5 min). Works with `cell codex` and `cell opencode` too.
 
-## Commands
+## What you get
 
-```
-cell init              Scaffold ~/.config/devcell/ and optionally build the image
-cell build             Build (or rebuild) the local devcell image
-cell shell             Open an interactive shell in a devcell container
-cell claude [args...]  Run Claude Code  (--dangerously-skip-permissions)
-cell codex  [args...]  Run Codex        (--dangerously-bypass-approvals-and-sandbox)
-cell codex resume      Resume a Codex session
-cell opencode [args...] Run OpenCode    (--dangerously-bypass-approvals-and-sandbox)
-cell opencode resume   Resume an OpenCode session
-cell vnc               Open VNC connection to the running container
-cell vnc --list        List all running cell containers and their VNC ports
-cell vnc --app <name>  Connect to a specific named container
-cell chrome [args...]  Open Chromium with a project-scoped profile
-```
+- **Isolated sandbox** - agents edit freely inside your project; your host system is untouched
+- **12+ MCP servers** - Yahoo Finance, Google Maps, Linear, KiCad, Inkscape, and more. Backing tools ship in the image alongside their servers
+- **Claude Max/Pro support** - runs Claude Code directly, no API key or proxy needed
+- **Stealth Chromium** - anti-fingerprint browser with Playwright, passes bot detection out of the box
+- **Remote desktop** - VNC and RDP into the container to watch or interact with GUI apps
+- **1Password secrets** - API keys resolved at runtime, never written to disk
+- **7 image stacks** - from minimal (`base`) to everything-included (`ultimate`)
+- **Local ollama models** - route Claude through local models, ranked by SWE-Bench scores
 
-### Global flags
+## Stacks
 
-```
---build       Rebuild image before running
---dry-run     Print docker run argv and exit without running
---plain-text  Disable spinners, plain log output (for CI/non-TTY)
---debug       Plain-text mode + stream full build log to stdout
-```
+Seven stacks, published to `ghcr.io/dimmkirr/devcell`. Multi-arch: linux/amd64, linux/arm64.
 
-### Build flags
+| Stack | What's inside |
+|---|---|
+| **base** | zsh + starship, git, tmux, ripgrep, jq, sqlite, gnupg, hurl, go-task, gitleaks, mise, nix |
+| **go** | base + Go, Terraform, OpenTofu, Packer, Helm |
+| **node** | base + Node.js 22, npm, stealth Chromium |
+| **python** | base + Python 3.13, uv, stealth Chromium |
+| **fullstack** | go + node + python |
+| **electronics** | base + GUI desktop + KiCad, ngspice, ESPHome, wokwi-cli |
+| **ultimate** | fullstack + GUI desktop, all MCP servers, Inkscape, KiCad *(default)* |
 
-```
-cell build --no-cache   Full rebuild, disabling Docker layer cache
-```
+## MCP servers
 
-### Init flags
+Baked into the image and auto-merged into each agent's config at container startup. User-defined servers are preserved. Where applicable, the backing tools ship too: KiCad, Inkscape, and OpenTofu are installed alongside their MCP servers, so the agent can run `tofu plan`, analyze PCBs, or edit SVGs. New servers ship with image updates.
 
-```
-cell init -y   Skip confirmation prompts, proceed with defaults
-```
+| Server | Domain | Auth |
+|---|---|---|
+| OpenTofu | IaC provider/module docs | None |
+| Yahoo Finance | Stock data, financials, options | None |
+| EdgarTools | SEC filings: 10-K, 10-Q, 8-K, XBRL | None |
+| FRED API | 800K+ US economic time series | Free key |
+| Google Maps | Geocoding, routing, places, elevation, weather | API key |
+| TripIt | Trip itinerary management | Credentials |
+| Inoreader | RSS feeds, articles, search, tagging | OAuth 2.0 |
+| KiCad | PCB analysis, netlist extraction, DRC, BOM | None |
+| Inkscape | SVG vector graphics and DOM operations | None |
+| Linear | Project and issue management | OAuth 2.1 |
+| Notion | Database and page management | OAuth 2.1 |
+| MCP-NixOS | Nix package search and docs | None |
+
+## Security
+
+- Project directory mounted at `/workspace`. Host filesystem is unreachable
+- SSH keys, `.env` files outside the project, and host credentials are not mounted
+- Session user runs without root privileges
+- 1Password secrets injected at runtime, never persisted
+- GPG isolation per container (prevents SQLite lock contention)
+- Gitleaks pre-commit hook and CI secret scanning
 
 ## Configuration
 
-Config lives at `~/.config/devcell/devcell.toml` (global) and optionally `<project>/.devcell.toml` (project-level overrides). The project file is merged on top of the global one.
+Global config at `~/.config/devcell/devcell.toml`. Per-project overrides via `.devcell.toml` (create with `cell init .`). See `cell --help` and the [CLI docs](https://devcell.sh/docs/cell) for the full reference.
 
-```toml
-[cell]
-# Image profile to use (default: latest-ultimate)
-# image_tag = "latest-go"
-# Enable GUI (Xvfb + VNC + browser)
-gui = true
+## Customization
 
-[env]
-# Extra environment variables forwarded into the container
-# ANTHROPIC_BASE_URL = "http://host.docker.internal:8080"
-# MY_TOKEN = "abc123"
+Start simple, go deeper when you need to.
 
-# [[volumes]]
-# Extra volume mounts appended to docker run
-# mount = "~/work/secrets:/run/secrets:ro"
+**Runtime versions** - drop a `.tool-versions` or `mise.toml` in your project. Runtimes install automatically at startup. No rebuild needed.
 
-[packages.npm]
-# npm packages installed in the container — edit and run 'cell build'
-"@anthropic-ai/claude-code" = "2.1.49"
-"@openai/codex" = "^0.96.0"
-"opencode-ai" = "^1.1.51"
+**Add packages** - add npm or Python packages in `devcell.toml`, then `cell build`.
 
-[packages.python]
-# Python packages installed in the container — edit and run 'cell build'
-"pre-commit" = "*"
-```
+**Extend a stack** - edit `~/.config/devcell/flake.nix` to add nix packages. Run `cell build` to apply.
 
-## Image Profiles
+**Fork nixhome** - fork the [nixhome](https://github.com/DimmKirr/devcell/tree/main/nixhome) repo, point your flake to your fork. Upstream updates still merge cleanly.
 
-Images are published to `ghcr.io/dimmkirr/devcell:<tag>`.
+<details>
+<summary><strong>Development</strong></summary>
 
-| Tag | Contents |
-|-----|----------|
-| `latest-nix` | Base tools + Nix |
-| `latest-go` | + Go toolchain |
-| `latest-node` | + Node.js toolchain |
-| `latest-python` | + Python toolchain |
-| `latest-fullstack` | Go + Node + Python + infra tools |
-| `latest-electronics` | + KiCad, ngspice, OpenSCAD |
-| `latest-ultimate` | Everything + GUI/VNC/browser *(default)* |
-
-Override the profile in `devcell.toml`:
-
-```toml
-[cell]
-image_tag = "latest-go"
-```
-
-## Preinstalled Tools
-
-### AI Agents
-- [Claude Code](https://claude.ai/claude-code) — Anthropic's CLI
-- [Codex](https://github.com/openai/codex) — OpenAI's CLI
-- [OpenCode](https://opencode.ai) — open-source coding agent
-
-### Browsers & Automation
-- Firefox ESR, Chromium with ChromeDriver
-- [Playwright](https://playwright.dev/) — browser automation and testing
-
-### Version Management
-- **mise** — Node.js, Go, Terraform, OpenTofu
-- **Nix** — package manager with flakes support
-
-### Infrastructure
-- Terraform, OpenTofu, kubectl, helm, aws-cli
-
-### Go Development
-- air, golangci-lint, goimports
-- Hugo (extended)
-- terraform-docs, terraform-mcp-server
-
-### Media & Presentations
-- ffmpeg, ImageMagick
-- [Slidev](https://sli.dev/) — Markdown presentations
-- [yt-dlp](https://github.com/yt-dlp/yt-dlp)
-
-### Shell
-- **zsh** with autosuggestions and syntax highlighting
-- [Starship](https://starship.rs/) — cross-shell prompt (Rust, fast)
-
-### Electronics *(electronics / ultimate profiles)*
-- [KiCad](https://www.kicad.org/) — PCB design
-- ngspice — circuit simulation
-- OpenSCAD — parametric CAD
-
-## Components
-
-The image is built from composable Nix home-manager modules (`nixhome/modules/`), assembled into profiles (`nixhome/profiles/`).
-
-| Module | Description |
-|--------|-------------|
-| `shell.nix` | zsh + Starship prompt, autosuggestions, syntax highlighting |
-| `base.nix` | Universal utilities (git, ripgrep, tmux, jq, fonts) |
-| `build.nix` | Native build toolchain (clang, cmake, lld) |
-| `go.nix` | Go runtime (mise) + tooling (golangci-lint, gopls) |
-| `node.nix` | Node.js runtime (mise) + yarn |
-| `python.nix` | Python3 + uv package manager |
-| `infra.nix` | Terraform, OpenTofu, packer |
-| `web.nix` | Chromium + Hugo + Playwright |
-| `desktop/` | X11/VNC desktop (fluxbox, x11vnc, xrdp, xterm) |
-| `electronics.nix` | KiCad, ngspice, wokwi-cli |
-| `graphics.nix` | Inkscape + inkscape-mcp |
-| `nixos.nix` | Nix dev tools (deadnix, statix, nix-tree) |
-
-Modules are composed into profiles that map 1:1 to image tags:
-
-```
-base → base.nix
-go   → base + build + go + apple + infra
-node → base + node + web
-fullstack → go + node + python + web
-ultimate  → fullstack + desktop + electronics + graphics + nixos
-```
-
-## VNC
-
-When `gui = true` in your config, the container runs Xvfb + VNC. Connect with any VNC client or use:
+### Building images
 
 ```bash
-cell vnc          # auto-discovers port, opens on macOS
-cell vnc --list   # show all running containers and their VNC URLs
+task image:build              # Build base + ultimate (bake matrix)
+task image:build:user-local   # Layer user config on top
+cell build                    # Rebuild from host
+cell build --update           # Update nix flake inputs + rebuild
 ```
 
-Port discovery checks (in order): container label match → bind-mount match → `cell vnc --list` for manual selection.
-
-## Testing
+### Testing
 
 Tests use [testcontainers-go](https://testcontainers.com/guides/getting-started-with-testcontainers-for-go/) and require Docker.
 
 ```bash
-# Run against the published image (default: ghcr.io/dimmkirr/devcell:latest-ultimate)
-task devcell:test
-
-# Run against a locally built image
-DEVCELL_IMAGE=ghcr.io/dimmkirr/devcell:edge task devcell:test
+task test                     # Short mode - uses pre-built image
+go test -v -timeout 600s ./test/...   # Long mode - rebuilds image first
 ```
 
-Test files are organized by concern: `environment_test.go`, `toolchain_test.go`, `vnc_test.go`, `mcp_test.go`, `workflow_test.go`.
+| Variable | Purpose |
+|---|---|
+| `DEVCELL_TEST_IMAGE` | Use this image instead of rebuilding |
+| `DEVCELL_TEST_BASE_IMAGE` | Override base image for tests |
 
-## Building the Image Locally
+### Nix modules
+
+The image is built from composable Nix home-manager modules (`nixhome/modules/`), assembled into stacks (`nixhome/profiles/`). Validate after edits:
 
 ```bash
-# Build the ultimate target for the host platform
-task devcell:image:build
-
-# Full rebuild without cache
-cell build --no-cache
+task nix:validate    # Syntax check + attribute resolution across all stacks
 ```
 
-CI builds use `docker buildx bake` with `docker-bake.hcl` for multi-platform targets.
+</details>
+
+## License
+
+Apache 2.0

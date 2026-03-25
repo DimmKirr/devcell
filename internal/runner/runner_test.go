@@ -165,12 +165,16 @@ func TestArgv_Labels(t *testing.T) {
 
 func TestArgv_EnvFileSelfRef(t *testing.T) {
 	dir := t.TempDir()
-	envFile := filepath.Join(dir, ".env")
+	envFile := filepath.Join(dir, ".env.devcell")
 	os.WriteFile(envFile, []byte("# comment\nMY_SECRET=${MY_SECRET}\nLITERAL=hello\n"), 0644)
 	spec := runner.RunSpec{
 		Config: config.Load(dir, func(k string) string {
-			if k == "USER" { return "bob" }
-			if k == "HOME" { return "/home/bob" }
+			if k == "USER" {
+				return "bob"
+			}
+			if k == "HOME" {
+				return "/home/bob"
+			}
 			return ""
 		}),
 		CellCfg: cfg.CellConfig{},
@@ -194,7 +198,31 @@ func TestArgv_EnvFileSelfRef(t *testing.T) {
 func TestArgv_EnvFileAbsent(t *testing.T) {
 	argv := buildArgv(t)
 	if hasArg(argv, "--env-file") {
-		t.Error("--env-file should not be present when .env does not exist")
+		t.Error("--env-file should not be present when .env.devcell does not exist")
+	}
+}
+
+// --- InheritEnv ---
+
+func TestArgv_InheritEnv(t *testing.T) {
+	spec := runner.RunSpec{
+		Config:     baseConfig(),
+		CellCfg:    cfg.CellConfig{},
+		Binary:     "bash",
+		InheritEnv: []string{"SECRET_A", "SECRET_B"},
+	}
+	argv := runner.BuildArgv(spec, noopFS(), noopLookPath)
+	if !hasConsecutive(argv, "-e", "SECRET_A") {
+		t.Errorf("expected -e SECRET_A (inherit) in argv: %v", argv)
+	}
+	if !hasConsecutive(argv, "-e", "SECRET_B") {
+		t.Errorf("expected -e SECRET_B (inherit) in argv: %v", argv)
+	}
+	// Values should NOT appear in argv (security: no secrets in ps aux)
+	for _, a := range argv {
+		if a == "SECRET_A=" || a == "SECRET_B=" {
+			t.Errorf("secret value should not appear in argv: %v", argv)
+		}
 	}
 }
 
@@ -202,9 +230,9 @@ func TestArgv_EnvFileAbsent(t *testing.T) {
 
 func TestArgv_OpPrefixWhenOpFound(t *testing.T) {
 	spec := runner.RunSpec{
-		Config:  baseConfig(),
-		CellCfg: cfg.CellConfig{},
-		Binary:  "claude",
+		Config:       baseConfig(),
+		CellCfg:      cfg.CellConfig{},
+		Binary:       "claude",
 		DefaultFlags: []string{"--dangerously-skip-permissions"},
 	}
 	argv := runner.BuildArgv(spec, noopFS(), opLookPath)
@@ -382,27 +410,23 @@ func TestArgv_GitEnvVarsFromToml(t *testing.T) {
 	}
 }
 
-func TestArgv_GitConfigMounted(t *testing.T) {
-	// fs.Stat checks the file; mount is the parent directory (avoids Docker mkdir-file bug)
-	gitConfigFile := "/home/bob/.config/git/config"
-	spec := runner.RunSpec{
-		Config:  baseConfig(),
-		CellCfg: cfg.CellConfig{},
-		Binary:  "bash",
-		Getenv:  func(string) string { return "" },
-	}
-	argv := runner.BuildArgv(spec, existFS(gitConfigFile), noopLookPath)
-	expectedMount := "/home/bob/.config/git:/etc/devcell/git:ro"
-	if !hasConsecutive(argv, "-v", expectedMount) {
-		t.Errorf("expected git config dir mount %q: %v", expectedMount, argv)
-	}
-	if !hasArg(argv, "GIT_CONFIG_GLOBAL=/etc/devcell/git/config") {
-		t.Errorf("expected GIT_CONFIG_GLOBAL env var: %v", argv)
-	}
-	for _, a := range argv {
-		if strings.HasPrefix(a, "GIT_AUTHOR_NAME=") {
-			t.Errorf("should not inject GIT_AUTHOR_NAME when mounting config: %v", argv)
+func TestArgv_GitExtraEnvOverridesDefaults(t *testing.T) {
+	// Git identity resolved by cmd/root.go is passed via ExtraEnv;
+	// it should override the hardcoded "DevCell" defaults.
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.Getenv = func(string) string { return "" }
+		s.ExtraEnv = map[string]string{
+			"GIT_AUTHOR_NAME":     "Alice",
+			"GIT_AUTHOR_EMAIL":    "alice@test.com",
+			"GIT_COMMITTER_NAME":  "Alice",
+			"GIT_COMMITTER_EMAIL": "alice@test.com",
 		}
+	})
+	if !hasArg(argv, "GIT_AUTHOR_NAME=Alice") {
+		t.Errorf("expected ExtraEnv GIT_AUTHOR_NAME=Alice: %v", argv)
+	}
+	if !hasArg(argv, "GIT_AUTHOR_EMAIL=alice@test.com") {
+		t.Errorf("expected ExtraEnv GIT_AUTHOR_EMAIL=alice@test.com: %v", argv)
 	}
 }
 

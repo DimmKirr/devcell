@@ -106,17 +106,17 @@ func TestOpencode_ConfigContentEnvInjected(t *testing.T) {
 	}
 }
 
-// TestOpencode_ConfigContentWithOllama verifies [models] from devcell.toml
+// TestOpencode_ConfigContentWithOllama verifies [llm.models] from devcell.toml
 // is denormalized into OPENCODE_CONFIG_CONTENT.
 func TestOpencode_ConfigContentWithOllama(t *testing.T) {
 	home := scaffoldedHome(t)
 
-	// Write devcell.toml with [models] section
+	// Write devcell.toml with [llm.models] section
 	cfgDir := filepath.Join(home, ".config", "devcell")
 	tomlContent := `[cell]
-[models]
+[llm.models]
 default = "ollama/deepseek-r1:32b"
-[models.providers.ollama]
+[llm.models.providers.ollama]
 models = ["deepseek-r1:32b", "qwen3:8b"]
 `
 	if err := os.WriteFile(filepath.Join(cfgDir, "devcell.toml"), []byte(tomlContent), 0644); err != nil {
@@ -168,7 +168,7 @@ models = ["deepseek-r1:32b", "qwen3:8b"]
 	}
 }
 
-// TestOpencode_ConfigContentNoModels verifies minimal config when no [models].
+// TestOpencode_ConfigContentNoModels verifies minimal config when no [llm.models].
 func TestOpencode_ConfigContentNoModels(t *testing.T) {
 	home := scaffoldedHome(t)
 
@@ -211,12 +211,12 @@ func TestOpencode_ExistingConfigMergesModels(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Write devcell.toml with [models] so models get injected.
+	// Write devcell.toml with [llm.models] so models get injected.
 	cfgDir := filepath.Join(home, ".config", "devcell")
 	tomlContent := `[cell]
-[models]
+[llm.models]
 default = "ollama/qwen3:8b"
-[models.providers.ollama]
+[llm.models.providers.ollama]
 models = ["qwen3:8b"]
 `
 	if err := os.WriteFile(filepath.Join(cfgDir, "devcell.toml"), []byte(tomlContent), 0644); err != nil {
@@ -265,12 +265,12 @@ models = ["qwen3:8b"]
 func TestOpencode_WritesConfigToDisk(t *testing.T) {
 	home := scaffoldedHome(t)
 
-	// Write devcell.toml with [models] section
+	// Write devcell.toml with [llm.models] section
 	cfgDir := filepath.Join(home, ".config", "devcell")
 	tomlContent := `[cell]
-[models]
+[llm.models]
 default = "ollama/deepseek-r1:32b"
-[models.providers.ollama]
+[llm.models.providers.ollama]
 models = ["deepseek-r1:32b"]
 `
 	if err := os.WriteFile(filepath.Join(cfgDir, "devcell.toml"), []byte(tomlContent), 0644); err != nil {

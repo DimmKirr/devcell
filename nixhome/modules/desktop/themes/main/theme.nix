@@ -26,13 +26,16 @@ let
   };
 
   f = rec {
+    # UI font — used for toolbar, window titles, menus (like Pop!_OS)
+    ui     = "Fira Sans";
+    uiSm   = "${ui}-10";
+    uiSmSB = "${ui}-10:semibold";
+    uiMd   = "${ui}-11";
+    uiMdB  = "${ui}-11:bold";
+    uiLg   = "${ui}-12";
+    uiXlB  = "${ui}-14:bold";
+    # Mono font — used for terminal (xterm, kitty)
     family = "JetBrainsMono Nerd Font";
-    sm     = "${family}-9";
-    smB    = "${family}-9:bold";
-    md     = "${family}-10";
-    mdB    = "${family}-10:bold";
-    lg     = "${family}-11";
-    xlB    = "${family}-13:bold";
   };
 
   # ── Fluxbox theme generator ─────────────────────────────────────────────
@@ -55,7 +58,7 @@ let
         "toolbar.borderWidth" = 0;
         "toolbar.clock" = "flat";
         "toolbar.clock.color" = c.border;
-        "toolbar.clock.font" = f.smB;
+        "toolbar.clock.font" = f.uiSmSB;
         "toolbar.clock.textColor" = c.textBright;
         "toolbar.color" = c.border;
         "toolbar.height" = s.toolbarHeight;
@@ -64,16 +67,16 @@ let
         "toolbar.iconbar.focused" = "flat";
         "toolbar.iconbar.focused.borderWidth" = 0;
         "toolbar.iconbar.focused.color" = c.raised;
-        "toolbar.iconbar.focused.font" = f.smB;
+        "toolbar.iconbar.focused.font" = f.uiSmSB;
         "toolbar.iconbar.focused.textColor" = c.textBright;
         "toolbar.iconbar.unfocused" = "flat";
         "toolbar.iconbar.unfocused.borderWidth" = 0;
         "toolbar.iconbar.unfocused.color" = c.border;
-        "toolbar.iconbar.unfocused.font" = f.smB;
+        "toolbar.iconbar.unfocused.font" = f.uiSmSB;
         "toolbar.iconbar.unfocused.textColor" = c.inactive;
         "toolbar.workspace" = "flat";
         "toolbar.workspace.color" = c.highlight;
-        "toolbar.workspace.font" = f.smB;
+        "toolbar.workspace.font" = f.uiSmSB;
         "toolbar.workspace.justify" = "center";
         "toolbar.workspace.textColor" = c.border;
       };
@@ -97,7 +100,7 @@ let
         "window.iconify.pressed.pixmap" = "pixmaps/min.xpm";
         "window.iconify.unfocus.pixmap" = "pixmaps/min_unfocus.xpm";
         "window.label.focus" = "parentrelative";
-        "window.label.focus.font" = f.mdB;
+        "window.label.focus.font" = f.uiMdB;
         "window.label.focus.justify" = "left";
         "window.label.focus.textColor" = c.text;
         "window.maximize.pixmap" = "pixmaps/max.xpm";
@@ -117,7 +120,7 @@ let
         "window.handle.unfocus" = "flat";
         "window.handle.unfocus.color" = c.raised;
         "window.label.unfocus" = "parentrelative";
-        "window.label.unfocus.font" = f.md;
+        "window.label.unfocus.font" = f.uiMd;
         "window.label.unfocus.textColor" = c.inactive;
         "window.title.unfocus" = "flat";
         "window.title.unfocus.color" = c.surface;
@@ -140,7 +143,7 @@ let
         "menu.frame" = "flat";
         "menu.frame.color" = c.surface;
         "menu.frame.disableColor" = c.inactive;
-        "menu.frame.font" = f.lg;
+        "menu.frame.font" = f.uiLg;
         "menu.frame.justify" = "left";
         "menu.frame.textColor" = c.textBright;
         "menu.hilite" = "flat";
@@ -149,7 +152,7 @@ let
         "menu.itemHeight" = 28;
         "menu.title" = "flat";
         "menu.title.color" = c.highlight;
-        "menu.title.font" = f.xlB;
+        "menu.title.font" = f.uiXlB;
         "menu.title.justify" = "left";
         "menu.title.textColor" = c.border;
         "menu.titleHeight" = 32;

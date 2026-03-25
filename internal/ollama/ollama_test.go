@@ -324,13 +324,13 @@ func TestFormatActiveTOMLSnippet_ProducesUncommentedConfig(t *testing.T) {
 	if !contains(snippet, "deepseek-r1:70b") || !contains(snippet, "qwen3:32b") {
 		t.Error("expected both models in snippet")
 	}
-	// Should have [models] header
-	if !contains(snippet, "[models]") {
-		t.Error("expected [models] section header")
+	// Should have [llm.models] header
+	if !contains(snippet, "[llm.models]") {
+		t.Error("expected [llm.models] section header")
 	}
-	// Should have [models.providers.ollama] header
-	if !contains(snippet, "[models.providers.ollama]") {
-		t.Error("expected [models.providers.ollama] section header")
+	// Should have [llm.models.providers.ollama] header
+	if !contains(snippet, "[llm.models.providers.ollama]") {
+		t.Error("expected [llm.models.providers.ollama] section header")
 	}
 }
 

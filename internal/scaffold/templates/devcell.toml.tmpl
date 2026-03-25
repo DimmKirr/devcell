@@ -2,39 +2,58 @@
 # Global DevCell configuration. Project-level overrides go in <project>/.devcell.toml
 
 [cell]
-# Override the default image tag.
-# Available tags: latest-base, latest-go, latest-node, latest-python,
-#   latest-electronics, latest-fullstack, latest-ultimate (default)
-# image_tag = "latest-go"
+# Base stack (one of: base, go, node, python, fullstack, electronics, ultimate)
+# stack = "ultimate"
+#
+# Addon modules (from nixhome/modules/): electronics, desktop, financial,
+# graphics, infra, news, nixos, travel, scraping, go, node, python
+# modules = ["electronics", "desktop"]
+#
 # Enable GUI (Xvfb + VNC + browser). Injects DEVCELL_GUI_ENABLED=true.
 gui = true
+# Timezone (IANA format). If omitted, inherits host $TZ.
+# timezone = "Europe/Prague"
 
-[claude]
+# AI agent configuration — all LLM settings in one place.
+# [llm]
 # Route Claude Code through a local ollama instance (Anthropic API compat).
 # Equivalent to: cell claude --ollama
 # use_ollama = false
+#
+# Project context injected into all AI agents (Claude, Codex, OpenCode).
+# Sits on top of CLAUDE.md and agent-native config files.
+# system_prompt = """
+# This project uses PostgreSQL 16 with pgx/v5.
+# API endpoints follow REST conventions at /api/v2/.
+# """
 
-# [git]
 # Git identity forwarded into the container.
 # If omitted and no GIT_AUTHOR_* env vars are set, ~/.config/git/config is mounted read-only instead.
+# [git]
 # author_name = "Your Name"
 # author_email = "you@example.com"
 # committer_name = "Your Name"   # defaults to author_name if omitted
 # committer_email = "you@example.com"  # defaults to author_email if omitted
 
-[env]
+# 1Password items whose fields are passed into the container as env vars.
+# Requires `op` CLI on the host. Each field in the item becomes an env var:
+# e.g. a field labeled "API_KEY" with value "sk-123" → env var API_KEY=sk-123.
+# [op]
+# items = ["prod-api-keys", "dev-secrets"]
+
 # Extra environment variables forwarded into the container.
+[env]
 # GITHUB_TOKEN = "ghp_xxx"
 # ANTHROPIC_API_KEY = "sk-ant-xxx"
 
-[mise]
 # mise runtime settings forwarded as MISE_<UPPER_KEY> env vars.
 # See: https://mise.jdx.dev/configuration.html
+[mise]
 # trusted_config_paths = "/"
 # idiomatic_version_file = "true"
 
-# [[volumes]]
 # Extra volume mounts appended to docker run.
+# [[volumes]]
 # mount = "~/work/secrets:/run/secrets:ro"
 #
 # [[volumes]]
@@ -42,18 +61,18 @@ gui = true
 
 {{MODELS_SECTION}}
 
-[packages.npm]
 # npm packages installed in the container. Edit and run 'cell build'.
-"@anthropic-ai/claude-code" = "2.1.49"
+# NOTE: claude-code and opencode are managed via nix (nixhome/modules/base.nix).
+# Only add packages here that are NOT in nixhome.
+[packages.npm]
 "@openai/codex" = "^0.96.0"
 "@opentofu/opentofu-mcp-server" = "^0.1.5"
 "patchright-mcp" = "^0.0.68"
 "@playwright/test" = "^1.57.0"
 "@slidev/cli" = "^52.11.0"
-"opencode-ai" = "^1.1.51"
 
-[packages.python]
 # Python packages installed in the container. Edit and run 'cell build'.
+[packages.python]
 "pre-commit" = "*"
 # "httpie" = "*"
 # "pipx" = "*"
