@@ -1,16 +1,16 @@
-# ~/.config/devcell/devcell.toml
-# Global DevCell configuration. Project-level overrides go in <project>/.devcell.toml
+# .devcell.toml
+# DevCell project configuration. Optional global defaults at ~/.config/devcell/devcell.toml
 
 [cell]
 # Base stack (one of: base, go, node, python, fullstack, electronics, ultimate)
-# stack = "ultimate"
+# stack = "base"
 #
-# Addon modules (from nixhome/modules/): electronics, desktop, financial,
-# graphics, infra, news, nixos, travel, scraping, go, node, python
+# Addon modules (from nixhome/modules/): desktop, electronics, financial,
+# graphics, infra, news, nixos, qa-tools, scraping, travel, go, node, python
 # modules = ["electronics", "desktop"]
 #
-# Enable GUI (Xvfb + VNC + browser). Injects DEVCELL_GUI_ENABLED=true.
-gui = true
+# Disable GUI (Xvfb + VNC + browser). GUI is enabled by default.
+# gui = false
 # Timezone (IANA format). If omitted, inherits host $TZ.
 # timezone = "Europe/Prague"
 
@@ -35,11 +35,21 @@ gui = true
 # committer_name = "Your Name"   # defaults to author_name if omitted
 # committer_email = "you@example.com"  # defaults to author_email if omitted
 
-# 1Password items whose fields are passed into the container as env vars.
-# Requires `op` CLI on the host. Each field in the item becomes an env var:
+# 1Password documents whose fields are passed into the container as env vars.
+# Requires `op` CLI on the host. Each field in the document becomes an env var:
 # e.g. a field labeled "API_KEY" with value "sk-123" → env var API_KEY=sk-123.
 # [op]
-# items = ["prod-api-keys", "dev-secrets"]
+# documents = ["prod-api-keys", "dev-secrets"]
+
+# AWS credential scoping. When true, credentials are scoped to read-only
+# via IAM session policy. All AWS tools (cli, terraform, SDKs, MCP servers)
+# get read-only creds. Default: false (full access).
+# [aws]
+# read_only = true
+
+# Port forwarding from container to host. Bare port = same on both sides.
+# [ports]
+# forward = ["3000", "8080:3000"]
 
 # Extra environment variables forwarded into the container.
 [env]
@@ -62,14 +72,10 @@ gui = true
 {{MODELS_SECTION}}
 
 # npm packages installed in the container. Edit and run 'cell build'.
-# NOTE: claude-code and opencode are managed via nix (nixhome/modules/base.nix).
-# Only add packages here that are NOT in nixhome.
-[packages.npm]
-"@openai/codex" = "^0.96.0"
-"@opentofu/opentofu-mcp-server" = "^0.1.5"
-"patchright-mcp" = "^0.0.68"
-"@playwright/test" = "^1.57.0"
-"@slidev/cli" = "^52.11.0"
+# All core tools (claude-code, codex, slidev, patchright, opentofu-mcp) are
+# managed via nix modules. Only add packages here that are NOT in nixhome.
+# [packages.npm]
+# "some-tool" = "^1.0.0"
 
 # Python packages installed in the container. Edit and run 'cell build'.
 [packages.python]

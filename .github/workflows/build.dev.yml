@@ -16,12 +16,11 @@ on:
 permissions:
   contents: write
   packages: write
-  pages: write
-  id-token: write
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  NIX_CACHE_IMAGE: ghcr.io/dimmkirr/devcell:v0.0.0-ultimate
 
 jobs:
   secrets:
@@ -64,6 +63,10 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          buildkitd-config-inline: |
+            [worker.oci]
+              max-parallelism = 4
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
@@ -126,11 +129,16 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
+      - name: Pull test images
+        run: |
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:v0.0.0-${{ matrix.arch }}-${{ matrix.variant }}
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:v0.0.0-${{ matrix.arch }}-core
+
       - name: Run container tests
         env:
           DEVCELL_TEST_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:v0.0.0-${{ matrix.arch }}-${{ matrix.variant }}
-          DEVCELL_BASE_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:v0.0.0-${{ matrix.arch }}-base
-          DEVCELL_TEST_BASE_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:v0.0.0-${{ matrix.arch }}-base
+          DEVCELL_BASE_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:v0.0.0-${{ matrix.arch }}-core
+          DEVCELL_TEST_BASE_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:v0.0.0-${{ matrix.arch }}-core
           DEVCELL_USER_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:v0.0.0-${{ matrix.arch }}-${{ matrix.variant }}
           MCP_SECRET_TEST_PASSWORD: fake-secret-ci-value
           MCP_SECRET_GITHUB_TOKEN: fake-token-ci-value
@@ -162,7 +170,7 @@ jobs:
       - name: Create manifests
         run: |
           R=${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}
-          for suffix in "" "-base" "-ultimate"; do
+          for suffix in "" "-core" "-ultimate"; do
             docker buildx imagetools create \
               -t "${R}:dev${suffix}" \
               -t "${R}:latest${suffix}" \
@@ -217,7 +225,7 @@ jobs:
       - name: Publish release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release edit "${{ env.RELEASE_VERSION }}" --draft=false --latest=false
+        run: gh release edit "${{ env.RELEASE_VERSION }}" --draft=false --latest=false --prerelease
 
   e2e-install:
     name: E2E Install (${{ matrix.arch }})
@@ -299,10 +307,15 @@ jobs:
           /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" < /dev/null
           echo "/home/linuxbrew/.linuxbrew/bin" >> $GITHUB_PATH
 
-      - name: Brew install devcell
+      - name: Brew install devcell-dev
         run: |
           brew tap DimmKirr/tap
-          brew install devcell
+          brew install devcell-dev || true
+          # Verify binary was actually linked despite potential broken pipe
+          if ! command -v cell &>/dev/null; then
+            echo "Binary not found, retrying..."
+            brew install devcell-dev
+          fi
 
       - name: Verify version
         run: |
@@ -315,48 +328,3 @@ jobs:
             exit 1
           fi
 
-  deploy-site:
-    name: Deploy Site
-    needs: secrets
-    if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-
-      - name: Generate CLI docs
-        run: go run $(ls cmd/*.go | grep -Ev '(_test|gendoc|main)\.go' | tr '\n' ' ') cmd/gendoc.go web/src/content/cell
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-
-      - name: Setup Pages
-        uses: actions/configure-pages@v5
-
-      - name: Install dependencies
-        run: npm ci
-        working-directory: web
-
-      - name: Build with Astro
-        run: npm run build
-        working-directory: web
-
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: ./web/dist
-
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4

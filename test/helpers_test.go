@@ -123,14 +123,14 @@ func imageExists(tag string) bool {
 	return osexec.Command("docker", "image", "inspect", tag).Run() == nil
 }
 
-// baseImage returns the base image tag for entrypoint tests.
-// Uses DEVCELL_TEST_BASE_IMAGE if set (CI); otherwise builds local-base once with a unique tag.
+// baseImage returns the core image tag for entrypoint tests.
+// Uses DEVCELL_TEST_BASE_IMAGE if set (CI); otherwise builds local-core once with a unique tag.
 func baseImage() string {
 	if img := os.Getenv("DEVCELL_TEST_BASE_IMAGE"); img != "" {
 		return img
 	}
 	baseOnce.Do(func() {
-		baseTag, baseErr = buildLocalImage("local-base", "devcell-test-base")
+		baseTag, baseErr = buildLocalImage("local-core", "devcell-test-base")
 	})
 	if baseErr != nil {
 		panic(fmt.Sprintf("baseImage: %v", baseErr))
@@ -144,7 +144,7 @@ func baseImage() string {
 //   1. FROM base image (nix + home-manager, no stack)
 //   2. Copy local nixhome/ flake
 //   3. home-manager switch --flake .#devcell-electronics (smallest profile with desktop module)
-//   4. npm install patchright-mcp (provides mcp-server-patchright binary)
+//   4. patchright now comes from nix (scraping/default.nix buildNpmPackage), not npm
 //
 // Used by stealth MCP tests instead of the pre-built ultimate image.
 
@@ -179,9 +179,7 @@ const elecPackageJSON = `{
   "name": "devcell-tools",
   "version": "1.0.0",
   "private": true,
-  "dependencies": {
-    "patchright-mcp": "^0.0.68"
-  }
+  "dependencies": {}
 }
 `
 

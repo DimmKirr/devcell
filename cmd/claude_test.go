@@ -15,6 +15,7 @@ func TestClaude_OllamaFlag_InjectsEnv(t *testing.T) {
 	home := scaffoldedHome(t)
 
 	cmd := exec.Command(binaryPath, "claude", "--ollama", "--dry-run")
+	cmd.Dir = home
 	cmd.Env = append(os.Environ(), "CELL_ID=1", "HOME="+home)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -38,6 +39,7 @@ func TestClaude_OllamaFlag_Stripped(t *testing.T) {
 	home := scaffoldedHome(t)
 
 	cmd := exec.Command(binaryPath, "claude", "--ollama", "--dry-run")
+	cmd.Dir = home
 	cmd.Env = append(os.Environ(), "CELL_ID=1", "HOME="+home)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -61,6 +63,7 @@ func TestClaude_NoOllama_NoEnv(t *testing.T) {
 	home := scaffoldedHome(t)
 
 	cmd := exec.Command(binaryPath, "claude", "--dry-run")
+	cmd.Dir = home
 	cmd.Env = append(os.Environ(), "CELL_ID=1", "HOME="+home)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -91,6 +94,7 @@ use_ollama = true
 	}
 
 	cmd := exec.Command(binaryPath, "claude", "--dry-run")
+	cmd.Dir = home
 	cmd.Env = append(os.Environ(), "CELL_ID=1", "HOME="+home)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -111,6 +115,7 @@ func TestClaude_OllamaWithUserArgs(t *testing.T) {
 	home := scaffoldedHome(t)
 
 	cmd := exec.Command(binaryPath, "claude", "--ollama", "--dry-run", "--resume")
+	cmd.Dir = home
 	cmd.Env = append(os.Environ(), "CELL_ID=1", "HOME="+home)
 	out, err := cmd.CombinedOutput()
 	if err != nil {

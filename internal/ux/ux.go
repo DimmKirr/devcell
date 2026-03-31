@@ -91,7 +91,15 @@ func GetSelection(message string, options []string) (string, error) {
 	return pterm.DefaultInteractiveSelect.
 		WithDefaultText(prefixed).
 		WithOptions(options).
+		WithMaxHeight(len(options)).
 		Show()
+}
+
+// Debugf prints a formatted debug message when Verbose (--debug) is enabled.
+func Debugf(format string, a ...any) {
+	if Verbose {
+		pterm.Info.Printfln(format, a...)
+	}
 }
 
 // Println prints a styled line (or plain info when LogPlainText is set).

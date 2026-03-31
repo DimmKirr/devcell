@@ -2,7 +2,7 @@
 # Merged from managed-claude.nix + Claude parts of managed-mcp.nix.
 {
   pkgs,
-  pkgsUnstable,
+  pkgsEdge,
   lib,
   config,
   ...
@@ -66,7 +66,7 @@ in {
 
   config = {
     home.packages = [
-      pkgsUnstable.claude-code # AI coding assistant CLI (unstable for latest features)
+      pkgsEdge.claude-code # AI coding assistant CLI (edge for latest features)
     ];
 
     # ── Default Claude Code settings ───────────────────────────────────────
@@ -124,7 +124,10 @@ in {
               jq -s '
                 .[0] as $existing |
                 .[1].mcpServers as $nix |
-                $existing | .mcpServers = (($existing.mcpServers // {}) + ($nix // {}))
+                (($existing.mcpServers // {}) | to_entries |
+                  map(select(.value.command == null or (.value.command | startswith("/opt/devcell/") | not))) |
+                  from_entries) as $cleaned |
+                $existing | .mcpServers = ($cleaned + ($nix // {}))
               ' "$_target" "$_nix_file" > "$_tmp" 2>/dev/null
               if [ $? -eq 0 ] && [ -s "$_tmp" ] && jq empty "$_tmp" 2>/dev/null; then
                 mv "$_tmp" "$_target"

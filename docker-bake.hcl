@@ -38,6 +38,13 @@ variable "PLATFORMS" {
   default = "linux/amd64,linux/arm64"
 }
 
+variable "NIX_CACHE_IMAGE" {
+  # Previous ultimate image for nix store pre-seeding. Overridden to "busybox"
+  # for genesis/local builds where no cache image exists yet.
+  # Override: NIX_CACHE_IMAGE=public.ecr.aws/docker/library/debian:trixie-slim docker buildx bake
+  default = "${REGISTRY}:dev-ultimate"
+}
+
 # ── Shared inheritance targets (prefixed _ = not buildable directly) ──────────
 
 variable "GIT_COMMIT" {
@@ -57,18 +64,18 @@ target "_base-args" {
 # Each target builds a Dockerfile stage that applies a nix home-manager stack
 # plus any language-specific tools (go install, npm, uv) that stack requires.
 
-target "base" {
+target "core" {
   inherits   = ["_base-args"]
   context    = "."
   dockerfile = "images/Dockerfile"
-  target     = "base"
+  target     = "core"
   platforms  = split(",", PLATFORMS)
   tags = [
-    "${REGISTRY}:${VERSION}-base",
+    "${REGISTRY}:${VERSION}-core",
     "${REGISTRY}:${VERSION}",
   ]
-  cache-from = ["type=registry,ref=${REGISTRY}:cache-base"]
-  cache-to   = ["type=registry,ref=${REGISTRY}:cache-base,mode=max"]
+  cache-from = ["type=registry,ref=${REGISTRY}:cache-core"]
+  cache-to   = ["type=registry,ref=${REGISTRY}:cache-core,mode=max"]
 }
 
 target "go" {
@@ -78,7 +85,10 @@ target "go" {
   target     = "go"
   platforms  = split(",", PLATFORMS)
   tags       = ["${REGISTRY}:${VERSION}-go"]
-  cache-from = ["type=registry,ref=${REGISTRY}:cache-go"]
+  cache-from = [
+    "type=registry,ref=${REGISTRY}:cache-go",
+    "type=registry,ref=${REGISTRY}:cache-core",
+  ]
   cache-to   = ["type=registry,ref=${REGISTRY}:cache-go,mode=max"]
 }
 
@@ -89,7 +99,10 @@ target "node" {
   target     = "node"
   platforms  = split(",", PLATFORMS)
   tags       = ["${REGISTRY}:${VERSION}-node"]
-  cache-from = ["type=registry,ref=${REGISTRY}:cache-node"]
+  cache-from = [
+    "type=registry,ref=${REGISTRY}:cache-node",
+    "type=registry,ref=${REGISTRY}:cache-core",
+  ]
   cache-to   = ["type=registry,ref=${REGISTRY}:cache-node,mode=max"]
 }
 
@@ -100,7 +113,10 @@ target "python" {
   target     = "python"
   platforms  = split(",", PLATFORMS)
   tags       = ["${REGISTRY}:${VERSION}-python"]
-  cache-from = ["type=registry,ref=${REGISTRY}:cache-python"]
+  cache-from = [
+    "type=registry,ref=${REGISTRY}:cache-python",
+    "type=registry,ref=${REGISTRY}:cache-core",
+  ]
   cache-to   = ["type=registry,ref=${REGISTRY}:cache-python,mode=max"]
 }
 
@@ -111,11 +127,14 @@ target "electronics" {
   target     = "electronics"
   platforms  = split(",", PLATFORMS)
   tags       = ["${REGISTRY}:${VERSION}-electronics"]
-  cache-from = ["type=registry,ref=${REGISTRY}:cache-electronics"]
+  cache-from = [
+    "type=registry,ref=${REGISTRY}:cache-electronics",
+    "type=registry,ref=${REGISTRY}:cache-core",
+  ]
   cache-to   = ["type=registry,ref=${REGISTRY}:cache-electronics,mode=max"]
 }
 
-# fullstack — all language tools (backward-compatible tag: latest-fullstack)
+# fullstack — all language tools (tag: {version}-fullstack)
 target "fullstack" {
   inherits   = ["_base-args"]
   context    = "."
@@ -125,21 +144,32 @@ target "fullstack" {
   tags = [
     "${REGISTRY}:${VERSION}-fullstack",
   ]
-  cache-from = ["type=registry,ref=${REGISTRY}:cache-fullstack"]
+  cache-from = [
+    "type=registry,ref=${REGISTRY}:cache-fullstack",
+    "type=registry,ref=${REGISTRY}:cache-core",
+  ]
   cache-to   = ["type=registry,ref=${REGISTRY}:cache-fullstack,mode=max"]
 }
 
 # ultimate — fullstack + desktop + KiCad, ngspice, libspnav, poppler
+# NIX_CACHE_IMAGE pre-seeds /nix/store from the previous build.
+# CI points to the dev-ultimate manifest; local defaults to busybox (no cache).
 target "ultimate" {
   inherits   = ["_base-args"]
   context    = "."
   dockerfile = "images/Dockerfile"
+  args = {
+    NIX_CACHE_IMAGE = NIX_CACHE_IMAGE
+  }
   target     = "ultimate"
   platforms  = split(",", PLATFORMS)
   tags = [
     "${REGISTRY}:${VERSION}-ultimate",
   ]
-  cache-from = ["type=registry,ref=${REGISTRY}:cache-ultimate"]
+  cache-from = [
+    "type=registry,ref=${REGISTRY}:cache-ultimate",
+    "type=registry,ref=${REGISTRY}:cache-core",
+  ]
   cache-to   = ["type=registry,ref=${REGISTRY}:cache-ultimate,mode=max"]
 }
 
@@ -147,23 +177,23 @@ target "ultimate" {
 
 # default: what `docker buildx bake` builds with no arguments
 group "default" {
-  targets = ["base"]
+  targets = ["core"]
 }
 
 # ci: PR and push-to-main builds
 group "ci" {
-  targets = ["base", "ultimate"]
+  targets = ["core", "ultimate"]
 }
 
 # release: all published stacks for a tagged release
 group "release" {
-  targets = ["base", "ultimate"]
+  targets = ["core", "ultimate"]
 }
 
-# local-base: base tagged for local scaffold Dockerfile use (FROM ghcr.io/dimmkirr/devcell:base-local)
-target "local-base" {
-  inherits   = ["base"]
-  tags       = ["ghcr.io/dimmkirr/devcell:base-local"]
+# local-core: core image tagged for local scaffold Dockerfile use (FROM ghcr.io/dimmkirr/devcell:core-local)
+target "local-core" {
+  inherits   = ["core"]
+  tags       = ["ghcr.io/dimmkirr/devcell:core-local"]
   platforms  = []
   pull       = false
   cache-from = []
@@ -171,6 +201,8 @@ target "local-base" {
 }
 
 # local-ultimate: ultimate stack for local testing (uses local nixhome/)
+# NIX_CACHE_IMAGE inherited from variable (defaults to registry; override
+# with NIX_CACHE_IMAGE=public.ecr.aws/docker/library/debian:trixie-slim for no-cache local builds).
 target "local-ultimate" {
   inherits   = ["ultimate"]
   tags       = ["ghcr.io/dimmkirr/devcell:ultimate-local"]
@@ -182,5 +214,5 @@ target "local-ultimate" {
 
 # local: load into local Docker daemon (no push, no multi-arch)
 group "local" {
-  targets = ["local-base", "local-ultimate"]
+  targets = ["local-core", "local-ultimate"]
 }

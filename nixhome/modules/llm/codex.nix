@@ -2,6 +2,7 @@
 # Extracted from managed-mcp.nix.
 {
   pkgs,
+  pkgsEdge,
   lib,
   config,
   ...
@@ -28,6 +29,8 @@
   hasServers = mcpCfg.servers != {};
 in {
   config = {
+    home.packages = [ pkgsEdge.codex ];
+
     # Always generate the Codex merge fragment (self-guards at runtime)
     home.file.".config/devcell/entrypoint.d/30-codex.sh" = {
       executable = true;

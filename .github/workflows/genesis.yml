@@ -1,0 +1,103 @@
+name: Genesis Build
+
+# One-time bootstrap: builds Docker images WITHOUT nix store pre-seeding.
+# Run this manually when the dev-ultimate cache image doesn't exist yet
+# (first-ever build, new fork, or after registry cleanup).
+#
+# After this completes, the dev workflow will use these images as nix cache
+# donors, making subsequent builds ~10-15 minutes faster.
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  genesis-build:
+    name: Genesis Build (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: amd64
+            platform: linux/amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+            platform: linux/arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set lowercase image name
+        run: echo "IMAGE_NAME_LC=${IMAGE_NAME,,}" >> $GITHUB_ENV
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker image prune -af
+          df -h
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          buildkitd-config-inline: |
+            [worker.oci]
+              max-parallelism = 4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push (no nix cache)
+        run: docker buildx bake --push ci
+        env:
+          VERSION: v0.0.0-${{ matrix.arch }}
+          PLATFORMS: ${{ matrix.platform }}
+          REGISTRY: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}
+          # Override to busybox — no nix cache donor on genesis build
+          NIX_CACHE_IMAGE: public.ecr.aws/docker/library/debian:trixie-slim
+
+  genesis-manifest:
+    name: Create Manifests
+    needs: genesis-build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set lowercase image name
+        run: echo "IMAGE_NAME_LC=${IMAGE_NAME,,}" >> $GITHUB_ENV
+        env:
+          IMAGE_NAME: ${{ github.repository }}
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create multi-arch manifests
+        run: |
+          R=${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}
+          for suffix in "" "-core" "-ultimate"; do
+            docker buildx imagetools create \
+              -t "${R}:dev${suffix}" \
+              -t "${R}:latest${suffix}" \
+              -t "${R}:v0.0.0${suffix}" \
+              "${R}:v0.0.0-amd64${suffix}" \
+              "${R}:v0.0.0-arm64${suffix}"
+          done
+          echo "✅ Genesis complete — dev-ultimate manifest created"
+          echo "   Subsequent dev builds will use this as nix cache donor"

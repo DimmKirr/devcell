@@ -1,0 +1,49 @@
+---
+import Base from '../layouts/Base.astro';
+---
+
+<style>
+  .not-found {
+    max-width: 600px;
+    margin: 0 auto;
+    padding: 6rem 2rem;
+    text-align: center;
+  }
+
+  .not-found h1 {
+    font-size: 4rem;
+    font-weight: 900;
+    letter-spacing: -2px;
+    margin-bottom: 0.5rem;
+  }
+
+  .not-found h1 span {
+    background: var(--accent);
+    padding: 0 6px;
+  }
+
+  .not-found p {
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    color: #555;
+    margin-bottom: 2rem;
+  }
+
+  .not-found .links {
+    display: flex;
+    gap: 1rem;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+</style>
+
+<Base title="DevCell · 404" description="Page not found">
+  <div class="not-found">
+    <h1>4<span>0</span>4</h1>
+    <p>This page doesn't exist. It might have moved, or maybe the URL has a typo.</p>
+    <div class="links">
+      <a class="btn btn-primary" href="/docs/quickstart">Docs</a>
+      <a class="btn btn-secondary" href="/">Home</a>
+    </div>
+  </div>
+</Base>

@@ -95,7 +95,10 @@ except FileNotFoundError:
     existing = {}
 
 merged = dict(existing)
-merged['mcp_servers'] = {**existing.get('mcp_servers', {}), **nix.get('mcp_servers', {})}
+# Remove stale nix-managed servers (command starts with /opt/devcell/) before adding current stack
+cleaned = {k: v for k, v in existing.get('mcp_servers', {}).items()
+           if not isinstance(v, dict) or not v.get('command', '').startswith('/opt/devcell/')}
+merged['mcp_servers'] = {**cleaned, **nix.get('mcp_servers', {})}
 
 with open(temp_path, 'w') as f:
     write_toml(merged, f)
@@ -116,6 +119,13 @@ PYEOF
         return 1
     fi
 }
+
+# ── Sync nix-managed skills ──
+if [ -d "$DEVCELL_HOME/.codex/skills" ] && [ -n "$(ls -A "$DEVCELL_HOME/.codex/skills" 2>/dev/null)" ]; then
+    mkdir -p "$HOME/.codex/skills"
+    rsync -a --chown="$HOST_USER" "$DEVCELL_HOME/.codex/skills/" "$HOME/.codex/skills/"
+    log "✓ Codex skills synced from nix"
+fi
 
 merge_codex_mcp "$HOME/.codex/config.toml"
 [ -d "$HOME/.codex" ] && chown -R "$HOST_USER" "$HOME/.codex"

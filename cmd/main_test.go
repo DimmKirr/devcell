@@ -79,8 +79,10 @@ func TestPlainTextFlagInHelp(t *testing.T) {
 	}
 }
 
-// scaffoldedHome creates a temp HOME with a minimal devcell.toml so the CLI
-// skips the first-run interactive prompt.
+// scaffoldedHome creates a temp HOME with global devcell.toml and a project-level
+// .devcell.toml so the CLI skips the first-run interactive prompt.
+// Returns home path. The home dir doubles as a project root (has .devcell.toml)
+// — callers that run agent subcommands must set cmd.Dir = home.
 func scaffoldedHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
@@ -88,7 +90,12 @@ func scaffoldedHome(t *testing.T) string {
 	if err := os.MkdirAll(cfgDir, 0755); err != nil {
 		t.Fatal(err)
 	}
+	// Global config (loaded by cfg.LoadFromOS as globalPath)
 	if err := os.WriteFile(cfgDir+"/devcell.toml", []byte("[cell]\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// Project-level config (checked by scaffold.IsInitialized via cwd)
+	if err := os.WriteFile(home+"/.devcell.toml", []byte("[cell]\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	return home
@@ -100,10 +107,12 @@ func scaffoldedHome(t *testing.T) string {
 func TestPlainTextNoSpinnerChars(t *testing.T) {
 	spinnerChars := []string{"⡀", "⢀", "⠄", "⠠", "⠐", "⠂", "⠁", "⠈"}
 
+	home := scaffoldedHome(t)
 	cmd := exec.Command(binaryPath, "--plain-text", "shell", "--dry-run")
+	cmd.Dir = home
 	cmd.Env = append(os.Environ(),
 		"CELL_ID=1",
-		"HOME="+scaffoldedHome(t),
+		"HOME="+home,
 	)
 	out, _ := cmd.CombinedOutput()
 	s := string(out)
@@ -118,10 +127,12 @@ func TestPlainTextNoSpinnerChars(t *testing.T) {
 func TestDebugNoSpinnerChars(t *testing.T) {
 	spinnerChars := []string{"⡀", "⢀", "⠄", "⠠", "⠐", "⠂", "⠁", "⠈"}
 
+	home := scaffoldedHome(t)
 	cmd := exec.Command(binaryPath, "--debug", "shell", "--dry-run")
+	cmd.Dir = home
 	cmd.Env = append(os.Environ(),
 		"CELL_ID=1",
-		"HOME="+scaffoldedHome(t),
+		"HOME="+home,
 	)
 	out, _ := cmd.CombinedOutput()
 	s := string(out)

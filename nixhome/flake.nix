@@ -36,7 +36,7 @@
       nixCfg = {
         inherit system;
         config.allowUnfreePredicate = pkg:
-          builtins.elem (lib.getName pkg) ["claude-code" "corefonts" "packer" "terraform"];
+          builtins.elem (lib.getName pkg) ["claude-code" "corefonts" "drawio" "packer" "terraform"];
       };
       pkgsUnstable = import nixpkgs-unstable nixCfg;
       pkgsEdge = import nixpkgs-edge nixCfg;
@@ -82,6 +82,38 @@
       {}
       stacks;
   in {
+    # Expose building blocks so user wrapper flakes can compose custom stacks:
+    #   devcell.lib.mkHome "x86_64-linux" [ devcell.stacks.go ]
+    lib = { inherit mkHome; };
+    stacks = lib.mapAttrs'
+      (name: mods: lib.nameValuePair (lib.removePrefix "devcell-" name) mods)
+      stacks;
+
+    # Individual modules for composing custom stacks in user wrapper flakes:
+    #   devcell.lib.mkHome "x86_64-linux" (devcell.stacks.go ++ devcell.modules.electronics)
+    modules = {
+      apple = [./modules/apple.nix];
+      base = [./modules/base.nix];
+      build = [./modules/build.nix];
+      desktop = [./modules/desktop];
+      electronics = [./modules/electronics.nix];
+      financial = [./modules/financial.nix];
+      go = [./modules/go.nix];
+      graphics = [./modules/graphics.nix];
+      infra = [./modules/infra.nix];
+      llm = [./modules/llm];
+      mise = [./modules/mise.nix];
+      news = [./modules/news.nix];
+      nixos = [./modules/nixos.nix];
+      node = [./modules/node.nix];
+      project-management = [./modules/project-management.nix];
+      python = [./modules/python.nix];
+      qa-tools = [./modules/qa-tools.nix];
+      scraping = [./modules/scraping];
+      shell = [./modules/shell.nix];
+      travel = [./modules/travel.nix];
+    };
+
     homeConfigurations = mkAllConfigs;
 
     # macOS VM (Vagrant/UTM) — applied via: darwin-rebuild switch --flake .#macOS

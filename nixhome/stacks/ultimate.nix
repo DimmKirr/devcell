@@ -7,6 +7,7 @@
     ../modules/graphics.nix
     ../modules/news.nix
     ../modules/nixos.nix
+    ../modules/security.nix
     ../modules/travel.nix
   ];
 }

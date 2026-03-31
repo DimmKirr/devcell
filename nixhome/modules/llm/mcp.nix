@@ -3,6 +3,12 @@
 # their own config derivation from config.devcell.managedMcp.servers.
 {lib, ...}: {
   options.devcell.managedMcp = {
+    nixBinPrefix = lib.mkOption {
+      type = lib.types.str;
+      default = "/opt/devcell/.local/state/nix/profiles/profile/bin";
+      readOnly = true;
+      description = "Stable path to nix-managed binaries. Used as command prefix for MCP servers and as discriminator during config merge (servers with this prefix are cleaned on stack switch).";
+    };
     servers = lib.mkOption {
       type = lib.types.attrsOf lib.types.anything;
       default = {};

@@ -5,5 +5,6 @@
     ../modules/go.nix
     ../modules/apple.nix
     ../modules/infra.nix
+    ../modules/project-management.nix
   ];
 }

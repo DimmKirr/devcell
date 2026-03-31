@@ -1,6 +1,8 @@
 ---
 import Base from '../layouts/Base.astro';
 
+const stableVersion = process.env.STABLE_VERSION || '';
+
 const stacks = [
   { category: "AI Agents",             tools: ["Claude Code", "OpenAI Codex", "OpenCode"] },
   { category: "Languages & Runtimes",  tools: ["Go", "Node.js", "Python", "Ruby", "Swift / LLVM"] },
@@ -64,11 +66,21 @@ const dcRows = [
   { feature: "Agent auth",   devcell: "Claude Max/Pro subscription works directly",            devcontainers: "You handle auth yourself" },
 ];
 
+const logoGrid = [
+  "___#___",
+  "#__#__#",
+  "_#_#_#_",
+  "__###__",
+  "_#_#_#_",
+  "#__#__#",
+  "___#___",
+];
+
 const faqItems = [
   { q: "Do I need an API key or Claude subscription?",
     a: "Bring your own license or model. Claude Max, Pro, and API keys all work — devcell starts the same client you already use, just inside a container. Same goes for Codex and OpenCode." },
   { q: "Can the agent install packages inside the container?",
-    a: "Yes. The agent can run apt, npm install, pip install, nix — whatever the project needs. Network access is unrestricted. Port forwarding for dev servers is coming soon." },
+    a: "Yes. The agent can run apt, npm install, pip install, nix — whatever the project needs. Network access is unrestricted. Port forwarding and extra volume mounts are configurable in devcell.toml." },
   { q: "What about file permissions?",
     a: "Permissions are pass-through. The container user matches your host UID, so files the agent creates are owned by you. No chown headaches." },
   { q: "Does my existing Claude Code config carry over?",
@@ -76,7 +88,7 @@ const faqItems = [
   { q: "Why not just run Docker myself?",
     a: "You can. devcell saves you from maintaining a Dockerfile per project, wiring up MCP server configs, forwarding git identity, injecting secrets, and setting up entrypoint orchestration. One command instead of 20 minutes of Docker plumbing." },
   { q: "How big are the images?",
-    a: "Base is ~1.3 GB, ultimate is ~20 GB. First run builds locally (~5 min). Pre-built images are published to ghcr.io for faster pulls." },
+    a: "Base is ~1.3 GB, ultimate is ~20 GB. First run lets you pick a stack and builds automatically. Base builds in under 2 minutes, ultimate takes ~5 minutes." },
 ];
 
 const vsRows = [
@@ -84,7 +96,7 @@ const vsRows = [
   { feature: "Setup",       devcell: "cd my-project && cell claude",                                            openclaw: "Gateway daemon + WebSocket config + channel integrations" },
   { feature: "Toolchain",   devcell: "7 Nix-pinned stacks with per-project config. Go, Node.js, Python, Terraform, Chromium, KiCad",    openclaw: "Shell + file access, no pre-built dev environment. Tool config is system-wide only" },
   { feature: "MCP servers", devcell: "12 curated, auto-merged at startup. Backing tools (OpenTofu, KiCad, Inkscape) ship in the image",                               openclaw: 'Open marketplace, no mandatory code review. 1,184 malicious skills found <sup><a href="https://thehackernews.com/2026/02/researchers-find-341-malicious-clawhub.html" target="_blank">[1]</a></sup>' },
-  { feature: "Security",    devcell: "Mandatory container isolation, no exposed ports, no plugin marketplace",   openclaw: 'Network-exposed by default. 21,000+ instances found on public internet <sup><a href="https://censys.com/blog/openclaw-in-the-wild-mapping-the-public-exposure-of-a-viral-ai-assistant/" target="_blank">[2]</a></sup>' },
+  { feature: "Security",    devcell: "Mandatory container isolation, ports opt-in via config, no plugin marketplace",   openclaw: 'Network-exposed by default. 21,000+ instances found on public internet <sup><a href="https://censys.com/blog/openclaw-in-the-wild-mapping-the-public-exposure-of-a-viral-ai-assistant/" target="_blank">[2]</a></sup>' },
   { feature: "Claude sub",  devcell: "Claude Max and Pro work out of the box. Runs Claude Code directly",       openclaw: "Subscription auth blocked by Anthropic since Jan 2026. Requires API key (pay-per-use) or a proxy like OpenRouter" },
   { feature: "Privacy",     devcell: "Agent runs locally, talks to the API from your machine",                  openclaw: "Messages route through centralized server infrastructure" },
   { feature: "Isolation",   devcell: "Always on. SSH keys, credentials, host FS unreachable",                   openclaw: 'Optional, off by default. Multiple critical CVEs in 2026 <sup><a href="https://www.sonicwall.com/blog/openclaw-auth-token-theft-leading-to-rce-cve-2026-25253" target="_blank">[3]</a></sup> <sup><a href="https://www.oasis.security/blog/openclaw-vulnerability" target="_blank">[4]</a></sup>' },
@@ -106,7 +118,21 @@ const vsRows = [
     }
 
     @media (max-width: 768px) {
-      .hero { grid-template-columns: 1fr; padding: 3rem 1.5rem; gap: 2.5rem; }
+      .hero { grid-template-columns: 1fr; padding: 2.5rem 1.25rem; gap: 2.5rem; }
+    }
+
+    @media (max-width: 480px) {
+      .hero { padding: 2rem 1rem; }
+      h1 { font-size: 1.75rem; letter-spacing: -1px; }
+      .hero-desc { font-size: 0.8rem; max-width: 100%; }
+      .hero-eyebrow { font-size: 0.6rem; letter-spacing: 1px; flex-wrap: wrap; }
+      .terminal { font-size: 0.72rem; overflow: hidden; }
+      .hero-actions { flex-direction: column; }
+      .hero-actions .btn { text-align: center; }
+      .hero-quote { max-width: 100%; }
+      .hero-quote p { font-size: 0.72rem; }
+      .hero-quote cite { font-size: 0.65rem; }
+      section { padding: 2rem 1rem; }
     }
 
     .hero-eyebrow {
@@ -764,7 +790,7 @@ const vsRows = [
   <div class="hero-wrap">
     <div class="hero">
       <div>
-        <p class="hero-eyebrow">AI Agent Sandbox · Open Source · Apache 2.0 · <a href="https://github.com/DimmKirr/devcell" class="eyebrow-stars">★ Star on GitHub</a></p>
+        <p class="hero-eyebrow">AI Agent Sandbox · Open Source · Apache 2.0 · <a href="https://github.com/DimmKirr/devcell" class="eyebrow-stars">★ Star on GitHub</a>{stableVersion && <Fragment> · Latest Stable: {stableVersion}</Fragment>}</p>
         <h1>Agentic Coding,<br/>Without the<br/><span class="hl">Blast Radius.</span></h1>
         <p class="hero-desc">
           Your AI agent can <code>rm -rf /</code> and you're fine.
@@ -794,15 +820,12 @@ const vsRows = [
         <div><span class="t-ok">✔</span><span class="t-dim"> mounted /home/alex/myproject</span></div>
         <div class="t-hr">───────────────────────────────────────</div>
         <div class="t-splash">
-          <div class="t-splash-logo"><!--
-  7x7 sextant-style asterisk
-  row0--><span></span><span></span><span></span><span class="b"></span><span></span><span></span><span></span><!--
-  row1--><span class="b"></span><span></span><span></span><span class="b"></span><span></span><span></span><span class="b"></span><!--
-  row2--><span></span><span class="b"></span><span></span><span class="b"></span><span></span><span class="b"></span><span></span><!--
-  row3--><span></span><span></span><span class="b"></span><span class="b"></span><span class="b"></span><span></span><span></span><!--
-  row4--><span></span><span class="b"></span><span></span><span class="b"></span><span></span><span class="b"></span><span></span><!--
-  row5--><span class="b"></span><span></span><span></span><span class="b"></span><span></span><span></span><span class="b"></span><!--
-  row6--><span></span><span></span><span></span><span class="b"></span><span></span><span></span><span></span>
+          <div class="t-splash-logo">
+            {logoGrid.map((row) =>
+              [...row].map((cell) =>
+                <span class={cell === '#' ? 'b' : ''} />
+              )
+            )}
           </div>
           <pre class="t-splash-info">  <span class="t-title">Claude Code</span>
 <span class="t-dot">·</span> <span class="t-dim">Sonnet 4.6 · Claude Max</span>
@@ -834,8 +857,8 @@ const vsRows = [
         <p>Go, Node.js, Python, Terraform, and more. Nix-pinned at build time. No download URLs that go stale, no version drift between machines.</p>
       </div>
       <div class="does-card">
-        <h3>Secrets never touch your repo</h3>
-        <p>Pass secrets via 1Password, non-sensitive vars via plaintext config. Credentials stay in your vault, injected at runtime, never written to the project directory or shell history.</p>
+        <h3>Secrets never touch your disk</h3>
+        <p>1Password secrets are resolved on the host, injected into the container as env vars, and written to a RAM-only tmpfs at <code>/run/secrets/</code>. When the container stops, they're gone. The LLM never sees actual credential values -- MCP tools resolve placeholder names server-side.</p>
       </div>
       <div class="does-card">
         <h3>MCP servers with real tools behind them</h3>
@@ -865,7 +888,7 @@ const vsRows = [
             <span class="step-num">2</span>
             <div>
               <h4>Run from any project</h4>
-              <p><code>cd my-project && cell claude</code>. First run builds the sandbox image (~5 min). Works with <code>cell codex</code> and <code>cell opencode</code> too.</p>
+              <p><code>cd my-project && cell claude</code>. First run picks a stack, scaffolds config, and builds. Works with <code>cell codex</code> and <code>cell opencode</code> too.</p>
             </div>
           </li>
         </ol>
@@ -1018,21 +1041,11 @@ const vsRows = [
   <section id="get-started">
     <p class="section-label">Get started</p>
     <h2>Ready to try it?</h2>
-    <div class="note" style="margin-bottom: 1.5rem;">
-      <strong>State persists</strong>
-      Sessions run inside tmux — reconnect anytime without losing work. Except your secrets, everything is saved per session in <code>~/.devcell/&lt;SESSION&gt;/</code>: a dedicated home directory for each container. Your project directory is mounted read-write.
+    <p class="stacks-more" style="margin-bottom: 1.25rem;">One command. Pick your stack on first run.</p>
+    <div style="display: flex; gap: 1rem; align-items: center; flex-wrap: wrap;">
+      <a href="#quickstart" class="btn">Install now ↑</a>
+      <a href="/docs/quickstart" class="btn btn-secondary">Read the docs</a>
     </div>
-    <div class="code-block">
-      <div class="code-bar">
-        <span class="dot dot-r"></span>
-        <span class="dot dot-y"></span>
-        <span class="dot dot-g"></span>
-      </div>
-      <span class="line"><span class="cmd">brew </span><span class="arg">install</span> DimmKirr/tap/devcell</span>
-      <span class="line"><span class="cmd">cd </span>~/dev/my-project</span>
-      <span class="line"><span class="cmd">cell </span><span class="arg">claude</span></span>
-    </div>
-    <p class="stacks-more">First run scaffolds config and builds the <strong>ultimate</strong> stack (~5 min). You get the full toolchain, all MCP servers, GUI desktop, and stealth Chromium out of the box.</p>
   </section>
   </div>
 </Base>

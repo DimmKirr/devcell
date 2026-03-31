@@ -1,5 +1,6 @@
 # financial.nix — Financial data MCP servers
-{pkgs, ...}: let
+{pkgs, config, ...}: let
+  bin = config.devcell.managedMcp.nixBinPrefix;
   py = pkgs.python312Packages;
 
   # httpxthrottlecache: rate-limiting + caching httpx wrapper (edgartools dep, not in nixpkgs)
@@ -86,18 +87,18 @@ in {
   ];
 
   devcell.managedMcp.servers."yahoo-finance" = {
-    command = "yahoo-finance-mcp";
+    command = "${bin}/yahoo-finance-mcp";
     args = [];
   };
 
   devcell.managedMcp.servers."edgartools" = {
-    command = "edgartools-mcp";
+    command = "${bin}/edgartools-mcp";
     args = [];
     # Set SEC_EDGAR_IDENTITY="Your Name your@email.com" in environment
   };
 
   devcell.managedMcp.servers."mcp-fredapi" = {
-    command = "mcp-fredapi";
+    command = "${bin}/mcp-fredapi";
     args = [];
     # Set FRED_API_KEY in environment (free: https://fred.stlouisfed.org/docs/api/api_key.html)
   };

@@ -1,5 +1,10 @@
 # syntax=docker/dockerfile:1
 
+# Global ARG — must be before the first FROM to be usable in FROM instructions.
+# CI sets this to the previous ultimate image for nix store pre-seeding.
+# Default is debian:trixie-slim (same as core base, already pulled — empty /nix/store).
+ARG NIX_CACHE_IMAGE=public.ecr.aws/docker/library/debian:trixie-slim
+
 ###############################################################################
 # Stage: builder
 # Compile the cell CLI binary from repo source (CI context = repo root).
@@ -12,11 +17,11 @@ COPY . .
 RUN CGO_ENABLED=0 go build -o /cell ./cmd
 
 ###############################################################################
-# Stage: base
-# Apt + user creation + nix + home-manager. Published as base image.
+# Stage: core
+# Apt + user creation + nix + home-manager. Published as core image.
 # User Dockerfiles apply profiles via their own flake.nix.
 ###############################################################################
-FROM public.ecr.aws/docker/library/debian:trixie-slim AS base
+FROM public.ecr.aws/docker/library/debian:trixie-slim AS core
 
 # Add Docker APT repo and install all system packages in one layer.
 RUN apt-get update && apt-get install -y curl gpg && \
@@ -55,9 +60,9 @@ RUN \
 
 COPY --from=builder --chmod=755 /cell /opt/devcell/.local/bin/cell
 
-RUN mkdir -p /config /data /opt/mise /opt/npm-tools /opt/python-tools \
+RUN mkdir -p /config /data /opt/mise \
              /opt/devcell/.config/devcell && \
-    chown -R ${USER_UID}:${USER_GID} /config /data /opt/mise /opt/npm-tools /opt/python-tools \
+    chown -R ${USER_UID}:${USER_GID} /config /data /opt/mise \
              /opt/devcell/.config
 
 # System-level nix.conf (read by any nix binary regardless of user).
@@ -78,12 +83,15 @@ ENV HOME=/opt/devcell
 ENV USER=${USER_NAME}
 
 # Install nix.
+# Pin to a specific version to avoid SHA-256 hash mismatches when upstream
+# re-publishes a release tarball without updating the install script.
 # NIX_CONFIG is exported inline via printf so it contains a real newline
 # (Dockerfile ENV \n is a literal backslash-n, not a newline character).
 # sandbox=false: Docker's seccomp profile blocks the BPF syscalls nix's sandbox
 # needs; Docker's own isolation provides sufficient security for build containers.
+ARG NIX_VERSION=2.33.3
 RUN export NIX_CONFIG="$(printf 'experimental-features = nix-command flakes\nsandbox = false\nfilter-syscalls = false\nsandbox-fallback = true')" && \
-    curl -L https://nixos.org/nix/install | sh -s -- --no-daemon && \
+    curl -L "https://releases.nixos.org/nix/nix-${NIX_VERSION}/install" | sh -s -- --no-daemon && \
     mkdir -p "${HOME}/.config/nix" && \
     printf 'experimental-features = nix-command flakes\nsandbox = false\nfilter-syscalls = false\nsandbox-fallback = true\nmax-substitution-jobs = 128\nhttp-connections = 128\n' \
         > "${HOME}/.config/nix/nix.conf"
@@ -129,7 +137,7 @@ CMD ["tail", "-f", "/dev/null"]
 # Stage: go
 # devcell-go profile: Go toolchain + language-specific tools only.
 ###############################################################################
-FROM base AS go
+FROM core AS go
 
 ARG USER_UID=1000
 ARG USER_GID=1000
@@ -142,7 +150,8 @@ RUN ARCH=$(uname -m) && \
       tool=$(basename "$tool_dir"); \
       version_dir=$(ls -1d "${tool_dir}"*/ 2>/dev/null | head -1); \
       if [ -n "$version_dir" ]; then ln -sfT "$version_dir" "/opt/mise/$tool"; fi; \
-    done
+    done && \
+    { nix-collect-garbage -d; nix-store --optimise; true; }
 
 ENV DEVCELL_PROFILE=devcell-go
 
@@ -150,7 +159,7 @@ ENV DEVCELL_PROFILE=devcell-go
 # Stage: node
 # devcell-node profile: Node.js + npm project tools only.
 ###############################################################################
-FROM base AS node
+FROM core AS node
 
 ARG USER_UID=1000
 ARG USER_GID=1000
@@ -163,7 +172,8 @@ RUN ARCH=$(uname -m) && \
       tool=$(basename "$tool_dir"); \
       version_dir=$(ls -1d "${tool_dir}"*/ 2>/dev/null | head -1); \
       if [ -n "$version_dir" ]; then ln -sfT "$version_dir" "/opt/mise/$tool"; fi; \
-    done
+    done && \
+    { nix-collect-garbage -d; nix-store --optimise; true; }
 
 ENV DEVCELL_PROFILE=devcell-node
 
@@ -171,35 +181,31 @@ ENV DEVCELL_PROFILE=devcell-node
 # Stage: python
 # devcell-python profile: Python3 + uv + Playwright chromium.
 ###############################################################################
-FROM base AS python
+FROM core AS python
 
 ARG USER_UID=1000
 ARG USER_GID=1000
 COPY --chown=${USER_UID}:${USER_GID} nixhome/ /opt/nixhome/
 RUN ARCH=$(uname -m) && \
     [ "$ARCH" = "aarch64" ] && ARCH_SUFFIX="-aarch64" || ARCH_SUFFIX="" && \
-    home-manager switch --flake "/opt/nixhome#devcell-python${ARCH_SUFFIX}"
+    home-manager switch --flake "/opt/nixhome#devcell-python${ARCH_SUFFIX}" && \
+    { nix-collect-garbage -d; nix-store --optimise; true; }
 
 ENV DEVCELL_PROFILE=devcell-python
-
-COPY --chown=${USER_UID}:${USER_GID} images/pyproject.toml images/uv.lock* /opt/python-tools/
-SHELL ["/bin/bash", "-c"]
-RUN cd /opt/python-tools && uv sync
-SHELL ["/bin/sh", "-c"]
-ENV PATH="/opt/python-tools/.venv/bin:${PATH}"
 
 ###############################################################################
 # Stage: electronics
 # devcell-electronics profile: Build tools + KiCad, ngspice, libspnav, poppler.
 ###############################################################################
-FROM base AS electronics
+FROM core AS electronics
 
 ARG USER_UID=1000
 ARG USER_GID=1000
 COPY --chown=${USER_UID}:${USER_GID} nixhome/ /opt/nixhome/
 RUN ARCH=$(uname -m) && \
     [ "$ARCH" = "aarch64" ] && ARCH_SUFFIX="-aarch64" || ARCH_SUFFIX="" && \
-    home-manager switch --flake "/opt/nixhome#devcell-electronics${ARCH_SUFFIX}"
+    home-manager switch --flake "/opt/nixhome#devcell-electronics${ARCH_SUFFIX}" && \
+    { nix-collect-garbage -d; nix-store --optimise; true; }
 
 ENV DEVCELL_PROFILE=devcell-electronics
 
@@ -207,7 +213,7 @@ ENV DEVCELL_PROFILE=devcell-electronics
 # Stage: fullstack
 # devcell-fullstack profile: All language tools (Go, Node, Python, web).
 ###############################################################################
-FROM base AS fullstack
+FROM core AS fullstack
 
 ARG USER_UID=1000
 ARG USER_GID=1000
@@ -221,41 +227,53 @@ RUN ARCH=$(uname -m) && \
       version_dir=$(ls -1d "${tool_dir}"*/ 2>/dev/null | head -1); \
       if [ -n "$version_dir" ]; then ln -sfT "$version_dir" "/opt/mise/$tool"; fi; \
     done && \
-    test -x /opt/mise/node/bin/npm || { echo "ERROR: npm not found at /opt/mise/node/bin/npm"; ls -la /opt/mise/ 2>/dev/null; exit 1; }
+    test -x /opt/mise/node/bin/npm || { echo "ERROR: npm not found at /opt/mise/node/bin/npm"; ls -la /opt/mise/ 2>/dev/null; exit 1; } && \
+    { nix-collect-garbage -d; nix-store --optimise; true; }
 
 ENV DEVCELL_PROFILE=devcell-fullstack
 # Add mise-installed tool bins to PATH (node/npm, go, etc.) via stable symlinks
 ENV PATH="/opt/mise/node/bin:/opt/mise/go/bin:${PATH}"
 
-# Agent CLI tools (npm) — requires Node.js from mise above
-COPY --chown=${USER_UID}:${USER_GID} images/package.json images/package-lock.json* /opt/npm-tools/
-RUN cd /opt/npm-tools/ && npm install
-ENV PATH="/opt/npm-tools/node_modules/.bin:${PATH}"
 
-# Python tools (project-specific, not in nixpkgs)
-COPY --chown=${USER_UID}:${USER_GID} images/pyproject.toml images/uv.lock* /opt/python-tools/
-SHELL ["/bin/bash", "-c"]
-RUN cd /opt/python-tools && uv sync
-SHELL ["/bin/sh", "-c"]
-ENV PATH="/opt/python-tools/.venv/bin:${PATH}"
-
-# Patchright browser — download its own patched Chromium (stealth: no webdriver leak).
-# Do NOT set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH — that overrides the patched binary.
-# System deps are provided by nix (desktop/default.nix) via LD_LIBRARY_PATH in the
-# patchright-mcp-cell wrapper — no apt install-deps needed.
-RUN cd /opt/npm-tools && npx patchright install chromium
+###############################################################################
+# Stage: nix-cache
+# Donor stage for pre-seeding /nix/store from a previous build.
+# CI sets NIX_CACHE_IMAGE to the last successful ultimate image; locally it
+# defaults to debian:trixie-slim (empty /nix/store — no pre-seeding, full download).
+# Run the Genesis workflow to create the seed image for first-time setup.
+###############################################################################
+FROM ${NIX_CACHE_IMAGE} AS nix-cache
+RUN mkdir -p /nix/store
 
 ###############################################################################
 # Stage: ultimate
 # devcell-ultimate: fullstack + desktop + KiCad, ngspice, libspnav, poppler.
+# Built directly from core (not fullstack) — single home-manager switch is
+# faster than two sequential switches with garbage collection in between.
 ###############################################################################
-FROM fullstack AS ultimate
+FROM core AS ultimate
 
 ARG USER_UID=1000
 ARG USER_GID=1000
-RUN ARCH=$(uname -m) && \
+COPY --chown=${USER_UID}:${USER_GID} nixhome/ /opt/nixhome/
+# Pre-seed nix store from previous build via mount (no extra layer).
+# On cache hit: home-manager downloads only the delta (~30s vs ~15min).
+# On cache miss (busybox fallback): empty /nix/store, full download.
+RUN --mount=from=nix-cache,source=/nix/store,target=/tmp/nix-cache \
+    cp -a /tmp/nix-cache/. /nix/store/ 2>/dev/null || true && \
+    ARCH=$(uname -m) && \
     [ "$ARCH" = "aarch64" ] && ARCH_SUFFIX="-aarch64" || ARCH_SUFFIX="" && \
-    home-manager switch --flake "/opt/nixhome#devcell-ultimate${ARCH_SUFFIX}"
+    home-manager switch --flake "/opt/nixhome#devcell-ultimate${ARCH_SUFFIX}" && \
+    cd "$HOME" && MISE_DATA_DIR=/opt/mise MISE_YES=1 mise install && \
+    for tool_dir in /opt/mise/installs/*/; do \
+      tool=$(basename "$tool_dir"); \
+      version_dir=$(ls -1d "${tool_dir}"*/ 2>/dev/null | head -1); \
+      if [ -n "$version_dir" ]; then ln -sfT "$version_dir" "/opt/mise/$tool"; fi; \
+    done && \
+    test -x /opt/mise/node/bin/npm || { echo "ERROR: npm not found at /opt/mise/node/bin/npm"; ls -la /opt/mise/ 2>/dev/null; exit 1; } && \
+    { nix-collect-garbage -d; nix-store --optimise; true; }
 
 ENV DEVCELL_PROFILE=devcell-ultimate
 ENV DEVCELL_GUI_ENABLED=true
+# Add mise-installed tool bins to PATH (node/npm, go, etc.) via stable symlinks
+ENV PATH="/opt/mise/node/bin:/opt/mise/go/bin:${PATH}"

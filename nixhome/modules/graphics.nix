@@ -1,9 +1,12 @@
-# graphics.nix — Inkscape vector graphics editor + MCP server
+# graphics.nix — Graphics tools: Draw.io headless export, Inkscape editor + MCP servers
 {
   pkgs,
   lib,
+  config,
   ...
 }: let
+  bin = config.devcell.managedMcp.nixBinPrefix;
+
   # inkscape-mcp: Python MCP server exposing Inkscape CLI and DOM operations.
   # Source: https://github.com/grumpydevorg/inkscape-mcps
   # TODO: pin to specific commit; run: nix-prefetch-github grumpydevorg inkscape-mcps
@@ -32,12 +35,13 @@
   };
 in {
   home.packages = with pkgs; [
-    inkscape     # vector graphics editor (use: inkscape)
-    inkscape-mcp # Inkscape MCP server for Claude
+    drawio-headless  # Draw.io headless CLI for .drawio → PNG/SVG/PDF export (use: drawio)
+    inkscape         # vector graphics editor (use: inkscape)
+    inkscape-mcp     # Inkscape MCP server for Claude
   ];
 
   devcell.managedMcp.servers."inkscape-mcp" = {
-    command = "inkscape-mcp";
+    command = "${bin}/inkscape-mcp";
     args = [];
     env = {
       INKS_INKSCAPE_BIN = "${pkgs.inkscape}/bin/inkscape";

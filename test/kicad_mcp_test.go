@@ -3,7 +3,7 @@ package container_test
 // kicad_mcp_test.go — tests for the kicad-mcp MCP server in the electronics profile.
 // Run against the electronics image:
 //
-//	DEVCELL_TEST_IMAGE=ghcr.io/dimmkirr/devcell:latest-electronics go test -v -run TestKicad_Mcp ./...
+//	DEVCELL_TEST_IMAGE=ghcr.io/dimmkirr/devcell:v0.0.0-electronics go test -v -run TestKicad_Mcp ./...
 
 import (
 	"encoding/json"

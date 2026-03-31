@@ -2,6 +2,7 @@ package scaffold
 
 import (
 	"bytes"
+	"context"
 	_ "embed"
 	"encoding/json"
 	"fmt"
@@ -12,20 +13,12 @@ import (
 
 	"github.com/DimmKirr/devcell/internal/cfg"
 	"github.com/DimmKirr/devcell/internal/runner"
+	"github.com/DimmKirr/devcell/internal/ux"
 	"github.com/DimmKirr/devcell/internal/version"
 )
 
-//go:embed templates/Dockerfile.tmpl
-var dockerfileContent []byte
-
-//go:embed templates/flake.nix.tmpl
-var flakeNixContent []byte
-
 //go:embed templates/devcell.toml.tmpl
 var devcellTomlContent []byte
-
-//go:embed templates/devcell.project.toml.tmpl
-var devcellProjectTomlContent []byte
 
 //go:embed templates/starship.toml.tmpl
 var starshipTomlContent []byte
@@ -51,28 +44,22 @@ const defaultModelsSection = `# [llm.models]
 # base_url = "http://host.docker.internal:1234/v1"
 # models = ["deepseek-r1:32b"]`
 
-func scaffoldFiles(modelsSnippet, nixhomePath string) []scaffoldFile {
-	dockerfile := bytes.ReplaceAll(dockerfileContent, []byte("{{BASE_IMAGE}}"), []byte(runner.BaseImageTag()))
-	flake := bytes.ReplaceAll(flakeNixContent, []byte("{{VERSION}}"), []byte(version.Version))
-
-	// When nixhomePath is set, use local path input and add COPY nixhome/ to Dockerfile.
-	if nixhomePath != "" {
-		// Replace the github: URL line with path:./nixhome
-		flake = bytes.ReplaceAll(flake,
-			[]byte(`inputs.devcell.url = "github:DimmKirr/devcell/`+version.Version+`?dir=nixhome";`),
-			[]byte(`inputs.devcell.url = "path:./nixhome";`))
-
-		// Insert COPY nixhome/ before the existing COPY flake.* line
-		nixhomeCopy := []byte("COPY --chown=devcell:usergroup nixhome/ /opt/devcell/.config/devcell/nixhome/\n")
-		flakeCopyLine := []byte("COPY --chown=devcell:usergroup flake.*")
-		dockerfile = bytes.Replace(dockerfile, flakeCopyLine, append(nixhomeCopy, flakeCopyLine...), 1)
-	}
+func scaffoldFiles(modelsSnippet string, withNixhome bool, stack string) []scaffoldFile {
+	dockerfile := []byte(GenerateDockerfileWithNixhome("", withNixhome, stack, nil))
+	flake := []byte(GenerateFlakeNix(stack, nil, version.Version, withNixhome))
 
 	models := modelsSnippet
 	if models == "" {
 		models = defaultModelsSection
 	}
 	tomlContent := bytes.ReplaceAll(devcellTomlContent, []byte("{{MODELS_SECTION}}"), []byte(models))
+
+	if stack != "" {
+		tomlContent = bytes.ReplaceAll(tomlContent,
+			[]byte(`# stack = "base"`),
+			[]byte(fmt.Sprintf(`stack = %q`, stack)))
+	}
+
 	return []scaffoldFile{
 		{"Dockerfile", dockerfile},
 		{"flake.nix", flake},
@@ -121,6 +108,118 @@ func generatePyprojectTOML(pkgs map[string]string) []byte {
 	return []byte(b.String())
 }
 
+// GenerateFlakeNix produces a flake.nix string that imports the given stack
+// and modules from the upstream devcell nixhome flake.
+// stack is a stack name (e.g. "go"), modules is a list of module names,
+// ver is the version tag, nixhomePath overrides the input URL to path:./nixhome.
+func GenerateFlakeNix(stack string, modules []string, ver string, withNixhome bool) string {
+	if stack == "" {
+		stack = "base"
+	}
+	inputURL := fmt.Sprintf(`"github:DimmKirr/devcell/%s?dir=nixhome"`, ver)
+	if withNixhome {
+		inputURL = `"path:./nixhome"`
+	}
+
+	// Build the module expression for nix. devcell.stacks.X is already a list,
+	// so we concatenate with ++ rather than wrapping in [...].
+	moduleExpr := fmt.Sprintf("devcell.stacks.%s", stack)
+	for _, m := range modules {
+		moduleExpr += fmt.Sprintf(" ++ devcell.modules.%s", m)
+	}
+
+	return fmt.Sprintf(`{
+  description = "DevCell user stack — customise and run 'cell build'";
+
+  # Follows main branch by default. To pin a specific release:
+  #   inputs.devcell.url = "github:DimmKirr/devcell/v1.0.0?dir=nixhome";
+  # To use your own nixhome fork:
+  #   inputs.devcell.url = "github:yourusername/nixhome";
+  inputs.devcell.url = %s;
+
+  outputs = { self, devcell, ... }: {
+    homeConfigurations = {
+      "devcell-local" = devcell.lib.mkHome "x86_64-linux" (%s);
+      "devcell-local-aarch64" = devcell.lib.mkHome "aarch64-linux" (%s);
+    };
+  };
+}
+`, inputURL, moduleExpr, moduleExpr)
+}
+
+// GenerateDockerfile produces a Dockerfile string for the .devcell/ build context.
+// baseImage overrides the FROM line; empty uses runner.BaseImageTag().
+func GenerateDockerfile(baseImage string) string {
+	return GenerateDockerfileWithNixhome(baseImage, false, "base", nil)
+}
+
+// GenerateDockerfileWithNixhome produces a Dockerfile with optional nixhome COPY.
+// stack and modules are embedded as ARG defaults for /etc/devcell/metadata.json.
+func GenerateDockerfileWithNixhome(baseImage string, withNixhome bool, stack string, modules []string) string {
+	if baseImage == "" {
+		baseImage = runner.BaseImageTag()
+	}
+	if stack == "" {
+		stack = "base"
+	}
+
+	modulesStr := strings.Join(modules, ",")
+
+	var nixhomeCopy string
+	if withNixhome {
+		nixhomeCopy = "COPY --chown=devcell:usergroup nixhome/ /opt/devcell/.config/devcell/nixhome/\n"
+	}
+
+	return fmt.Sprintf(`FROM %s
+
+# Build metadata — propagated to nix activation script (base.nix writeMetadata).
+ARG GIT_COMMIT=unknown
+ARG DEVCELL_BASE_IMAGE="%s"
+ARG DEVCELL_STACK="%s"
+ARG DEVCELL_MODULES="%s"
+
+# Copy flake + lock. The glob (flake.*) makes flake.lock optional — first build
+# won't have one yet; nix creates it and subsequent builds reuse it, pinning
+# inputs so the base image's /nix/store paths are found without re-downloading.
+%sCOPY --chown=devcell:usergroup flake.* /opt/devcell/.config/devcell/
+
+# Activate the nix profile.
+# NIX_REFRESH is set to "--refresh" by `+"`cell build --no-cache`"+` to bust nix flake cache.
+ARG NIX_REFRESH=""
+RUN ARCH=$(uname -m) && \
+    [ "$ARCH" = "aarch64" ] && ARCH_SUFFIX="-aarch64" || ARCH_SUFFIX="" && \
+    home-manager switch \
+      --flake "/opt/devcell/.config/devcell#devcell-local${ARCH_SUFFIX}" \
+      --impure $NIX_REFRESH && \
+    { nix-collect-garbage -d; nix-store --optimise; true; }
+
+# Install language runtimes via mise (separate layer — conditional on stack having mise).
+RUN which mise && \
+    (mkdir -p /opt/mise 2>/dev/null || sudo mkdir -p /opt/mise) && \
+    cd /opt/devcell && MISE_DATA_DIR=/opt/mise MISE_YES=1 mise install && \
+    for tool_dir in /opt/mise/installs/*/; do \
+      tool=$(basename "$tool_dir"); \
+      version_dir=$(ls -1d "${tool_dir}"*/ 2>/dev/null | head -1); \
+      if [ -n "$version_dir" ]; then ln -sfT "$version_dir" "/opt/mise/$tool"; fi; \
+    done || true
+
+# Add mise-installed tool bins to PATH via stable symlinks
+ENV PATH="/opt/mise/node/bin:/opt/mise/go/bin:${PATH}"
+
+# Agent CLI tools — conditional on stack having npm
+COPY --chown=devcell:usergroup package.json /opt/npm-tools/
+RUN which npm && cd /opt/npm-tools && npm install || true
+ENV PATH="/opt/npm-tools/node_modules/.bin:${PATH}"
+
+# Python tools — conditional on stack having uv
+COPY --chown=devcell:usergroup pyproject.toml /opt/python-tools/
+SHELL ["/bin/bash", "-c"]
+RUN which uv && cd /opt/python-tools && uv sync || true
+SHELL ["/bin/sh", "-c"]
+ENV PATH="/opt/python-tools/.venv/bin:${PATH}"
+`, baseImage, baseImage, stack, modulesStr, nixhomeCopy)
+}
+
 // Scaffold writes scaffold files to dir, then generates package.json and
 // pyproject.toml from the [packages] section in devcell.toml.
 // Files that already exist are skipped (idempotent) unless force is true.
@@ -166,12 +265,41 @@ func copyDir(src, dst string) error {
 	})
 }
 
-func Scaffold(dir string, modelsSnippet string, nixhomePath string, force bool) error {
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("mkdir %s: %w", dir, err)
+// Scaffold writes .devcell.toml to dir (project root) and build artifacts
+// (Dockerfile, flake.nix, package.json, pyproject.toml, starship.toml) to
+// dir/.devcell/ (build context, gitignored).
+func Scaffold(dir string, modelsSnippet string, nixhomePath string, force bool, stack ...string) error {
+	stk := ""
+	if len(stack) > 0 {
+		stk = stack[0]
 	}
-	for _, f := range scaffoldFiles(modelsSnippet, nixhomePath) {
-		dest := filepath.Join(dir, f.name)
+
+	buildDir := filepath.Join(dir, ".devcell")
+	if err := os.MkdirAll(buildDir, 0755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", buildDir, err)
+	}
+
+	// Sync nixhome FIRST so the detect-on-disk check below sees it.
+	if nixhomePath != "" {
+		if err := SyncNixhome(nixhomePath, buildDir); err != nil {
+			return fmt.Errorf("sync nixhome: %w", err)
+		}
+	}
+
+	// Detect nixhome on disk — if .devcell/nixhome/ exists, use path:./nixhome.
+	_, nixhomeStat := os.Stat(filepath.Join(buildDir, "nixhome"))
+	withNixhome := nixhomeStat == nil
+
+	// Write .devcell.toml to project root, build artifacts to .devcell/.
+	for _, f := range scaffoldFiles(modelsSnippet, withNixhome, stk) {
+		var dest string
+		if f.name == "devcell.toml" {
+			// Config file → project root as .devcell.toml (dot-prefixed)
+			dest = filepath.Join(dir, ".devcell.toml")
+		} else {
+			// Build artifacts → .devcell/ subdir
+			dest = filepath.Join(buildDir, f.name)
+		}
 		if !force {
 			if _, err := os.Stat(dest); err == nil {
 				continue
@@ -183,7 +311,7 @@ func Scaffold(dir string, modelsSnippet string, nixhomePath string, force bool) 
 	}
 
 	// Scaffold homedir/.config/starship.toml for per-project prompt customization.
-	starshipDir := filepath.Join(dir, "homedir", ".config")
+	starshipDir := filepath.Join(buildDir, "homedir", ".config")
 	starshipDest := filepath.Join(starshipDir, "starship.toml")
 	if force || os.IsNotExist(statErr(starshipDest)) {
 		if err := os.MkdirAll(starshipDir, 0755); err != nil {
@@ -194,8 +322,8 @@ func Scaffold(dir string, modelsSnippet string, nixhomePath string, force bool) 
 		}
 	}
 
-	// Generate package files from devcell.toml [packages] config.
-	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	// Generate package files from .devcell.toml [packages] config.
+	c, err := cfg.LoadFile(filepath.Join(dir, ".devcell.toml"))
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
@@ -204,8 +332,7 @@ func Scaffold(dir string, modelsSnippet string, nixhomePath string, force bool) 
 		{"pyproject.toml", generatePyprojectTOML(c.Packages.Python)},
 	}
 	for _, f := range generated {
-		dest := filepath.Join(dir, f.name)
-		// Always regenerate — these are derived from devcell.toml.
+		dest := filepath.Join(buildDir, f.name)
 		if err := os.WriteFile(dest, f.content, 0644); err != nil {
 			return fmt.Errorf("write %s: %w", f.name, err)
 		}
@@ -213,16 +340,42 @@ func Scaffold(dir string, modelsSnippet string, nixhomePath string, force bool) 
 	return nil
 }
 
-// RegeneratePackageFiles regenerates package.json and pyproject.toml from devcell.toml.
-// Call this before any build to ensure derived files are in sync with config.
-func RegeneratePackageFiles(configDir string) error {
-	c, err := cfg.LoadFile(filepath.Join(configDir, "devcell.toml"))
-	if err != nil {
-		return fmt.Errorf("load config: %w", err)
+// RegenerateBuildContext regenerates all build artifacts (flake.nix, Dockerfile,
+// package.json, pyproject.toml) from the merged config. Call before every build
+// so that changes to stack/modules in devcell.toml take effect without re-running
+// cell init.
+//
+// Cache optimization: when the user picks a known stack, we try to use the
+// pre-built stack image (ghcr.io/dimmkirr/devcell:latest-<stack>) as the FROM
+// line. This lets Docker/nix reuse the existing /nix/store paths from that
+// image — only the delta is downloaded. If the pre-built image isn't available
+// (not yet pushed, network error), we fall back to the core image.
+func RegenerateBuildContext(configDir string, cellCfg cfg.CellConfig) error {
+	// Detect nixhome on disk — if .devcell/nixhome/ exists, use path:./nixhome.
+	_, statErr := os.Stat(filepath.Join(configDir, "nixhome"))
+	withNixhome := statErr == nil
+
+	stack := cellCfg.Cell.ResolvedStack()
+
+	// Regenerate flake.nix from stack + modules.
+	flake := GenerateFlakeNix(stack, cellCfg.Cell.Modules, version.Version, withNixhome)
+	if err := os.WriteFile(filepath.Join(configDir, "flake.nix"), []byte(flake), 0644); err != nil {
+		return fmt.Errorf("write flake.nix: %w", err)
 	}
+
+	// Determine the best FROM image for nix cache reuse.
+	baseImage := resolveBaseImage(stack)
+
+	// Regenerate Dockerfile.
+	df := GenerateDockerfileWithNixhome(baseImage, withNixhome, stack, cellCfg.Cell.Modules)
+	if err := os.WriteFile(filepath.Join(configDir, "Dockerfile"), []byte(df), 0644); err != nil {
+		return fmt.Errorf("write Dockerfile: %w", err)
+	}
+
+	// Regenerate package files.
 	generated := []scaffoldFile{
-		{"package.json", generatePackageJSON(c.Packages.Npm)},
-		{"pyproject.toml", generatePyprojectTOML(c.Packages.Python)},
+		{"package.json", generatePackageJSON(cellCfg.Packages.Npm)},
+		{"pyproject.toml", generatePyprojectTOML(cellCfg.Packages.Python)},
 	}
 	for _, f := range generated {
 		dest := filepath.Join(configDir, f.name)
@@ -233,15 +386,59 @@ func RegeneratePackageFiles(configDir string) error {
 	return nil
 }
 
+// resolveBaseImage picks the best FROM image for the Dockerfile.
+// Priority:
+//  1. DEVCELL_BASE_IMAGE env var (explicit override — local dev, CI)
+//  2. Pre-built stack image from registry (nix cache reuse)
+//  3. Default core image (fallback)
+func resolveBaseImage(stack string) string {
+	// Explicit override wins — user knows what they want.
+	if tag := os.Getenv("DEVCELL_BASE_IMAGE"); tag != "" {
+		if stack != "base" && cfg.ValidateStack(stack) == nil {
+			ux.Debugf("Stack cache candidate: %s (skipped — DEVCELL_BASE_IMAGE override)", runner.StackImageTag(stack))
+		}
+		ux.Debugf("FROM image: %s (DEVCELL_BASE_IMAGE override)", tag)
+		return tag
+	}
+
+	// Try pre-built stack image for nix store cache reuse.
+	// "base" stack doesn't benefit — it's tiny and core already has nix.
+	if stack != "base" && cfg.ValidateStack(stack) == nil {
+		stackTag := runner.StackImageTag(stack)
+
+		// Check local first, then try pull.
+		ctx := context.Background()
+		if runner.ImageExists(ctx, stackTag) {
+			ux.Debugf("FROM image: %s (local pre-built stack cache)", stackTag)
+			return stackTag
+		}
+
+		label := fmt.Sprintf("Pulling stack cache image %s", stackTag)
+		sp := ux.NewProgressSpinner(label)
+		if err := runner.PullImage(ctx, stackTag); err == nil {
+			sp.Success(label)
+			ux.Debugf("FROM image: %s (pulled pre-built stack cache)", stackTag)
+			return stackTag
+		}
+		sp.Stop()
+		ux.Debugf("Pre-built stack image not available, falling back to core")
+	}
+
+	// Default: core image.
+	tag := runner.BaseImageTag()
+	ux.Debugf("FROM image: %s (default core)", tag)
+	return tag
+}
+
 // statErr returns the error from os.Stat (nil if file exists).
 func statErr(path string) error {
 	_, err := os.Stat(path)
 	return err
 }
 
-// IsInitialized returns true when devcell.toml exists in dir.
+// IsInitialized returns true when .devcell.toml exists in dir.
 func IsInitialized(dir string) bool {
-	_, err := os.Stat(filepath.Join(dir, "devcell.toml"))
+	_, err := os.Stat(filepath.Join(dir, ".devcell.toml"))
 	return err == nil
 }
 
@@ -264,19 +461,4 @@ func ScaffoldVagrantfile(dir, vagrantBox, nixhomePath string) error {
 		return fmt.Errorf("write Vagrantfile: %w", err)
 	}
 	return nil
-}
-
-// ScaffoldProject writes a .devcell.toml in the given directory.
-// Returns os.ErrExist if the file already exists.
-func ScaffoldProject(dir string) error {
-	dest := filepath.Join(dir, ".devcell.toml")
-	if _, err := os.Stat(dest); err == nil {
-		return os.ErrExist
-	}
-	return os.WriteFile(dest, devcellProjectTomlContent, 0644)
-}
-
-// ScaffoldProjectForce writes a .devcell.toml, overwriting if it exists.
-func ScaffoldProjectForce(dir string) error {
-	return os.WriteFile(filepath.Join(dir, ".devcell.toml"), devcellProjectTomlContent, 0644)
 }

@@ -19,3 +19,5 @@ bin/
 .playwright-mcp
 test/testdata/**/nixhome
 test/results
+.devcell
+.devcell.toml

@@ -20,7 +20,31 @@ const topCommands = allDocs
   .filter((d) => d.id.startsWith('cell_') && d.id.split('_').length === 2)
   .sort((a, b) => a.id.localeCompare(b.id));
 
+// Guide pages grouped by prefix
+const guides = allDocs.filter((d) => d.id.startsWith('quickstart'));
+const configDocs = allDocs
+  .filter((d) => d.id === 'configuration' || d.id === 'stacks-and-modules')
+  .sort((a, b) => a.id.localeCompare(b.id));
+const howtos = allDocs
+  .filter((d) => d.id.startsWith('howto-'))
+  .sort((a, b) => a.data.title.localeCompare(b.data.title));
+const mcpDocs = allDocs
+  .filter((d) => d.id.startsWith('mcp-'))
+  .sort((a, b) => {
+    // mcp-overview always first
+    if (a.id === 'mcp-overview') return -1;
+    if (b.id === 'mcp-overview') return 1;
+    return a.id.localeCompare(b.id);
+  });
+
 const currentId = entry.id;
+
+// Build flat ordered list for prev/next navigation
+const cliRoot = allDocs.filter((d) => d.id === 'cell');
+const allOrdered = [...guides, ...configDocs, ...howtos, ...mcpDocs, ...cliRoot, ...topCommands];
+const currentIndex = allOrdered.findIndex((d) => d.id === currentId);
+const prevDoc = currentIndex > 0 ? allOrdered[currentIndex - 1] : null;
+const nextDoc = currentIndex < allOrdered.length - 1 ? allOrdered[currentIndex + 1] : null;
 ---
 
 <style is:global>
@@ -37,11 +61,35 @@ const currentId = entry.id;
     @media (max-width: 768px) {
       .layout { grid-template-columns: 1fr; }
       .sidebar { display: none; }
+      .sidebar.mobile-open { display: block; }
+    }
+
+    .mobile-docs-toggle {
+      display: none;
+      font-family: var(--font-mono);
+      font-size: 0.78rem;
+      font-weight: 900;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      background: var(--bg-muted);
+      border: var(--border);
+      padding: 0.6rem 1rem;
+      cursor: pointer;
+      width: 100%;
+      text-align: left;
+    }
+
+    .mobile-docs-toggle:active { background: var(--accent); }
+
+    @media (max-width: 768px) {
+      .mobile-docs-toggle { display: block; }
     }
 
     .sidebar {
       position: sticky;
       top: 5rem;
+      max-height: calc(100vh - 5rem);
+      overflow-y: auto;
     }
 
     .sidebar-label {
@@ -162,12 +210,95 @@ const currentId = entry.id;
       font-size: 0.7em;
       top: 0.25em;
     }
+
+    .prose table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 1.25rem;
+    }
+
+    .prose th {
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      font-weight: 900;
+      text-align: left;
+      padding: 0.4rem 0.75rem;
+      border-bottom: var(--border);
+    }
+
+    .prose td {
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+      color: #444;
+      padding: 0.4rem 0.75rem;
+      border-bottom: 1px solid #E5E5E5;
+      vertical-align: top;
+    }
+
+    .prose td code, .prose th code {
+      font-size: 0.75rem;
+    }
+
+    .doc-nav {
+      display: flex;
+      justify-content: space-between;
+      gap: 1rem;
+      margin-top: 3rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid #CCC;
+    }
+
+    .doc-nav a {
+      font-family: var(--font-mono);
+      font-size: 0.78rem;
+      color: #555;
+      text-decoration: none;
+      padding: 0.5rem 0;
+      transition: color 0.1s;
+    }
+
+    .doc-nav a:hover { color: var(--black); }
+    .doc-nav .next { margin-left: auto; text-align: right; }
 </style>
 
 <Base title={`DevCell · ${entry.data.title}`} description={entry.data.description} activeNav="docs">
   <div class="layout">
     <aside class="sidebar">
-      <p class="sidebar-label">CLI reference</p>
+      {guides.length > 0 && (
+        <>
+          <p class="sidebar-label">Getting started</p>
+          {guides.map((doc) => (
+            <a href={`/docs/${doc.id}`} class:list={[{ active: doc.id === currentId }]}>{doc.data.title}</a>
+          ))}
+        </>
+      )}
+      {configDocs.length > 0 && (
+        <>
+          <p class="sidebar-label" style="margin-top:1rem">Configuration</p>
+          {configDocs.map((doc) => (
+            <a href={`/docs/${doc.id}`} class:list={[{ active: doc.id === currentId }]}>{doc.data.title}</a>
+          ))}
+        </>
+      )}
+      {howtos.length > 0 && (
+        <>
+          <p class="sidebar-label" style="margin-top:1rem">Guides</p>
+          {howtos.map((doc) => (
+            <a href={`/docs/${doc.id}`} class:list={[{ active: doc.id === currentId }]}>{doc.data.title}</a>
+          ))}
+        </>
+      )}
+      {mcpDocs.length > 0 && (
+        <>
+          <p class="sidebar-label" style="margin-top:1rem">MCP servers</p>
+          {mcpDocs.map((doc) => (
+            <a href={`/docs/${doc.id}`} class:list={[{ active: doc.id === currentId }]}>{doc.data.title}</a>
+          ))}
+        </>
+      )}
+      <p class="sidebar-label" style="margin-top:1rem">CLI reference</p>
       <a href="/docs/cell" class:list={[{ active: currentId === 'cell' }]}>cell (root)</a>
       <p class="sidebar-label" style="margin-top:1rem">Commands</p>
       {topCommands.map((doc) => (
@@ -180,8 +311,16 @@ const currentId = entry.id;
       ))}
     </aside>
 
+    <button class="mobile-docs-toggle" onclick="document.querySelector('.sidebar').classList.toggle('mobile-open'); this.textContent = document.querySelector('.sidebar').classList.contains('mobile-open') ? '▾ Hide docs menu' : '▸ Docs menu'">▸ Docs menu</button>
+
     <article class="prose">
       <Content />
+      {(prevDoc || nextDoc) && (
+        <nav class="doc-nav">
+          {prevDoc ? <a href={`/docs/${prevDoc.id}`}>← {prevDoc.data.title}</a> : <span />}
+          {nextDoc && <a class="next" href={`/docs/${nextDoc.id}`}>{nextDoc.data.title} →</a>}
+        </nav>
+      )}
     </article>
   </div>
 </Base>

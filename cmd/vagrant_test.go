@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// vagrantHome sets up a temp HOME with a scaffolded config dir.
+// vagrantHome sets up a temp HOME with a scaffolded config dir and project-level .devcell.toml.
 func vagrantHome(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
@@ -19,6 +19,9 @@ func vagrantHome(t *testing.T) string {
 	if err := os.WriteFile(filepath.Join(cfgDir, "devcell.toml"), []byte("[cell]\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(home, ".devcell.toml"), []byte("[cell]\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 	return home
 }
 
@@ -27,6 +30,7 @@ func vagrantHome(t *testing.T) string {
 func TestEngineVagrant_PrintsStubWarning(t *testing.T) {
 	home := vagrantHome(t)
 	cmd := exec.Command(binaryPath, "--engine=vagrant", "shell", "--dry-run")
+	cmd.Dir = home
 	cmd.Env = append(os.Environ(), "CELL_ID=1", "HOME="+home)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -45,6 +49,7 @@ func TestEngineVagrant_PrintsStubWarning(t *testing.T) {
 func TestEngineMacos_AliasForVagrant(t *testing.T) {
 	home := vagrantHome(t)
 	cmd := exec.Command(binaryPath, "--macos", "shell", "--dry-run")
+	cmd.Dir = home
 	cmd.Env = append(os.Environ(), "CELL_ID=1", "HOME="+home)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -63,6 +68,7 @@ func TestEngineVagrant_ScaffoldsVagrantfile(t *testing.T) {
 	cfgDir := filepath.Join(home, ".config", "devcell")
 
 	cmd := exec.Command(binaryPath, "--engine=vagrant", "shell", "--dry-run")
+	cmd.Dir = home
 	cmd.Env = append(os.Environ(), "CELL_ID=1", "HOME="+home)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("expected exit 0 for vagrant stub, got: %v\noutput: %s", err, out)
@@ -80,6 +86,7 @@ func TestEngineVagrant_BoxNameSubstituted(t *testing.T) {
 	cfgDir := filepath.Join(home, ".config", "devcell")
 
 	cmd := exec.Command(binaryPath, "--engine=vagrant", "--vagrant-box=my-test-box", "shell", "--dry-run")
+	cmd.Dir = home
 	cmd.Env = append(os.Environ(), "CELL_ID=1", "HOME="+home)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("expected exit 0 for vagrant stub, got: %v\noutput: %s", err, out)

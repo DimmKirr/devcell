@@ -68,18 +68,21 @@ func init() {
 	rootCmd.PersistentFlags().Bool("macos", false, "use macOS VM via Vagrant (alias for --engine=vagrant)")
 	rootCmd.PersistentFlags().String("vagrant-provider", "utm", "Vagrant provider (e.g. utm)")
 	rootCmd.PersistentFlags().String("vagrant-box", "", "Vagrant box name override")
-	rootCmd.PersistentFlags().String("base-image", "", "base image for scaffold Dockerfile (default: ghcr.io/dimmkirr/devcell:base-local)")
+	rootCmd.PersistentFlags().String("base-image", "", "core image for scaffold Dockerfile (default: ghcr.io/dimmkirr/devcell:core-local)")
 	rootCmd.PersistentFlags().String("session-name", "", "session name for persistent home (~/.devcell/<name>)")
 	rootCmd.AddCommand(
 		claudeCmd,
 		codexCmd,
 		opencodeCmd,
 		shellCmd,
+		chromeCmd,
+		loginCmd,
 		buildCmd,
 		initCmd,
 		vncCmd,
 		rdpCmd,
 		modelsCmd,
+		serveCmd,
 	)
 }
 
@@ -176,17 +179,39 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 		os.Setenv("DEVCELL_SESSION_NAME", sn)
 	}
 
-	// First-run: scaffold if devcell.toml absent
-	if !scaffold.IsInitialized(c.ConfigDir) {
-		fmt.Printf(" First run — scaffolding %s\n", c.ConfigDir)
-		if err := scaffold.Scaffold(c.ConfigDir, "", "", false); err != nil {
+	// First-run: scaffold if .devcell.toml absent in project dir
+	if !scaffold.IsInitialized(c.BaseDir) {
+		// Use hardcoded stack list — no Docker pull needed for the picker.
+		stacks := cfg.KnownStacksWithSizes()
+		ux.Debugf("Stack list (built-in): %v", stacks)
+		picked, selErr := ux.GetSelection("Pick a stack", stacks)
+		if selErr != nil {
+			return fmt.Errorf("stack selection: %w", selErr)
+		}
+		stack := cfg.ParseStackSelection(picked)
+
+		// Scaffold .devcell.toml + .devcell/ in project dir.
+		// Check global config for nixhome path, env override wins.
+		globalCfg := cfg.LoadFromOS(c.ConfigDir, c.BaseDir)
+		nixhomePath := globalCfg.Cell.NixhomePath
+		fmt.Printf(" First run — scaffolding %s (stack: %s)\n", c.BaseDir, stack)
+		modelsSnippet := detectOllamaModels()
+		if err := scaffold.Scaffold(c.BaseDir, modelsSnippet, nixhomePath, true, stack); err != nil {
 			return fmt.Errorf("scaffold: %w", err)
 		}
-		ok, promptErr := ux.GetConfirmation("Build image now? (~5 min first time)")
-		if promptErr == nil && ok {
-			if buildErr := buildImageWithSpinner(c.ConfigDir, false, "Building devcell image", false); buildErr != nil {
-				return buildErr
+		// Update BuildDir now that .devcell.toml exists
+		c.BuildDir = config.ResolveBuildDir(c.BaseDir, c.ConfigDir, true)
+
+		// Sync nixhome into build context if local path is set.
+		if nixhomePath != "" {
+			ux.Debugf("Syncing nixhome: %s → %s/nixhome/", nixhomePath, c.BuildDir)
+			if err := scaffold.SyncNixhome(nixhomePath, c.BuildDir); err != nil {
+				return fmt.Errorf("sync nixhome: %w", err)
 			}
+		}
+
+		if err := buildImageWithSpinner(c.BuildDir, false, "Building devcell image", false); err != nil {
+			return err
 		}
 	}
 
@@ -208,20 +233,37 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 	cellCfg := cfg.LoadFromOS(c.ConfigDir, c.BaseDir)
 
 	// Resolve available GUI ports — probe and bump if already bound
-	if cellCfg.Cell.GUI {
+	if cellCfg.Cell.ResolvedGUI() {
 		c.ResolveAvailablePorts()
 	}
 
-	if scanFlag("--build") && !scanFlag("--dry-run") {
-		if err := scaffold.RegeneratePackageFiles(c.ConfigDir); err != nil {
-			return fmt.Errorf("regenerate package files: %w", err)
+	needsBuild := scanFlag("--build") && !scanFlag("--dry-run")
+	autoDetect := !scanFlag("--dry-run") && !scanFlag("--build") &&
+		!runner.ImageExists(context.Background(), runner.UserImageTag())
+	// DIMM-124: also rebuild when build context is newer than the existing image
+	// (catches stale images left after a failed build or config change)
+	staleImage := !scanFlag("--dry-run") && !scanFlag("--build") && !autoDetect &&
+		runner.DockerfileChanged(c.BuildDir)
+
+	if needsBuild || autoDetect || staleImage {
+		if autoDetect {
+			fmt.Printf(" No %s image found — building automatically\n", runner.UserImageTag())
+		} else if staleImage {
+			fmt.Printf(" Build context changed — rebuilding %s\n", runner.UserImageTag())
 		}
-		if err := buildImageWithSpinner(c.ConfigDir, true, "Building devcell image", false); err != nil {
-			return err
+		if err := config.EnsureBuildDir(c.BuildDir); err != nil {
+			return fmt.Errorf("ensure build dir: %w", err)
 		}
-	} else if !scanFlag("--dry-run") && !runner.ImageExists(context.Background(), runner.UserImageTag()) {
-		fmt.Printf(" No %s image found — building automatically\n", runner.UserImageTag())
-		if err := buildImageWithSpinner(c.ConfigDir, false, "Building devcell image", false); err != nil {
+		if nixhomePath := cellCfg.Cell.NixhomePath; nixhomePath != "" {
+			ux.Debugf("Syncing nixhome: %s → %s/nixhome/", nixhomePath, c.BuildDir)
+			if err := scaffold.SyncNixhome(nixhomePath, c.BuildDir); err != nil {
+				return fmt.Errorf("sync nixhome: %w", err)
+			}
+		}
+		if err := scaffold.RegenerateBuildContext(c.BuildDir, cellCfg); err != nil {
+			return fmt.Errorf("regenerate build context: %w", err)
+		}
+		if err := buildImageWithSpinner(c.BuildDir, needsBuild, "Building devcell image", false); err != nil {
 			return err
 		}
 	}
@@ -297,17 +339,25 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 
 	// Resolve 1Password items → set in process env so docker inherits via -e KEY
 	var inheritEnv []string
-	if len(cellCfg.Op.Items) > 0 {
+	opDocs := cellCfg.Op.ResolvedDocuments()
+	if len(opDocs) > 0 {
+		ux.Println(fmt.Sprintf("Using 1Password documents: %s", strings.Join(opDocs, ", ")))
+		ux.Debugf("1Password: resolving %d document(s): %v", len(opDocs), opDocs)
 		if _, err := exec.LookPath("op"); err == nil {
-			resolved, err := op.ResolveItems(cellCfg.Op.Items)
+			resolved, err := op.ResolveItems(opDocs)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "warning: 1Password: %v\n", err)
 			} else {
+				keys := make([]string, 0, len(resolved))
 				for k, v := range resolved {
 					os.Setenv(k, v)
 					inheritEnv = append(inheritEnv, k)
+					keys = append(keys, k)
 				}
+				ux.Debugf("1Password: resolved %d secret(s): %v", len(keys), keys)
 			}
+		} else {
+			ux.Debugf("1Password: op CLI not found, skipping secret resolution")
 		}
 	}
 

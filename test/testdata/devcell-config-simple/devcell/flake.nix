@@ -1,5 +1,5 @@
 {
-  description = "DevCell user profile — customise and run 'cell build'";
+  description = "DevCell user stack — customise and run 'cell build'";
 
   # Follows main branch by default. To pin a specific release:
   #   inputs.devcell.url = "github:DimmKirr/devcell/v1.0.0?dir=nixhome";
@@ -8,8 +8,9 @@
   inputs.devcell.url = "path:./nixhome";
 
   outputs = { self, devcell, ... }: {
-    # Re-export upstream home-manager configurations.
-    # To add your own packages, override or extend a configuration here.
-    homeConfigurations = devcell.homeConfigurations;
+    homeConfigurations = {
+      "devcell-local" = devcell.lib.mkHome "x86_64-linux" (devcell.stacks.ultimate);
+      "devcell-local-aarch64" = devcell.lib.mkHome "aarch64-linux" (devcell.stacks.ultimate);
+    };
   };
 }

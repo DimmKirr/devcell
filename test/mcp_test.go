@@ -5,6 +5,8 @@ package container_test
 import (
 	"context"
 	"encoding/json"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -257,8 +259,8 @@ func TestMcp_PlaywrightE2EFormSecrets(t *testing.T) {
 	if !ok {
 		t.Fatalf("FAIL step 1: playwright not in mcpServers; present keys: %v", claudeCfg.McpServers)
 	}
-	if entry.Command != "patchright-mcp-cell" {
-		t.Fatalf("FAIL step 1: playwright command=%q, want patchright-mcp-cell", entry.Command)
+	if !strings.HasSuffix(entry.Command, "patchright-mcp-cell") {
+		t.Fatalf("FAIL step 1: playwright command=%q, want suffix patchright-mcp-cell", entry.Command)
 	}
 	t.Logf("PASS step 1: playwright registered, command=%s", entry.Command)
 
@@ -318,29 +320,17 @@ import subprocess, json, os, sys
 CHROMIUM = '/opt/devcell/.local/state/nix/profiles/profile/bin/chromium'
 USER_DATA = '/tmp/pw-stealth-test'
 
-# Read init-script path from nix-mcp-servers.json (production args)
-with open('/etc/claude-code/nix-mcp-servers.json') as f:
-    cfg = json.load(f)
-pw_args = cfg.get('mcpServers', {}).get('playwright', {}).get('args', [])
-init_script = None
-for i, a in enumerate(pw_args):
-    if a == '--init-script' and i + 1 < len(pw_args):
-        init_script = pw_args[i + 1]
-        break
-if not init_script:
-    print('ERROR: --init-script not found in nix-mcp-servers.json', file=sys.stderr)
-    sys.exit(2)
-print('init_script: ' + init_script, flush=True)
-
 with open('/tmp/server-port.txt') as f:
     port = f.read().strip()
 
 env = dict(os.environ)
 env['PLAYWRIGHT_MCP_USER_DATA_DIR'] = USER_DATA
 
+# patchright-mcp-cell wrapper auto-discovers --init-script and --config
+# from ../share/patchright/ relative to itself. No need to pass explicitly.
 proc = subprocess.Popen(
     ['patchright-mcp-cell', '--headless', '--browser', 'chromium',
-     '--executable-path', CHROMIUM, '--init-script', init_script],
+     '--executable-path', CHROMIUM],
     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=env)
 
 def send(msg):
@@ -762,35 +752,13 @@ port = srv.server_address[1]
 threading.Thread(target=srv.serve_forever, daemon=True).start()
 print(f'detection-server: port={port}', flush=True)
 
-# ── Read init-script from nix-mcp-servers.json ────────────────────────────────
-with open('/etc/claude-code/nix-mcp-servers.json') as f:
-    cfg = json.load(f)
-pw_args = cfg.get('mcpServers', {}).get('playwright', {}).get('args', [])
-init_script = None
-for i, a in enumerate(pw_args):
-    if a == '--init-script' and i + 1 < len(pw_args):
-        init_script = pw_args[i + 1]
-        break
-if not init_script:
-    print('ERROR: --init-script not found in nix-mcp-servers.json', file=sys.stderr)
-    sys.exit(2)
-print(f'init-script: {init_script}', flush=True)
-
 # ── Start patchright-mcp-cell via MCP stdio ───────────────────────────────────
+# patchright-mcp-cell wrapper auto-discovers --init-script and --config
+# from ../share/patchright/ relative to itself. No need to pass explicitly.
 env = dict(os.environ)
 env['PLAYWRIGHT_MCP_USER_DATA_DIR'] = '/tmp/pw-detect-suite'
 
-config_path = None
-for i, a in enumerate(pw_args):
-    if a == '--config' and i + 1 < len(pw_args):
-        config_path = pw_args[i + 1]
-        break
-
-cmd = ['patchright-mcp-cell', '--browser', 'chromium',
-       '--init-script', init_script]
-if config_path:
-    cmd.extend(['--config', config_path])
-    print(f'config: {config_path}', flush=True)
+cmd = ['patchright-mcp-cell', '--browser', 'chromium']
 
 proc = subprocess.Popen(
     cmd,
@@ -1199,8 +1167,12 @@ func TestMcp_ClaudeJsonBackupOnMerge(t *testing.T) {
 		t.Errorf("FAIL: backup file does not contain the pre-existing entry\n%s", out)
 	}
 	// merged result must have both pre-existing + nix servers
-	if strings.Contains(out, "merged_count:0") || strings.Contains(out, "merged_count:1") {
-		t.Errorf("FAIL: merged file should have >1 server (pre-existing + nix)\n%s", out)
+	if m := regexp.MustCompile(`merged_count:(\d+)`).FindStringSubmatch(out); m != nil {
+		if n, _ := strconv.Atoi(m[1]); n <= 1 {
+			t.Errorf("FAIL: merged file should have >1 server (pre-existing + nix), got %d\n%s", n, out)
+		}
+	} else {
+		t.Errorf("FAIL: merged_count not found in output\n%s", out)
 	}
 	t.Logf("PASS: %s", strings.ReplaceAll(strings.TrimSpace(out), "\n", " | "))
 }

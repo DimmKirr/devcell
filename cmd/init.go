@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"sort"
+	"strings"
 
+	"github.com/DimmKirr/devcell/internal/cfg"
 	"github.com/DimmKirr/devcell/internal/config"
 	"github.com/DimmKirr/devcell/internal/ollama"
 	"github.com/DimmKirr/devcell/internal/scaffold"
@@ -14,10 +17,10 @@ import (
 )
 
 var initCmd = &cobra.Command{
-	Use:   "init [.]",
-	Short: "Scaffold ~/.config/devcell/ (or .devcell.toml in current dir with '.')",
+	Use:   "init",
+	Short: "Initialize .devcell.toml and .devcell/ build context in current directory",
 	RunE:  runInit,
-	Args:  cobra.MaximumNArgs(1),
+	Args:  cobra.NoArgs,
 }
 
 func init() {
@@ -26,17 +29,15 @@ func init() {
 	initCmd.Flags().Bool("force", false, "Overwrite existing files and update flake inputs (implies --update)")
 	initCmd.Flags().Bool("update", false, "update nix flake inputs (pull latest) instead of just resolving")
 	initCmd.Flags().String("local-nixhome", "", "path to local nixhome to copy and use (generates path:./nixhome flake input)")
+	initCmd.Flags().String("stack", "", "stack name (base, go, node, python, fullstack, electronics, ultimate)")
 }
 
-func runInit(cmd *cobra.Command, args []string) error {
-	if len(args) == 1 && args[0] == "." {
-		return runInitProject(cmd)
-	}
+func runInit(cmd *cobra.Command, _ []string) error {
+	applyOutputFlags()
 	macos, _ := cmd.Flags().GetBool("macos")
 	if macos {
 		return runInitMacOS()
 	}
-	applyOutputFlags()
 	yes, _ := cmd.Flags().GetBool("yes")
 	force, _ := cmd.Flags().GetBool("force")
 	update, _ := cmd.Flags().GetBool("update")
@@ -51,25 +52,65 @@ func runInit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	// Detect ollama and generate commented-out models snippet for devcell.toml.
-	// If ollama is not reachable, modelsSnippet is "" and the default example is used.
-	modelsSnippet := detectOllamaModels()
+	// Determine stack: --stack flag > interactive picker > "base" (with -y)
+	stack, _ := cmd.Flags().GetString("stack")
 
-	fmt.Printf(" Scaffolding %s\n", c.ConfigDir)
+	// Nixhome path: --local-nixhome flag > DEVCELL_NIXHOME_PATH env > existing config nixhome field.
+	// At init time, .devcell.toml may not exist yet, so env/flag take priority.
 	nixhomePath, _ := cmd.Flags().GetString("local-nixhome")
 	if nixhomePath == "" {
 		nixhomePath = os.Getenv("DEVCELL_NIXHOME_PATH")
 	}
-	if err := scaffold.Scaffold(c.ConfigDir, modelsSnippet, nixhomePath, force); err != nil {
+	if nixhomePath == "" {
+		// Check existing global config for nixhome path.
+		existingCfg := cfg.LoadFromOS(c.ConfigDir, c.BaseDir)
+		nixhomePath = existingCfg.Cell.NixhomePath
+	}
+
+	if stack == "" && !yes {
+		// Local nixhome: scan filesystem for custom stacks.
+		// Otherwise: use hardcoded list (no Docker pull needed for the picker).
+		stacks := cfg.KnownStacksWithSizes()
+		source := "built-in"
+		if nixhomePath != "" {
+			if local, err := scanLocalStacks(nixhomePath); err == nil && len(local) > 0 {
+				stacks = local
+				source = nixhomePath + "/stacks/*.nix"
+			}
+		}
+		ux.Debugf("Stack list (%s): %v", source, stacks)
+		picked, selErr := ux.GetSelection("Pick a stack", stacks)
+		if selErr != nil {
+			return fmt.Errorf("stack selection: %w", selErr)
+		}
+		stack = cfg.ParseStackSelection(picked)
+	}
+	if stack == "" {
+		stack = "base" // -y mode default: smallest image, fastest first build
+	}
+
+	// Detect ollama and generate commented-out models snippet for .devcell.toml.
+	modelsSnippet := detectOllamaModels()
+
+	// Scaffold .devcell.toml + .devcell/ in project dir (cwd).
+	ux.Debugf("BuildDir: %s", c.BuildDir)
+	fmt.Printf(" Initializing %s\n", c.BaseDir)
+	if err := scaffold.Scaffold(c.BaseDir, modelsSnippet, nixhomePath, force, stack); err != nil {
 		return fmt.Errorf("scaffold: %w", err)
 	}
-	// Copy local nixhome into config dir when --local-nixhome is set.
+
+	// Update BuildDir now that .devcell.toml exists.
+	c.BuildDir = config.ResolveBuildDir(c.BaseDir, c.ConfigDir, true)
+	ux.Debugf("BuildDir: %s", c.BuildDir)
+
+	// Sync local nixhome into build context when nixhome path is set.
 	if nixhomePath != "" {
-		if err := scaffold.SyncNixhome(nixhomePath, c.ConfigDir); err != nil {
+		ux.Debugf("Syncing nixhome: %s → %s/nixhome/", nixhomePath, c.BuildDir)
+		if err := scaffold.SyncNixhome(nixhomePath, c.BuildDir); err != nil {
 			return fmt.Errorf("sync nixhome: %w", err)
 		}
 	}
-	fmt.Printf(" Config dir ready: %s\n", c.ConfigDir)
+	fmt.Printf(" Created .devcell.toml + .devcell/ in %s\n", c.BaseDir)
 
 	// Resolve flake inputs (generates flake.lock if missing).
 	// --update or --force pulls latest instead of just resolving.
@@ -81,54 +122,33 @@ func runInit(cmd *cobra.Command, args []string) error {
 	if !lockOnly {
 		label = "Updating nix flake inputs"
 	}
-	if err := updateFlakeLockWithSpinner(c.ConfigDir, lockOnly, label); err != nil {
+	if err := updateFlakeLockWithSpinner(c.BuildDir, lockOnly, label); err != nil {
 		return err
 	}
 
-	if !yes {
-		ok, promptErr := ux.GetConfirmation("Build image now? (~5 min first time)")
-		if promptErr != nil || !ok {
-			fmt.Println(" Skipping build. Run 'cell build' when ready.")
-			return nil
-		}
-	}
-
-	if err := buildImageWithSpinner(c.ConfigDir, force, "Building devcell image", false); err != nil {
-		return err
-	}
+	fmt.Println(" Run 'cell build' to build the image, or 'cell claude' to build and start.")
 	return nil
 }
 
-// runInitProject handles `cell init .` — creates a .devcell.toml in the current directory.
-func runInitProject(_ *cobra.Command) error {
-	cwd, err := os.Getwd()
+// scanLocalStacks lists stack names from a local nixhome directory.
+func scanLocalStacks(nixhomePath string) ([]string, error) {
+	entries, err := filepath.Glob(filepath.Join(nixhomePath, "stacks", "*.nix"))
 	if err != nil {
-		return err
+		return nil, err
 	}
-	ok, err := ux.GetConfirmation(fmt.Sprintf("Create %s/.devcell.toml?", cwd))
-	if err != nil || !ok {
-		return nil
-	}
-	if err := scaffold.ScaffoldProject(cwd); err != nil {
-		if errors.Is(err, os.ErrExist) {
-			overwrite, promptErr := ux.GetConfirmation(".devcell.toml already exists. Overwrite?")
-			if promptErr != nil || !overwrite {
-				return nil
-			}
-			if err := scaffold.ScaffoldProjectForce(cwd); err != nil {
-				return err
-			}
-			fmt.Println(" Overwrote .devcell.toml")
-			return nil
+	var stacks []string
+	for _, e := range entries {
+		name := strings.TrimSuffix(filepath.Base(e), ".nix")
+		if name != "" {
+			stacks = append(stacks, name)
 		}
-		return err
 	}
-	fmt.Println(" Created .devcell.toml")
-	return nil
+	sort.Strings(stacks)
+	return stacks, nil
 }
 
 // detectOllamaModels tries to detect ollama and returns a commented-out
-// TOML snippet for devcell.toml. Returns "" if ollama is not reachable.
+// TOML snippet for .devcell.toml. Returns "" if ollama is not reachable.
 func detectOllamaModels() string {
 	ctx := context.Background()
 	if !ollama.Detect(ctx, ollama.DefaultBaseURL) {
