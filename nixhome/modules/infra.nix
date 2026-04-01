@@ -115,6 +115,30 @@
     }'
   '';
 
+  # porter-dev: Porter CLI — Kubernetes PaaS (deploy, manage, observe apps on K8s)
+  # https://porter.run — statically linked Go binary, no autoPatchelfHook needed.
+  porterVersion = "0.68.11";
+  porterSrc = {
+    "x86_64-linux" = pkgs.fetchurl {
+      url = "https://github.com/porter-dev/releases/releases/download/v${porterVersion}/porter_${porterVersion}_linux_amd64";
+      hash = "sha256-U67kpfCv8Bx636M6CX7VqWf/uLyj13CuCCmX2iCszUE=";
+    };
+    "aarch64-linux" = pkgs.fetchurl {
+      url = "https://github.com/porter-dev/releases/releases/download/v${porterVersion}/porter_${porterVersion}_linux_arm64";
+      hash = "sha256-MzylRrLZZBu8M3dA7DJ44QdP4Pj1KVCuRW3+dKHy/Xw=";
+    };
+  }.${pkgs.stdenv.hostPlatform.system} or (throw "porter: unsupported system ${pkgs.stdenv.hostPlatform.system}");
+
+  porterCli = pkgs.stdenvNoCC.mkDerivation {
+    pname = "porter";
+    version = porterVersion;
+    src = porterSrc;
+    dontUnpack = true;
+    installPhase = ''
+      install -Dm755 $src $out/bin/porter
+    '';
+  };
+
   # opentofu-mcp-server: OpenTofu Registry MCP — module/provider search, docs, version lookup.
   # https://github.com/opentofu/opentofu-mcp-server
   opentofuSrc = pkgs.fetchFromGitHub {
@@ -167,6 +191,7 @@ in {
     terraform-docs
     terraform-plugin-docs  # generates/validates Terraform provider docs (use: tfplugindocs)
     kubernetes-helm  # Kubernetes package manager (use: helm)
+    porterCli  # Porter Dev CLI — Kubernetes PaaS (use: porter)
     opentofuMcp  # OpenTofu Registry MCP server (use: opentofu-mcp-server)
     awsApiMcpServer  # AWS API MCP server via uvx (use: aws-api-mcp-server)
     cloudwatchMcpServer  # CloudWatch MCP server via uvx (use: cloudwatch-mcp-server)
