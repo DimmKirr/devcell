@@ -383,25 +383,101 @@ func PullImage(ctx context.Context, tag string) error {
 // (Dockerfile, flake.nix) is newer than the user image.
 // Returns true when the user image doesn't exist or inspect fails.
 func DockerfileChanged(configDir string) bool {
+	_, changed := ChangedBuildFiles(configDir)
+	return changed
+}
+
+// buildContextFiles lists the files tracked for staleness detection.
+var buildContextFiles = []string{"Dockerfile", "flake.nix", "package.json", "pyproject.toml"}
+
+// imagePathForFile maps build context files to their path inside the image.
+var imagePathForFile = map[string]string{
+	"Dockerfile":     "", // not copied into image
+	"flake.nix":      "/opt/devcell/.config/devcell/flake.nix",
+	"package.json":   "/opt/npm-tools/package.json",
+	"pyproject.toml": "/opt/python-tools/pyproject.toml",
+}
+
+// ChangedBuildFiles returns which build context files are newer than the image.
+// Returns the list of changed file names and true if any changed.
+func ChangedBuildFiles(configDir string) ([]string, bool) {
 	out, err := exec.Command("docker", "image", "inspect",
 		UserImageTag(), "--format", "{{.Created}}").Output()
 	if err != nil {
-		return true // image missing or inspect failed — treat as changed
+		return []string{"(image missing)"}, true
 	}
 	imageCreated, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(string(out)))
 	if err != nil {
-		return true
+		return []string{"(image timestamp unparseable)"}, true
 	}
-	for _, name := range []string{"Dockerfile", "flake.nix"} {
+	var changed []string
+	for _, name := range buildContextFiles {
 		info, err := os.Stat(filepath.Join(configDir, name))
 		if err != nil {
 			continue
 		}
 		if info.ModTime().After(imageCreated) {
-			return true
+			changed = append(changed, name)
 		}
 	}
-	return false
+	return changed, len(changed) > 0
+}
+
+// DiffBuildFile returns a unified diff between the local build context file
+// and the version baked into the image. Returns "" if the file isn't in the
+// image (e.g. Dockerfile) or if they're identical. Uses docker cp to extract.
+func DiffBuildFile(configDir, name string) string {
+	imagePath, ok := imagePathForFile[name]
+	if !ok || imagePath == "" {
+		return ""
+	}
+
+	localPath := filepath.Join(configDir, name)
+	localData, err := os.ReadFile(localPath)
+	if err != nil {
+		return ""
+	}
+
+	// Create a throwaway container (no process started) to extract the file.
+	cidOut, err := exec.Command("docker", "create", "--quiet", UserImageTag(), "true").Output()
+	if err != nil {
+		return ""
+	}
+	cid := strings.TrimSpace(string(cidOut))
+	defer exec.Command("docker", "rm", "-f", cid).Run()
+
+	// Copy file from container to a temp location.
+	tmpDir, err := os.MkdirTemp("", "devcell-diff-*")
+	if err != nil {
+		return ""
+	}
+	defer os.RemoveAll(tmpDir)
+
+	tmpFile := filepath.Join(tmpDir, name)
+	if err := exec.Command("docker", "cp", cid+":"+imagePath, tmpFile).Run(); err != nil {
+		// File doesn't exist in image (new file).
+		return fmt.Sprintf("--- (image) %s\n+++ (local) %s\n@@ new file @@\n", name, name)
+	}
+
+	imageData, err := os.ReadFile(tmpFile)
+	if err != nil {
+		return ""
+	}
+
+	if string(localData) == string(imageData) {
+		return ""
+	}
+
+	// Run diff (best-effort — falls back to summary if diff not available).
+	diffOut, _ := exec.Command("diff", "-u",
+		"--label", "(image) "+name,
+		"--label", "(local) "+name,
+		tmpFile, localPath,
+	).CombinedOutput()
+	if len(diffOut) > 0 {
+		return string(diffOut)
+	}
+	return fmt.Sprintf("--- (image) %s\n+++ (local) %s\n(binary or empty diff)\n", name, name)
 }
 
 // LocalImageID returns the full image ID (sha256:...) of the user image.

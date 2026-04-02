@@ -181,34 +181,18 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 
 	// First-run: scaffold if .devcell.toml absent in project dir
 	if !scaffold.IsInitialized(c.BaseDir) {
-		// Use hardcoded stack list — no Docker pull needed for the picker.
-		stacks := cfg.KnownStacksWithSizes()
-		ux.Debugf("Stack list (built-in): %v", stacks)
-		picked, selErr := ux.GetSelection("Pick a stack", stacks)
-		if selErr != nil {
-			return fmt.Errorf("stack selection: %w", selErr)
-		}
-		stack := cfg.ParseStackSelection(picked)
-
-		// Scaffold .devcell.toml + .devcell/ in project dir.
-		// Check global config for nixhome path, env override wins.
 		globalCfg := cfg.LoadFromOS(c.ConfigDir, c.BaseDir)
-		nixhomePath := globalCfg.Cell.NixhomePath
-		fmt.Printf(" First run — scaffolding %s (stack: %s)\n", c.BaseDir, stack)
-		modelsSnippet := detectOllamaModels()
-		if err := scaffold.Scaffold(c.BaseDir, modelsSnippet, nixhomePath, true, stack); err != nil {
-			return fmt.Errorf("scaffold: %w", err)
+		result, err := RunInitFlow(InitFlowOptions{
+			BaseDir:    c.BaseDir,
+			ConfigDir:  c.ConfigDir,
+			NixhomeSrc: globalCfg.Cell.NixhomePath,
+			Yes:        false,
+		})
+		if err != nil {
+			return err
 		}
-		// Update BuildDir now that .devcell.toml exists
 		c.BuildDir = config.ResolveBuildDir(c.BaseDir, c.ConfigDir, true)
-
-		// Sync nixhome into build context if local path is set.
-		if nixhomePath != "" {
-			ux.Debugf("Syncing nixhome: %s → %s/nixhome/", nixhomePath, c.BuildDir)
-			if err := scaffold.SyncNixhome(nixhomePath, c.BuildDir); err != nil {
-				return fmt.Errorf("sync nixhome: %w", err)
-			}
-		}
+		fmt.Printf(" First run — scaffolding %s (stack: %s)\n", c.BaseDir, result.Stack)
 
 		if err := buildImageWithSpinner(c.BuildDir, false, "Building devcell image", false); err != nil {
 			return err
@@ -242,14 +226,25 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 		!runner.ImageExists(context.Background(), runner.UserImageTag())
 	// DIMM-124: also rebuild when build context is newer than the existing image
 	// (catches stale images left after a failed build or config change)
-	staleImage := !scanFlag("--dry-run") && !scanFlag("--build") && !autoDetect &&
-		runner.DockerfileChanged(c.BuildDir)
+	var changedFiles []string
+	staleImage := false
+	if !scanFlag("--dry-run") && !scanFlag("--build") && !autoDetect {
+		changedFiles, staleImage = runner.ChangedBuildFiles(c.BuildDir)
+	}
 
 	if needsBuild || autoDetect || staleImage {
 		if autoDetect {
 			fmt.Printf(" No %s image found — building automatically\n", runner.UserImageTag())
 		} else if staleImage {
-			fmt.Printf(" Build context changed — rebuilding %s\n", runner.UserImageTag())
+			fmt.Printf(" Build context changed (%s in %s) — rebuilding %s\n",
+				strings.Join(changedFiles, ", "), c.BuildDir, runner.UserImageTag())
+			if ux.Verbose {
+				for _, f := range changedFiles {
+					if diff := runner.DiffBuildFile(c.BuildDir, f); diff != "" {
+						fmt.Printf("\n%s\n", diff)
+					}
+				}
+			}
 		}
 		if err := config.EnsureBuildDir(c.BuildDir); err != nil {
 			return fmt.Errorf("ensure build dir: %w", err)

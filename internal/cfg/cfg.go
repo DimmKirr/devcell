@@ -343,7 +343,20 @@ var stackSizes = map[string]string{
 var knownModules = []string{
 	"apple", "base", "build", "desktop", "electronics", "financial",
 	"go", "graphics", "infra", "llm", "mise", "news", "nixos", "node",
-	"project-management", "python", "qa-tools", "scraping", "shell", "travel",
+	"postgresql", "project-management", "python", "qa-tools", "scraping",
+	"security", "shell", "travel",
+}
+
+// stackModules maps each stack to its resolved list of nix modules.
+// Derived from nixhome/stacks/*.nix import lists (flattened, deduped).
+var stackModules = map[string][]string{
+	"base":        {"base"},
+	"go":          {"base", "build", "go", "apple", "infra", "project-management"},
+	"node":        {"base", "node", "scraping"},
+	"python":      {"base", "python", "scraping"},
+	"fullstack":   {"base", "build", "go", "apple", "infra", "node", "project-management", "python", "qa-tools", "scraping"},
+	"electronics": {"base", "build", "desktop", "electronics"},
+	"ultimate":    {"base", "build", "go", "apple", "infra", "node", "project-management", "python", "qa-tools", "scraping", "desktop", "electronics", "financial", "graphics", "news", "nixos", "security", "travel"},
 }
 
 // KnownStacks returns the list of valid stack names.
@@ -364,6 +377,56 @@ func KnownStacksWithSizes() []string {
 			out[i] = s
 		}
 	}
+	return out
+}
+
+// KnownStacksWithDetails returns stack labels with inline module lists and sizes
+// for the interactive picker. Each entry is "name  modules  size".
+// The last entry is the "custom" option for individual module selection.
+func KnownStacksWithDetails() []string {
+	const nameW = 14  // column width for stack name
+	const modsW = 52  // column width for modules summary
+	const maxMods = 6 // max modules to show before truncating
+
+	out := make([]string, 0, len(knownStacks)+1)
+	for _, s := range knownStacks {
+		mods := stackModules[s]
+		var modStr string
+		if s == "ultimate" {
+			modStr = fmt.Sprintf("all %d modules", len(mods))
+		} else if len(mods) > maxMods {
+			modStr = strings.Join(mods[:maxMods], ", ") + fmt.Sprintf(", +%d more", len(mods)-maxMods)
+		} else {
+			modStr = strings.Join(mods, ", ")
+		}
+		sz := stackSizes[s]
+		out = append(out, fmt.Sprintf("%-*s %-*s %s", nameW, s, modsW, modStr, sz))
+	}
+	return out
+}
+
+// StackSize returns the approximate download size for the given stack.
+func StackSize(stack string) (string, bool) {
+	sz, ok := stackSizes[stack]
+	return sz, ok
+}
+
+// StackModules returns the modules included in the given stack.
+// Returns nil for unknown stacks.
+func StackModules(stack string) []string {
+	mods, ok := stackModules[stack]
+	if !ok {
+		return nil
+	}
+	out := make([]string, len(mods))
+	copy(out, mods)
+	return out
+}
+
+// KnownModules returns the list of all available module names.
+func KnownModules() []string {
+	out := make([]string, len(knownModules))
+	copy(out, knownModules)
 	return out
 }
 

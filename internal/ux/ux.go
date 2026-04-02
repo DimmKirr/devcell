@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"atomicgo.dev/keyboard/keys"
 	"github.com/pterm/pterm"
 )
 
@@ -93,6 +94,31 @@ func GetSelection(message string, options []string) (string, error) {
 		WithOptions(options).
 		WithMaxHeight(len(options)).
 		Show()
+}
+
+// ErrInterrupted is returned when the user presses Ctrl+C during a prompt.
+var ErrInterrupted = fmt.Errorf("interrupted")
+
+// GetMultiSelection shows an interactive multi-select (checkbox) prompt and
+// returns all selected options. defaultOptions are pre-checked.
+// Returns ErrInterrupted if the user presses Ctrl+C.
+func GetMultiSelection(message string, options []string, defaultOptions []string) ([]string, error) {
+	prefixed := fmt.Sprintf(" %s  %s", pterm.LightBlue("?"), message)
+	interrupted := false
+	result, err := pterm.DefaultInteractiveMultiselect.
+		WithDefaultText(prefixed).
+		WithOptions(options).
+		WithDefaultOptions(defaultOptions).
+		WithMaxHeight(len(options)).
+		WithFilter(false).
+		WithKeySelect(keys.Space).
+		WithKeyConfirm(keys.Enter).
+		WithOnInterruptFunc(func() { interrupted = true }).
+		Show()
+	if interrupted {
+		return nil, ErrInterrupted
+	}
+	return result, err
 }
 
 // Debugf prints a formatted debug message when Verbose (--debug) is enabled.

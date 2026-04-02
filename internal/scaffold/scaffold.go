@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -44,9 +45,9 @@ const defaultModelsSection = `# [llm.models]
 # base_url = "http://host.docker.internal:1234/v1"
 # models = ["deepseek-r1:32b"]`
 
-func scaffoldFiles(modelsSnippet string, withNixhome bool, stack string) []scaffoldFile {
-	dockerfile := []byte(GenerateDockerfileWithNixhome("", withNixhome, stack, nil))
-	flake := []byte(GenerateFlakeNix(stack, nil, version.Version, withNixhome))
+func scaffoldFiles(modelsSnippet string, withNixhome bool, stack string, modules []string) []scaffoldFile {
+	dockerfile := []byte(GenerateDockerfileWithNixhome("", withNixhome, stack, modules))
+	flake := []byte(GenerateFlakeNix(stack, modules, version.Version, withNixhome))
 
 	models := modelsSnippet
 	if models == "" {
@@ -58,6 +59,18 @@ func scaffoldFiles(modelsSnippet string, withNixhome bool, stack string) []scaff
 		tomlContent = bytes.ReplaceAll(tomlContent,
 			[]byte(`# stack = "base"`),
 			[]byte(fmt.Sprintf(`stack = %q`, stack)))
+	}
+	if len(modules) > 0 {
+		// Format modules as TOML array: modules = ["go", "infra"]
+		quoted := make([]string, len(modules))
+		for i, m := range modules {
+			quoted[i] = fmt.Sprintf("%q", m)
+		}
+		modulesLine := fmt.Sprintf("modules = [%s]", strings.Join(quoted, ", "))
+		// Replace the commented example line in the template.
+		tomlContent = bytes.ReplaceAll(tomlContent,
+			[]byte(`# modules = ["electronics", "desktop"]`),
+			[]byte(modulesLine))
 	}
 
 	return []scaffoldFile{
@@ -226,6 +239,112 @@ ENV PATH="/opt/python-tools/.venv/bin:${PATH}"
 // modelsSnippet is an optional commented-out [models] section for devcell.toml;
 // pass "" to use the default generic example.
 
+const defaultNixhomeRepo = "https://github.com/DimmKirr/devcell.git"
+
+// IsGitURL returns true if source looks like a git URL or GitHub shorthand.
+func IsGitURL(source string) bool {
+	return strings.HasPrefix(source, "https://") ||
+		strings.HasPrefix(source, "git@") ||
+		strings.HasPrefix(source, "github:") ||
+		strings.HasPrefix(source, "ssh://")
+}
+
+// ResolveNixhome pulls nixhome into buildDir/nixhome/ from the given source.
+//   - Local path: copy directly (rsync-like)
+//   - Git URL: shallow sparse clone, extract nixhome/ subdir
+//   - Empty source: clone from upstream repo at the given version tag
+//
+// Skips if buildDir/nixhome/ already exists and force is false.
+func ResolveNixhome(source, buildDir, ver string, force bool) error {
+	dest := filepath.Join(buildDir, "nixhome")
+
+	// Skip if already present and not forcing.
+	if !force {
+		if fi, err := os.Stat(dest); err == nil && fi.IsDir() {
+			return nil
+		}
+	}
+
+	if source != "" && !IsGitURL(source) {
+		// Local path — copy.
+		return SyncNixhome(source, buildDir)
+	}
+
+	// Git source — resolve URL.
+	repoURL := defaultNixhomeRepo
+	subdir := "nixhome"
+	if source != "" {
+		repoURL = normalizeGitURL(source)
+		// If the URL doesn't contain "devcell", assume it points directly to a
+		// nixhome repo (no subdirectory needed).
+		if !strings.Contains(repoURL, "devcell") {
+			subdir = ""
+		}
+	}
+
+	ref := ver
+	if ref == "" || ref == "v0.0.0" {
+		ref = "main"
+	}
+
+	sp := ux.NewProgressSpinner("Fetching nixhome from git")
+
+	tmpDir, err := os.MkdirTemp("", "devcell-nixhome-*")
+	if err != nil {
+		sp.Fail("Fetch nixhome failed")
+		return err
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Shallow clone with sparse checkout.
+	cloneArgs := []string{"clone", "--depth", "1", "--branch", ref, "--filter=blob:none"}
+	if subdir != "" {
+		cloneArgs = append(cloneArgs, "--sparse")
+	}
+	cloneArgs = append(cloneArgs, repoURL, tmpDir)
+
+	cmds := [][]string{{"git"}}
+	cmds[0] = append(cmds[0], cloneArgs...)
+	if subdir != "" {
+		cmds = append(cmds, []string{"git", "-C", tmpDir, "sparse-checkout", "set", subdir})
+	}
+
+	for _, args := range cmds {
+		cmd := exec.Command(args[0], args[1:]...)
+		if err := cmd.Run(); err != nil {
+			sp.Fail("Fetch nixhome failed")
+			return fmt.Errorf("%s: %w", strings.Join(args[:2], " "), err)
+		}
+	}
+
+	// Copy from clone to dest.
+	src := tmpDir
+	if subdir != "" {
+		src = filepath.Join(tmpDir, subdir)
+	}
+	if _, err := os.Stat(src); err != nil {
+		sp.Fail("Fetch nixhome failed")
+		return fmt.Errorf("nixhome not found in clone: %w", err)
+	}
+	os.RemoveAll(dest)
+	os.Remove(filepath.Join(buildDir, "flake.lock"))
+	if err := CopyDir(src, dest); err != nil {
+		sp.Fail("Fetch nixhome failed")
+		return err
+	}
+
+	sp.Success(fmt.Sprintf("Fetched nixhome (%s)", ref))
+	return nil
+}
+
+// normalizeGitURL converts shorthand like "github:user/repo" to a full URL.
+func normalizeGitURL(source string) string {
+	if strings.HasPrefix(source, "github:") {
+		return "https://github.com/" + strings.TrimPrefix(source, "github:") + ".git"
+	}
+	return source
+}
+
 // SyncNixhome copies the nixhome directory from srcPath into configDir/nixhome/.
 // It replaces any existing nixhome copy to ensure fresh content each build.
 // Also removes the outer flake.lock so nix regenerates it from the inner
@@ -236,18 +355,15 @@ func SyncNixhome(srcPath, configDir string) error {
 		return fmt.Errorf("nixhome source %s: %w", srcPath, err)
 	}
 	dest := filepath.Join(configDir, "nixhome")
-	// Remove stale copy so we get a clean sync every build.
 	if err := os.RemoveAll(dest); err != nil {
 		return fmt.Errorf("remove old nixhome: %w", err)
 	}
-	// Remove stale outer flake.lock — inner nixhome has its own lock
-	// that matches the base image's nix store.
 	os.Remove(filepath.Join(configDir, "flake.lock"))
-	return copyDir(srcPath, dest)
+	return CopyDir(srcPath, dest)
 }
 
-// copyDir recursively copies src directory to dst.
-func copyDir(src, dst string) error {
+// CopyDir recursively copies src directory to dst.
+func CopyDir(src, dst string) error {
 	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -268,11 +384,20 @@ func copyDir(src, dst string) error {
 // Scaffold writes .devcell.toml to dir (project root) and build artifacts
 // (Dockerfile, flake.nix, package.json, pyproject.toml, starship.toml) to
 // dir/.devcell/ (build context, gitignored).
+// ScaffoldWithModules is like Scaffold but also writes the selected modules list.
+func ScaffoldWithModules(dir string, modelsSnippet string, nixhomePath string, force bool, stack string, modules []string) error {
+	return doScaffold(dir, modelsSnippet, nixhomePath, force, stack, modules)
+}
+
 func Scaffold(dir string, modelsSnippet string, nixhomePath string, force bool, stack ...string) error {
 	stk := ""
 	if len(stack) > 0 {
 		stk = stack[0]
 	}
+	return doScaffold(dir, modelsSnippet, nixhomePath, force, stk, nil)
+}
+
+func doScaffold(dir string, modelsSnippet string, nixhomePath string, force bool, stk string, modules []string) error {
 
 	buildDir := filepath.Join(dir, ".devcell")
 	if err := os.MkdirAll(buildDir, 0755); err != nil {
@@ -291,7 +416,7 @@ func Scaffold(dir string, modelsSnippet string, nixhomePath string, force bool, 
 	withNixhome := nixhomeStat == nil
 
 	// Write .devcell.toml to project root, build artifacts to .devcell/.
-	for _, f := range scaffoldFiles(modelsSnippet, withNixhome, stk) {
+	for _, f := range scaffoldFiles(modelsSnippet, withNixhome, stk, modules) {
 		var dest string
 		if f.name == "devcell.toml" {
 			// Config file → project root as .devcell.toml (dot-prefixed)

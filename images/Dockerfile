@@ -243,7 +243,7 @@ ENV PATH="/opt/mise/node/bin:/opt/mise/go/bin:${PATH}"
 # Run the Genesis workflow to create the seed image for first-time setup.
 ###############################################################################
 FROM ${NIX_CACHE_IMAGE} AS nix-cache
-RUN mkdir -p /nix/store
+RUN mkdir -p /nix/store /nix/var/nix
 
 ###############################################################################
 # Stage: ultimate
@@ -256,11 +256,15 @@ FROM core AS ultimate
 ARG USER_UID=1000
 ARG USER_GID=1000
 COPY --chown=${USER_UID}:${USER_GID} nixhome/ /opt/nixhome/
-# Pre-seed nix store from previous build via mount (no extra layer).
+# Pre-seed nix store + DB from previous build via mount (no extra layer).
+# Both /nix/store (paths) and /nix/var/nix (SQLite DB) are needed — without
+# the DB, nix doesn't recognize pre-seeded paths and re-downloads everything.
 # On cache hit: home-manager downloads only the delta (~30s vs ~15min).
 # On cache miss (busybox fallback): empty /nix/store, full download.
 RUN --mount=from=nix-cache,source=/nix/store,target=/tmp/nix-cache \
+    --mount=from=nix-cache,source=/nix/var/nix,target=/tmp/nix-var-cache \
     cp -a /tmp/nix-cache/. /nix/store/ 2>/dev/null || true && \
+    cp -a /tmp/nix-var-cache/. /nix/var/nix/ 2>/dev/null || true && \
     ARCH=$(uname -m) && \
     [ "$ARCH" = "aarch64" ] && ARCH_SUFFIX="-aarch64" || ARCH_SUFFIX="" && \
     home-manager switch --flake "/opt/nixhome#devcell-ultimate${ARCH_SUFFIX}" && \
