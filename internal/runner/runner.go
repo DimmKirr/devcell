@@ -19,9 +19,13 @@ import (
 )
 
 const (
-	// baseImageRegistry is the registry prefix for all devcell images.
-	baseImageRegistry = "ghcr.io/dimmkirr/devcell"
+	// DefaultRegistry is the fallback registry prefix for devcell images.
+	DefaultRegistry = "public.ecr.aws/w1l3v2k8/dimmkirr/devcell"
 )
+
+// Registry is the active container registry. Set via cfg.ResolvedRegistry()
+// at startup; defaults to DefaultRegistry.
+var Registry = DefaultRegistry
 
 // BaseImageTag returns the base image tag used in scaffold FROM,
 // allowing override via DEVCELL_BASE_IMAGE env var (local dev, CI, tests).
@@ -29,7 +33,7 @@ func BaseImageTag() string {
 	if tag := os.Getenv("DEVCELL_BASE_IMAGE"); tag != "" {
 		return tag
 	}
-	return fmt.Sprintf("%s:%s-core", baseImageRegistry, version.Version)
+	return fmt.Sprintf("%s:%s-core", Registry, version.Version)
 }
 
 // UserImageTag returns the per-session user image tag.
@@ -368,14 +372,20 @@ func ImageExists(ctx context.Context, tag string) bool {
 // StackImageTag returns the registry tag for a pre-built stack image.
 // e.g. "go" → "ghcr.io/dimmkirr/devcell:v1.2.3-go"
 func StackImageTag(stack string) string {
-	return fmt.Sprintf("%s:%s-%s", baseImageRegistry, version.Version, stack)
+	return fmt.Sprintf("%s:%s-%s", Registry, version.Version, stack)
 }
 
 // PullImage attempts to pull a Docker image. Returns nil on success.
-func PullImage(ctx context.Context, tag string) error {
+// When verbose is true, docker pull output is streamed to os.Stderr.
+func PullImage(ctx context.Context, tag string, verbose bool) error {
 	cmd := exec.CommandContext(ctx, "docker", "pull", tag)
-	cmd.Stdout = io.Discard
-	cmd.Stderr = io.Discard
+	if verbose {
+		cmd.Stdout = os.Stderr
+		cmd.Stderr = os.Stderr
+	} else {
+		cmd.Stdout = io.Discard
+		cmd.Stderr = io.Discard
+	}
 	return cmd.Run()
 }
 

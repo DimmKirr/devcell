@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/pterm/pterm"
+	charmlog "github.com/charmbracelet/log"
 )
 
 var (
@@ -17,45 +17,24 @@ var (
 func Initialize(logLevel string, plain bool) {
 	plainText = plain
 
-	var ptermLogLevel pterm.LogLevel
+	var level charmlog.Level
 	switch strings.ToLower(logLevel) {
 	case "debug":
-		ptermLogLevel = pterm.LogLevelDebug
+		level = charmlog.DebugLevel
 	case "warn", "warning":
-		ptermLogLevel = pterm.LogLevelWarn
+		level = charmlog.WarnLevel
 	case "error":
-		ptermLogLevel = pterm.LogLevelError
+		level = charmlog.ErrorLevel
 	default:
-		ptermLogLevel = pterm.LogLevelInfo
+		level = charmlog.InfoLevel
 	}
 
-	handler := pterm.NewSlogHandler(&pterm.DefaultLogger)
-	pterm.DefaultLogger.Level = ptermLogLevel
+	logger := charmlog.NewWithOptions(os.Stderr, charmlog.Options{
+		Level:           level,
+		ReportTimestamp: false,
+	})
 
-	if !plain {
-		applyTheme()
-	}
-
-	defaultLogger = slog.New(handler)
-}
-
-func applyTheme() {
-	pterm.Info.Prefix = pterm.Prefix{
-		Text:  "ℹ",
-		Style: pterm.NewStyle(pterm.FgCyan, pterm.Bold),
-	}
-	pterm.Warning.Prefix = pterm.Prefix{
-		Text:  "⚠",
-		Style: pterm.NewStyle(pterm.FgYellow, pterm.Bold),
-	}
-	pterm.Success.Prefix = pterm.Prefix{
-		Text:  "✔",
-		Style: pterm.NewStyle(pterm.FgLightGreen, pterm.Bold),
-	}
-	pterm.Error.Prefix = pterm.Prefix{
-		Text:  "⨯",
-		Style: pterm.NewStyle(pterm.FgRed, pterm.Bold),
-	}
+	defaultLogger = slog.New(logger)
 }
 
 func Info(msg string, keysAndValues ...interface{}) {
@@ -81,7 +60,7 @@ func Fatal(msg string, keysAndValues ...interface{}) {
 
 func Println(msg string) {
 	if !plainText {
-		pterm.Println(fmt.Sprintf(" %s", msg))
+		fmt.Printf(" %s\n", msg)
 	} else {
 		defaultLogger.Info(msg)
 	}

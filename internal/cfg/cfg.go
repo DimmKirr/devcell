@@ -9,15 +9,31 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
+// DefaultRegistry is the default container registry for devcell images.
+// Must match runner.DefaultRegistry.
+const DefaultRegistry = "public.ecr.aws/w1l3v2k8/dimmkirr/devcell"
+
 // CellSection holds [cell] config.
 type CellSection struct {
 	ImageTag    string   `toml:"image_tag"`
+	Registry    string   `toml:"registry"` // container registry; default: DefaultRegistry; env: DEVCELL_REGISTRY
 	GUI         *bool    `toml:"gui"`      // default: true (nil = not set → true)
 	Timezone    string   `toml:"timezone"` // IANA tz (e.g. "Europe/Prague"); default: host $TZ
 	Locale      string   `toml:"locale"`   // POSIX locale (e.g. "en_US.UTF-8"); default: "en_US.UTF-8"
 	Stack       string   `toml:"stack"`    // nix stack name (e.g. "go", "python"); default: "ultimate"
 	Modules     []string `toml:"modules"`  // extra nix modules to compose on top of stack
 	NixhomePath string   `toml:"nixhome"`  // local nixhome path; overridden by DEVCELL_NIXHOME_PATH env
+}
+
+// ResolvedRegistry returns the effective registry: env > toml > default.
+func (c CellSection) ResolvedRegistry() string {
+	if v := os.Getenv("DEVCELL_REGISTRY"); v != "" {
+		return v
+	}
+	if c.Registry != "" {
+		return c.Registry
+	}
+	return DefaultRegistry
 }
 
 // ResolvedGUI returns the effective GUI setting: true unless explicitly set to false.
@@ -339,7 +355,6 @@ var stackSizes = map[string]string{
 	"ultimate":    "~7.6 GB",
 }
 
-
 // KnownStacks returns the list of valid stack names.
 func KnownStacks() []string {
 	out := make([]string, len(knownStacks))
@@ -347,36 +362,10 @@ func KnownStacks() []string {
 	return out
 }
 
-// KnownStacksWithSizes returns stack labels with download sizes for UI pickers.
-// Each entry is "name (size)" — use ParseStackSelection to extract the name.
-func KnownStacksWithSizes() []string {
-	out := make([]string, len(knownStacks))
-	for i, s := range knownStacks {
-		if sz, ok := stackSizes[s]; ok {
-			out[i] = fmt.Sprintf("%s (%s)", s, sz)
-		} else {
-			out[i] = s
-		}
-	}
-	return out
-}
-
 // StackSize returns the approximate download size for the given stack.
 func StackSize(stack string) (string, bool) {
 	sz, ok := stackSizes[stack]
 	return sz, ok
-}
-
-// ParseStackSelection extracts the stack name from a picker label.
-// Handles both formats:
-//   - "base (717 MB)"                           → "base"
-//   - "fullstack      base, build, ...  ~4.2 GB" → "fullstack"
-func ParseStackSelection(selection string) string {
-	// New format: first whitespace-delimited token is the stack name.
-	if name, _, ok := strings.Cut(selection, " "); ok && name != "" {
-		return strings.TrimSpace(name)
-	}
-	return strings.TrimSpace(selection)
 }
 
 // ValidateStack checks that stack is a known stack name. Empty is valid (defaults to ultimate).
@@ -394,4 +383,3 @@ func ValidateStack(stack string) error {
 	sort.Strings(sorted)
 	return fmt.Errorf("unknown stack %q; available stacks: %s", stack, strings.Join(sorted, ", "))
 }
-

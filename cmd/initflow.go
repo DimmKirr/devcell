@@ -80,28 +80,28 @@ func RunInitFlow(opts InitFlowOptions) (*InitFlowResult, error) {
 	}
 
 	if stack == "" && !opts.Yes {
-		stacks, source := scanStacksFromNixhome(nixhomeDest)
-		ux.Debugf("Stack list (%s): %v", source, stacks)
+		stackOpts, source := scanStacksFromNixhome(nixhomeDest)
+		ux.Debugf("Stack list (%s): %d stacks", source, len(stackOpts))
 
 		// Loop: stack picker → module multiselect.
-		// Ctrl+C in multiselect returns to stack picker.
+		// Esc in multiselect returns to stack picker.
 		for {
-			picked, selErr := ux.GetSelection("Pick a stack", stacks)
+			picked, selErr := ux.GetSelectionKV("Pick a stack", stackOpts)
 			if selErr != nil {
 				return nil, fmt.Errorf("stack selection: %w", selErr)
 			}
-			stack = cfg.ParseStackSelection(picked)
+			stack = picked
 
 			allModules := scanModulesFromNixhome(nixhomeDest)
 			preSelected := stackModulesFromNixhome(nixhomeDest, stack)
 			ux.Debugf("allModules (%d): %v", len(allModules), allModules)
 			ux.Debugf("preSelected (%d): %v", len(preSelected), preSelected)
 			selected, msErr := ux.GetMultiSelection(
-				"Modules (space: toggle, enter: confirm, ctrl+c: back)",
+				"Modules (space: toggle, enter: confirm, esc: back)",
 				allModules, preSelected,
 			)
-			if msErr == ux.ErrInterrupted {
-				// Ctrl+C → clear and go back to stack picker.
+			if msErr == ux.ErrUserAborted {
+				// Esc → clear and go back to stack picker.
 				fmt.Print("\033[2J\033[H") // clear screen, cursor to top
 				stack = ""
 				continue
@@ -237,10 +237,11 @@ func validateNixhomeStructure(nixhomePath string) error {
 }
 
 // scanStacksFromNixhome scans .devcell/nixhome/ for stacks.
-// Falls back to KnownStacksWithSizes if nixhome isn't available.
-func scanStacksFromNixhome(nixhomePath string) ([]string, string) {
+// Falls back to KnownStacks if nixhome isn't available.
+// Returns SelectOption with Label (display) and Value (stack name).
+func scanStacksFromNixhome(nixhomePath string) ([]ux.SelectOption, string) {
 	if stacks, err := scanLocalStacks(nixhomePath); err == nil && len(stacks) > 0 {
-		detailed := make([]string, 0, len(stacks))
+		opts := make([]ux.SelectOption, 0, len(stacks))
 		for _, s := range stacks {
 			mods := stackModulesFromNixhome(nixhomePath, s)
 			modStr := strings.Join(mods, ", ")
@@ -251,12 +252,22 @@ func scanStacksFromNixhome(nixhomePath string) ([]string, string) {
 			if szVal, ok := cfg.StackSize(s); ok {
 				sz = szVal
 			}
-			detailed = append(detailed, fmt.Sprintf("%-14s %-52s %s", s, modStr, sz))
+			label := fmt.Sprintf("%-14s %-52s %s", s, modStr, sz)
+			opts = append(opts, ux.SelectOption{Label: label, Value: s})
 		}
-		return detailed, nixhomePath + "/stacks/*.nix"
+		return opts, nixhomePath + "/stacks/*.nix"
 	}
-	// No nixhome on disk — fall back to known stack names (no module details).
-	return cfg.KnownStacksWithSizes(), "built-in (nixhome not available)"
+	// No nixhome on disk — fall back to known stack names with sizes.
+	known := cfg.KnownStacks()
+	opts := make([]ux.SelectOption, len(known))
+	for i, s := range known {
+		label := s
+		if sz, ok := cfg.StackSize(s); ok {
+			label = fmt.Sprintf("%s (%s)", s, sz)
+		}
+		opts[i] = ux.SelectOption{Label: label, Value: s}
+	}
+	return opts, "built-in (nixhome not available)"
 }
 
 // scanModulesFromNixhome scans .devcell/nixhome/modules/ for available modules.

@@ -101,7 +101,7 @@ func scaffoldedHome(t *testing.T) string {
 	return home
 }
 
-// TestPlainTextNoSpinnerChars verifies that --plain-text suppresses pterm spinner
+// TestPlainTextNoSpinnerChars verifies that --plain-text suppresses spinner
 // Unicode sequences. We run with --dry-run to avoid docker exec but still
 // exercise the pre-exec ux output path.
 func TestPlainTextNoSpinnerChars(t *testing.T) {

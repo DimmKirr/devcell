@@ -16,7 +16,6 @@ import (
 
 	"github.com/DimmKirr/devcell/internal/config"
 	"github.com/DimmKirr/devcell/internal/ux"
-	"github.com/pterm/pterm"
 	"github.com/spf13/cobra"
 )
 
@@ -128,7 +127,7 @@ func runChrome(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	pterm.Info.Println("Cookies ready. Use Playwright to browse with your authenticated session.")
+	ux.Info("Cookies ready. Use Playwright to browse with your authenticated session.")
 
 	return nil
 }
@@ -182,7 +181,7 @@ func openExtractAndClose(profile, storageStatePath string, urls []string, noSync
 	if browserName == "" || browserName == "." {
 		browserName = filepath.Base(bin)
 	}
-	pterm.Info.Printfln("Opening %s", pterm.LightCyan(browserName))
+	ux.Info(fmt.Sprintf("Opening %s", browserName))
 	ux.Debugf("profile: %s", profile)
 
 	proc := exec.Command(bin, argv...)
@@ -199,7 +198,7 @@ func openExtractAndClose(profile, storageStatePath string, urls []string, noSync
 	go func() { done <- proc.Wait() }()
 
 	fmt.Println()
-	pterm.FgLightYellow.Printfln("  Log in to the sites you need, then press %s when done.", pterm.Bold.Sprint("Enter"))
+	fmt.Println(ux.StyleWarning.Render(fmt.Sprintf("  Log in to the sites you need, then press %s when done.", ux.StyleBold.Render("Enter"))))
 
 	enterCh := make(chan struct{}, 1)
 	go func() {
@@ -222,11 +221,11 @@ func openExtractAndClose(profile, storageStatePath string, urls []string, noSync
 			if err != nil {
 				sp.Fail(fmt.Sprintf("cookie extraction failed: %v", err))
 			} else {
-				sp.Success(fmt.Sprintf("Exported %d cookies for %s", count, pterm.LightCyan(sites)))
+				sp.Success(fmt.Sprintf("Exported %d cookies for %s", count, sites))
 			}
 		}
 
-		pterm.Info.Println("Closing browser...")
+		ux.Info("Closing browser...")
 		if err := proc.Process.Signal(syscall.SIGTERM); err != nil {
 			ux.Debugf("SIGTERM failed: %v, sending SIGKILL", err)
 			proc.Process.Kill()
@@ -244,9 +243,9 @@ func openExtractAndClose(profile, storageStatePath string, urls []string, noSync
 		if err != nil {
 			ux.Debugf("Chromium exited: %v", err)
 		}
-		pterm.Info.Println("Browser closed.")
+		ux.Info("Browser closed.")
 		if !noSync {
-			pterm.Warning.Println("Browser closed before cookie extraction — no cookies synced.")
+			ux.Warn("Browser closed before cookie extraction — no cookies synced.")
 		}
 	}
 

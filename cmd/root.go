@@ -294,7 +294,12 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 		}
 	}
 
+	// Show a spinner during pre-launch setup (network, cleanup, backup, etc.).
+	// In verbose mode, just print the header — debug output follows.
+	var openSp *ux.ProgressSpinner
 	if !ux.Verbose {
+		openSp = ux.NewProgressSpinner(fmt.Sprintf("Opening Cell %s", c.AppName))
+	} else {
 		ux.Println(fmt.Sprintf("Opening Cell %s ...", c.AppName))
 	}
 
@@ -305,6 +310,9 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 
 	// Remove orphaned stopped container from a previous crashed run
 	if err := runner.RemoveOrphanedContainer(context.Background(), c.ContainerName); err != nil {
+		if openSp != nil {
+			openSp.Fail("setup failed")
+		}
 		return err
 	}
 
@@ -352,7 +360,9 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 	var inheritEnv []string
 	opDocs := cellCfg.Op.ResolvedDocuments()
 	if len(opDocs) > 0 {
-		ux.Println(fmt.Sprintf("Using 1Password documents: %s", strings.Join(opDocs, ", ")))
+		if openSp != nil {
+			openSp.UpdateText(fmt.Sprintf("Opening Cell %s (resolving secrets)", c.AppName))
+		}
 		ux.Debugf("1Password: resolving %d document(s): %v", len(opDocs), opDocs)
 		if _, err := exec.LookPath("op"); err == nil {
 			resolved, err := op.ResolveItems(opDocs)
@@ -370,6 +380,11 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 		} else {
 			ux.Debugf("1Password: op CLI not found, skipping secret resolution")
 		}
+	}
+
+	// Stop spinner before handing terminal to child process.
+	if openSp != nil {
+		openSp.Stop()
 	}
 
 	spec := runner.RunSpec{

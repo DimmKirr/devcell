@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/BurntSushi/toml"
-	"github.com/DimmKirr/devcell/internal/cfg"
 	"github.com/DimmKirr/devcell/internal/scaffold"
 )
 
@@ -253,7 +252,7 @@ func TestResolveModuleSelection_UltimateUnchanged(t *testing.T) {
 
 // TestStackModulesSubsetOfAllModules verifies that for every stack,
 // the preSelected modules are a subset of allModules (the full module list).
-// This is required for pterm's WithDefaultOptions to work correctly.
+// This ensures the multiselect default options are valid.
 // Uses real nixhome files — the single source of truth.
 func TestStackModulesSubsetOfAllModules_FromNixhome(t *testing.T) {
 	nixhome := "/devcell-63/nixhome"
@@ -416,10 +415,9 @@ func TestStackModulesFromNixhome_MatchesNixFiles(t *testing.T) {
 	}
 }
 
-// TestPtermReceivesCorrectPreSelected simulates the exact data flow
-// that feeds into pterm's GetMultiSelection for each stack.
-// Verifies: allModules contains all preSelected items (pterm precondition).
-func TestPtermReceivesCorrectPreSelected(t *testing.T) {
+// TestPreSelectedSubsetOfAllModules verifies that for every stack,
+// the preSelected modules are a subset of allModules.
+func TestPreSelectedSubsetOfAllModules(t *testing.T) {
 	nixhome := "/devcell-63/nixhome"
 	if _, err := os.Stat(nixhome); err != nil {
 		t.Skip("nixhome not available")
@@ -438,34 +436,12 @@ func TestPtermReceivesCorrectPreSelected(t *testing.T) {
 		t.Logf("stack %-12s preSelected (%d): %v", stack, len(preSelected), preSelected)
 
 		if len(preSelected) == 0 {
-			t.Errorf("stack %q: preSelected is EMPTY — pterm will show 0 checked", stack)
+			t.Errorf("stack %q: preSelected is EMPTY — multiselect will show 0 checked", stack)
 		}
 		for _, m := range preSelected {
 			if !allSet[m] {
-				t.Errorf("stack %q: preSelected %q NOT in allModules — pterm will silently skip it", stack, m)
+				t.Errorf("stack %q: preSelected %q NOT in allModules — multiselect will skip it", stack, m)
 			}
-		}
-	}
-}
-
-// TestParseStackSelection_RichFormat verifies ParseStackSelection extracts
-// the stack name from the rich formatted picker labels.
-func TestParseStackSelection_RichFormat(t *testing.T) {
-	tests := []struct {
-		input string
-		want  string
-	}{
-		{"go             base, build, go, apple, infra, project-mgmt       ~3.6 GB", "go"},
-		{"fullstack      base, build, go, node, python, +4 more             ~4.2 GB", "fullstack"},
-		{"ultimate       all 18 modules                                     ~7.6 GB", "ultimate"},
-		{"base           base                                               ~0.5 GB", "base"},
-		{"go (~3.6 GB)", "go"},   // old format still works
-		{"base", "base"},          // plain name
-	}
-	for _, tt := range tests {
-		got := cfg.ParseStackSelection(tt.input)
-		if got != tt.want {
-			t.Errorf("ParseStackSelection(%q) = %q, want %q", tt.input, got, tt.want)
 		}
 	}
 }

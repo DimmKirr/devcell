@@ -16,11 +16,13 @@ on:
 permissions:
   contents: write
   packages: write
+  id-token: write
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
   NIX_CACHE_IMAGE: ghcr.io/dimmkirr/devcell:v0.0.0-ultimate
+  ECR_REGISTRY: public.ecr.aws/w1l3v2k8/dimmkirr/devcell
 
 jobs:
   secrets:
@@ -75,13 +77,35 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push ci group
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ECR_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Log in to ECR Public
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          registry-type: public
+
+      - name: Build and push ci group (GHCR)
         run: docker buildx bake --push ci
         env:
           VERSION: v0.0.0-${{ matrix.arch }}
           PLATFORMS: ${{ matrix.platform }}
           REGISTRY: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}
           CACHE_ARCH: -${{ matrix.arch }}
+
+      - name: Push to ECR Public
+        run: |
+          GHCR=${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}
+          ECR=${{ env.ECR_REGISTRY }}
+          V=v0.0.0-${{ matrix.arch }}
+          for suffix in "" "-core" "-ultimate"; do
+            SRC="${GHCR}:${V}${suffix}"
+            DST="${ECR}:${V}${suffix}"
+            docker buildx imagetools create -t "${DST}" "${SRC}"
+          done
 
   docker-test:
     name: Docker Test (${{ matrix.arch }}, ${{ matrix.variant }})
@@ -168,7 +192,18 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Create manifests
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ECR_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Log in to ECR Public
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          registry-type: public
+
+      - name: Create GHCR manifests
         run: |
           R=${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}
           for suffix in "" "-core" "-ultimate"; do
@@ -178,6 +213,18 @@ jobs:
               -t "${R}:v0.0.0${suffix}" \
               "${R}:v0.0.0-amd64${suffix}" \
               "${R}:v0.0.0-arm64${suffix}"
+          done
+
+      - name: Create ECR Public manifests
+        run: |
+          ECR=${{ env.ECR_REGISTRY }}
+          for suffix in "" "-core" "-ultimate"; do
+            docker buildx imagetools create \
+              -t "${ECR}:dev${suffix}" \
+              -t "${ECR}:latest${suffix}" \
+              -t "${ECR}:v0.0.0${suffix}" \
+              "${ECR}:v0.0.0-amd64${suffix}" \
+              "${ECR}:v0.0.0-arm64${suffix}"
           done
 
   cell-build:

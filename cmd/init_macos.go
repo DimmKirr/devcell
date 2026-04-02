@@ -11,13 +11,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pterm/pterm"
+	"github.com/DimmKirr/devcell/internal/ux"
 )
 
 // runInitMacOS implements `cell init --macos`: walks the user through creating
 // a reusable devcell macOS Vagrant box backed by UTM.
 func runInitMacOS() error {
-	pterm.DefaultHeader.Println("cell init --macos: macOS VM box setup")
+	fmt.Println()
+	fmt.Println(ux.StyleSection.Render(" cell init --macos: macOS VM box setup"))
+	fmt.Println()
 
 	// -------------------------------------------------------------------------
 	// Phase 1: Prerequisites
@@ -29,8 +31,9 @@ func runInitMacOS() error {
 	// -------------------------------------------------------------------------
 	// Phase 2: VM creation walkthrough
 	// -------------------------------------------------------------------------
-	pterm.DefaultSection.Println("Phase 2: Create a macOS VM in UTM")
-	pterm.Info.Println("Unfortunately right now UTM doesn't support certain automations. " +
+	fmt.Println()
+	fmt.Println(ux.StyleSection.Render(" Phase 2: Create a macOS VM in UTM"))
+	ux.Info("Unfortunately right now UTM doesn't support certain automations. " +
 		"Community is working on it. This is a one-time manual step.")
 	vmSteps := []string{
 		"Open UTM and click  \"Create a New Virtual Machine\"",
@@ -47,8 +50,9 @@ func runInitMacOS() error {
 	// -------------------------------------------------------------------------
 	// Phase 3: Guest configuration
 	// -------------------------------------------------------------------------
-	pterm.DefaultSection.Println("Phase 3: Configure the VM guest for Vagrant")
-	pterm.Info.Println("Unfortunately right now UTM doesn't support certain automations. " +
+	fmt.Println()
+	fmt.Println(ux.StyleSection.Render(" Phase 3: Configure the VM guest for Vagrant"))
+	ux.Info("Unfortunately right now UTM doesn't support certain automations. " +
 		"Community is working on it. This is a one-time manual step.")
 
 	guestSteps := []struct {
@@ -100,7 +104,7 @@ func runInitMacOS() error {
 	}
 
 	for _, step := range guestSteps {
-		pterm.Info.Println(step.title)
+		ux.Info(step.title)
 		for _, line := range step.commands {
 			fmt.Println("   " + line)
 		}
@@ -112,7 +116,8 @@ func runInitMacOS() error {
 	// -------------------------------------------------------------------------
 	// Phase 4a: Network verification
 	// -------------------------------------------------------------------------
-	pterm.DefaultSection.Println("Phase 4: Verify VM network access")
+	fmt.Println()
+	fmt.Println(ux.StyleSection.Render(" Phase 4: Verify VM network access"))
 
 	hostname, err := promptHostname()
 	if err != nil {
@@ -125,16 +130,17 @@ func runInitMacOS() error {
 	// -------------------------------------------------------------------------
 	// Phase 4b: Install Nix via SSH
 	// -------------------------------------------------------------------------
-	pterm.DefaultSection.Println("Phase 4b: Install Nix on the VM")
-	pterm.Info.Printf("Connecting to %s and running nix-install...\n", hostname)
+	fmt.Println()
+	fmt.Println(ux.StyleSection.Render(" Phase 4b: Install Nix on the VM"))
+	ux.Info(fmt.Sprintf("Connecting to %s and running nix-install...", hostname))
 
 	if err := sshRunNixInstall(hostname); err != nil {
 		return fmt.Errorf("nix install failed: %w", err)
 	}
-	pterm.Success.Println("Nix installed.")
+	ux.SuccessMsg("Nix installed.")
 
 	fmt.Println()
-	pterm.Info.Println("Shut down the VM now:")
+	ux.Info("Shut down the VM now:")
 	fmt.Println("   sudo shutdown -h now")
 	if err := pressYToContinue(); err != nil {
 		return err
@@ -151,11 +157,11 @@ func runInitMacOS() error {
 // ---------------------------------------------------------------------------
 
 func checkPrerequisites() error {
-	pterm.DefaultSection.Println("Phase 1: Checking prerequisites")
+	fmt.Println()
+	fmt.Println(ux.StyleSection.Render(" Phase 1: Checking prerequisites"))
 
 	// vagrant CLI
-	sp := pterm.DefaultSpinner.WithText("Checking vagrant...").WithRemoveWhenDone(true)
-	sp.Start()
+	sp := ux.NewProgressSpinner("Checking vagrant...")
 	if out, err := exec.Command("vagrant", "--version").Output(); err != nil {
 		sp.Fail("vagrant not found")
 		return fmt.Errorf("vagrant CLI not found.\n" +
@@ -167,8 +173,7 @@ func checkPrerequisites() error {
 
 	// utmctl
 	const utmctl = "/Applications/UTM.app/Contents/MacOS/utmctl"
-	sp2 := pterm.DefaultSpinner.WithText("Checking UTM...").WithRemoveWhenDone(true)
-	sp2.Start()
+	sp2 := ux.NewProgressSpinner("Checking UTM...")
 	if out, err := exec.Command(utmctl, "version").Output(); err != nil {
 		sp2.Fail("UTM not found")
 		return fmt.Errorf("UTM not found or too old at %s.\n"+
@@ -186,7 +191,7 @@ func checkPrerequisites() error {
 
 func walkSteps(steps []string) error {
 	for i, step := range steps {
-		pterm.Info.Printf("Step %d/%d: %s\n", i+1, len(steps), step)
+		ux.Info(fmt.Sprintf("Step %d/%d: %s", i+1, len(steps), step))
 		if err := pressYToContinue(); err != nil {
 			return err
 		}
@@ -235,18 +240,17 @@ func promptHostname() (string, error) {
 func verifySSHReachable(hostname string) error {
 	addr := hostname + ":22"
 	for {
-		sp := pterm.DefaultSpinner.WithText(fmt.Sprintf("Testing SSH on %s...", addr))
-		sp.Start()
+		sp := ux.NewProgressSpinner(fmt.Sprintf("Testing SSH on %s...", addr))
 
 		conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
 		if err == nil {
 			conn.Close()
-			sp.Success(fmt.Sprintf("✔ %s is reachable on port 22", hostname))
+			sp.Success(fmt.Sprintf("  %s is reachable on port 22", hostname))
 			return nil
 		}
-		sp.Fail(fmt.Sprintf("✗ Cannot reach %s on port 22", hostname))
+		sp.Fail(fmt.Sprintf("  Cannot reach %s on port 22", hostname))
 
-		pterm.Warning.Println("Is the hostname correct? Has the router DHCP reservation been configured?")
+		ux.Warn("Is the hostname correct? Has the router DHCP reservation been configured?")
 		fmt.Println("   Options:")
 		fmt.Println("   [R] Retry with same hostname")
 		fmt.Println("   [H] Enter a different hostname")
@@ -347,7 +351,8 @@ func imagesDir() string {
 // ---------------------------------------------------------------------------
 
 func runBoxPackaging() error {
-	pterm.DefaultSection.Println("Phase 5: Package the box")
+	fmt.Println()
+	fmt.Println(ux.StyleSection.Render(" Phase 5: Package the box"))
 
 	reader := bufio.NewReader(os.Stdin)
 
@@ -370,7 +375,7 @@ func runBoxPackaging() error {
 		return fmt.Errorf("UTM VM storage not found.\n" +
 			"Expected: ~/Library/Containers/com.utmapp.UTM/Data/Documents/ or ~/Documents/UTM/")
 	}
-	pterm.Info.Printf("UTM storage: %s\n", utmDir)
+	ux.Info(fmt.Sprintf("UTM storage: %s", utmDir))
 
 	boxFile := filepath.Join(os.Getenv("HOME"), boxName+".box")
 
@@ -379,7 +384,7 @@ func runBoxPackaging() error {
 		fn   func() error
 	}{
 		{
-			desc: fmt.Sprintf("echo '{\"provider\":\"utm\"}' > /tmp/metadata.json"),
+			desc: "echo '{\"provider\":\"utm\"}' > /tmp/metadata.json",
 			fn: func() error {
 				return os.WriteFile("/tmp/metadata.json", []byte(`{"provider":"utm"}`+"\n"), 0644)
 			},
@@ -409,17 +414,16 @@ func runBoxPackaging() error {
 
 	for _, step := range steps {
 		fmt.Println()
-		pterm.Info.Println("Next action:")
+		ux.Info("Next action:")
 		fmt.Println("   " + step.desc)
 		fmt.Print("   Run this? [Y/n]: ")
 		line, _ := reader.ReadString('\n')
 		ans := strings.ToLower(strings.TrimSpace(line))
 		if ans == "n" || ans == "no" {
-			pterm.Warning.Println("Skipped.")
+			ux.Warn("Skipped.")
 			continue
 		}
-		sp := pterm.DefaultSpinner.WithText("Running...").WithRemoveWhenDone(true)
-		sp.Start()
+		sp := ux.NewProgressSpinner("Running...")
 		if err := step.fn(); err != nil {
 			sp.Fail("Failed")
 			return fmt.Errorf("step %q: %w", step.desc, err)
@@ -429,7 +433,7 @@ func runBoxPackaging() error {
 
 	// Verify
 	fmt.Println()
-	pterm.Info.Println("Verifying box list:")
+	ux.Info("Verifying box list:")
 	exec.Command("vagrant", "box", "list").Run()
 
 	// Cleanup
@@ -437,10 +441,10 @@ func runBoxPackaging() error {
 	line, _ := reader.ReadString('\n')
 	if strings.ToLower(strings.TrimSpace(line)) == "y" {
 		os.Remove(boxFile)
-		pterm.Success.Printf("Removed %s\n", boxFile)
+		ux.SuccessMsg(fmt.Sprintf("Removed %s", boxFile))
 	}
 
-	pterm.Success.Printf("\nBox %q is ready. Run: cell claude --macos\n", boxName)
+	ux.SuccessMsg(fmt.Sprintf("Box %q is ready. Run: cell claude --macos", boxName))
 	return nil
 }
 

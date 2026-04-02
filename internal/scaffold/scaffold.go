@@ -538,6 +538,7 @@ func doScaffold(dir string, modelsSnippet string, nixhomePath string, force bool
 // image — only the delta is downloaded. If the pre-built image isn't available
 // (not yet pushed, network error), we fall back to the core image.
 func RegenerateBuildContext(configDir string, cellCfg cfg.CellConfig) error {
+	runner.Registry = cellCfg.Cell.ResolvedRegistry()
 	// Detect nixhome on disk — if .devcell/nixhome/ exists, use path:./nixhome.
 	_, statErr := os.Stat(filepath.Join(configDir, "nixhome"))
 	withNixhome := statErr == nil
@@ -601,13 +602,22 @@ func resolveBaseImage(stack string) string {
 		}
 
 		label := fmt.Sprintf("Pulling stack cache image %s", stackTag)
-		sp := ux.NewProgressSpinner(label)
-		if err := runner.PullImage(ctx, stackTag); err == nil {
-			sp.Success(label)
+		var sp *ux.ProgressSpinner
+		if !ux.Verbose {
+			sp = ux.NewProgressSpinner(label)
+		} else {
+			ux.Debugf("%s", label)
+		}
+		if err := runner.PullImage(ctx, stackTag, ux.Verbose); err == nil {
+			if sp != nil {
+				sp.Success(label)
+			}
 			ux.Debugf("FROM image: %s (pulled pre-built stack cache)", stackTag)
 			return stackTag
 		}
-		sp.Stop()
+		if sp != nil {
+			sp.Stop()
+		}
 		ux.Debugf("Pre-built stack image not available, falling back to core")
 	}
 

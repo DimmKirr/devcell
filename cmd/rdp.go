@@ -11,6 +11,8 @@ import (
 	"github.com/DimmKirr/devcell/internal/config"
 	internalrdp "github.com/DimmKirr/devcell/internal/rdp"
 	"github.com/DimmKirr/devcell/internal/ux"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/lipgloss/table"
 	"github.com/spf13/cobra"
 )
 
@@ -248,10 +250,16 @@ func rdpList() error {
 		fmt.Println("No running cell containers with RDP found.")
 		return nil
 	}
-	fmt.Printf("%-30s %-8s %s\n", "APP_NAME", "PORT", "URL")
+	var rows [][]string
 	for app, port := range m {
-		fmt.Printf("%-30s %-8s %s\n", app, port, internalrdp.RDPUrl(port))
+		rows = append(rows, []string{app, port, internalrdp.RDPUrl(port)})
 	}
+	t := table.New().
+		Border(lipgloss.NormalBorder()).
+		BorderStyle(ux.TableBorder).
+		Headers("APP_NAME", "PORT", "URL").
+		Rows(rows...)
+	fmt.Println(t)
 	return nil
 }
 
