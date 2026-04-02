@@ -83,6 +83,33 @@ func TestBakeHCL_NixCacheImage_Variable(t *testing.T) {
 	t.Log("PASS: docker-bake.hcl has NIX_CACHE_IMAGE variable and ultimate target uses it")
 }
 
+// TestBakeHCL_CacheArch_PerArchCacheTags asserts all cache-from/cache-to refs
+// use ${CACHE_ARCH} so amd64 and arm64 don't overwrite each other's cache.
+func TestBakeHCL_CacheArch_PerArchCacheTags(t *testing.T) {
+	bake, err := os.ReadFile("../docker-bake.hcl")
+	if err != nil {
+		t.Fatalf("read docker-bake.hcl: %v", err)
+	}
+	content := string(bake)
+
+	if !strings.Contains(content, `variable "CACHE_ARCH"`) {
+		t.Fatal("docker-bake.hcl missing CACHE_ARCH variable")
+	}
+
+	// Every cache-from/cache-to line with a cache- tag (excluding local targets
+	// which use empty arrays) must include ${CACHE_ARCH}.
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.Contains(trimmed, "ref=${REGISTRY}:cache-") {
+			continue
+		}
+		if !strings.Contains(trimmed, "${CACHE_ARCH}") {
+			t.Fatalf("cache ref missing CACHE_ARCH: %s", trimmed)
+		}
+	}
+	t.Log("PASS: all cache refs use ${CACHE_ARCH} for per-arch isolation")
+}
+
 // ---------------------------------------------------------------------------
 // L2 — Integration: nix DB recognized after copy
 // ---------------------------------------------------------------------------

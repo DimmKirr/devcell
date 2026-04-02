@@ -858,53 +858,6 @@ func TestValidateStack_EmptyIsValid(t *testing.T) {
 	}
 }
 
-func TestValidateModules_AllValid(t *testing.T) {
-	if err := cfg.ValidateModules([]string{"electronics", "desktop"}); err != nil {
-		t.Errorf("valid modules rejected: %v", err)
-	}
-}
-
-func TestValidateModules_OneInvalid(t *testing.T) {
-	err := cfg.ValidateModules([]string{"electronics", "bogus"})
-	if err == nil {
-		t.Fatal("expected error for invalid module 'bogus'")
-	}
-	s := err.Error()
-	if !strings.Contains(s, "bogus") {
-		t.Errorf("error should mention invalid module 'bogus': %s", s)
-	}
-}
-
-func TestValidateModules_Empty(t *testing.T) {
-	if err := cfg.ValidateModules([]string{}); err != nil {
-		t.Errorf("empty modules should be valid: %v", err)
-	}
-}
-
-func TestValidateModules_Nil(t *testing.T) {
-	if err := cfg.ValidateModules(nil); err != nil {
-		t.Errorf("nil modules should be valid: %v", err)
-	}
-}
-
-func TestValidateModules_AllInvalid(t *testing.T) {
-	err := cfg.ValidateModules([]string{"bogus1", "bogus2"})
-	if err == nil {
-		t.Fatal("expected error for all invalid modules")
-	}
-	s := err.Error()
-	if !strings.Contains(s, "bogus1") || !strings.Contains(s, "bogus2") {
-		t.Errorf("error should mention all invalid modules: %s", s)
-	}
-}
-
-func TestValidateModules_DuplicatesAllowed(t *testing.T) {
-	// Duplicates are silently deduped, not rejected
-	if err := cfg.ValidateModules([]string{"go", "go"}); err != nil {
-		t.Errorf("duplicate modules should not error: %v", err)
-	}
-}
-
 // --- KnownStacks ---
 
 func TestKnownStacks_ReturnsExpectedList(t *testing.T) {

@@ -6,6 +6,7 @@ import (
 
 	"github.com/DimmKirr/devcell/internal/cfg"
 	"github.com/DimmKirr/devcell/internal/config"
+	"github.com/DimmKirr/devcell/internal/ux"
 	"github.com/spf13/cobra"
 )
 
@@ -40,27 +41,51 @@ func runInit(cmd *cobra.Command, _ []string) error {
 
 	if bi, _ := cmd.Flags().GetString("base-image"); bi != "" {
 		os.Setenv("DEVCELL_BASE_IMAGE", bi)
+		ux.Debugf("DEVCELL_BASE_IMAGE: %s (--base-image flag)", bi)
+	} else if bi := os.Getenv("DEVCELL_BASE_IMAGE"); bi != "" {
+		ux.Debugf("DEVCELL_BASE_IMAGE: %s (env)", bi)
 	}
 
 	c, err := config.LoadFromOS()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
+	ux.Debugf("BaseDir: %s, ConfigDir: %s", c.BaseDir, c.ConfigDir)
 
 	stack, _ := cmd.Flags().GetString("stack")
+	if stack != "" {
+		ux.Debugf("stack: %s (--stack flag)", stack)
+	}
 
-	// Nixhome source: --nixhome > --local-nixhome (deprecated) > env > config.
+	// Nixhome source: --nixhome > --local-nixhome (deprecated) > env > global config > git.
 	nixhomeSrc, _ := cmd.Flags().GetString("nixhome")
+	nixhomeSrcOrigin := ""
+	if nixhomeSrc != "" {
+		nixhomeSrcOrigin = "--nixhome flag"
+	}
 	if nixhomeSrc == "" {
 		nixhomeSrc, _ = cmd.Flags().GetString("local-nixhome")
+		if nixhomeSrc != "" {
+			nixhomeSrcOrigin = "--local-nixhome flag (deprecated)"
+		}
 	}
 	if nixhomeSrc == "" {
 		nixhomeSrc = os.Getenv("DEVCELL_NIXHOME_PATH")
+		if nixhomeSrc != "" {
+			nixhomeSrcOrigin = "DEVCELL_NIXHOME_PATH env"
+		}
 	}
 	if nixhomeSrc == "" {
-		existingCfg := cfg.LoadFromOS(c.ConfigDir, c.BaseDir)
-		nixhomeSrc = existingCfg.Cell.NixhomePath
+		globalCfg, _ := cfg.LoadFile(c.ConfigDir + "/devcell.toml")
+		nixhomeSrc = globalCfg.Cell.NixhomePath
+		if nixhomeSrc != "" {
+			nixhomeSrcOrigin = "global config (" + c.ConfigDir + "/devcell.toml)"
+		}
 	}
+	if nixhomeSrc == "" {
+		nixhomeSrcOrigin = "upstream git (default)"
+	}
+	ux.Debugf("nixhome source: %s (%s)", nixhomeSrc, nixhomeSrcOrigin)
 
 	modules, _ := cmd.Flags().GetStringSlice("modules")
 

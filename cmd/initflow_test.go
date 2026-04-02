@@ -239,7 +239,7 @@ func TestResolveModuleSelection_OnlyBase(t *testing.T) {
 func TestResolveModuleSelection_UltimateUnchanged(t *testing.T) {
 	pre := []string{"base", "build", "go", "apple", "infra", "node", "project-management",
 		"python", "qa-tools", "scraping", "desktop", "electronics", "financial",
-		"graphics", "news", "nixos", "security", "travel"}
+		"graphics", "llm", "mise", "news", "nixos", "postgresql", "security", "shell", "travel"}
 	selected := make([]string, len(pre))
 	copy(selected, pre)
 	stack, modules := ResolveModuleSelection("ultimate", pre, selected)
@@ -254,26 +254,7 @@ func TestResolveModuleSelection_UltimateUnchanged(t *testing.T) {
 // TestStackModulesSubsetOfAllModules verifies that for every stack,
 // the preSelected modules are a subset of allModules (the full module list).
 // This is required for pterm's WithDefaultOptions to work correctly.
-func TestStackModulesSubsetOfAllModules(t *testing.T) {
-	// Test with hardcoded fallback lists (no nixhome on disk).
-	allModules := cfg.KnownModules()
-	allSet := make(map[string]bool, len(allModules))
-	for _, m := range allModules {
-		allSet[m] = true
-	}
-
-	for _, stack := range cfg.KnownStacks() {
-		preSelected := cfg.StackModules(stack)
-		for _, m := range preSelected {
-			if !allSet[m] {
-				t.Errorf("stack %q: preSelected module %q not in KnownModules %v", stack, m, allModules)
-			}
-		}
-	}
-}
-
-// TestStackModulesSubsetOfAllModules_FromNixhome verifies the same
-// using real nixhome files when available.
+// Uses real nixhome files — the single source of truth.
 func TestStackModulesSubsetOfAllModules_FromNixhome(t *testing.T) {
 	nixhome := "/devcell-63/nixhome"
 	if _, err := os.Stat(nixhome); err != nil {
@@ -412,7 +393,7 @@ func TestStackModulesFromNixhome_MatchesNixFiles(t *testing.T) {
 		"python":      {"base", "python", "scraping"},
 		"fullstack":   {"base", "build", "go", "apple", "infra", "node", "project-management", "python", "qa-tools", "scraping"},
 		"electronics": {"base", "build", "desktop", "electronics"},
-		"ultimate":    {"base", "build", "go", "apple", "infra", "node", "project-management", "python", "qa-tools", "scraping", "desktop", "electronics", "financial", "graphics", "news", "nixos", "security", "travel"},
+		"ultimate":    {"base", "build", "go", "apple", "infra", "node", "project-management", "python", "qa-tools", "scraping", "desktop", "electronics", "financial", "graphics", "llm", "mise", "news", "nixos", "postgresql", "security", "shell", "travel"},
 	}
 
 	for stack, wantModules := range expected {
@@ -431,6 +412,60 @@ func TestStackModulesFromNixhome_MatchesNixFiles(t *testing.T) {
 			if !gotSet[m] {
 				t.Errorf("stack %q: missing expected module %q\n  got: %v", stack, m, got)
 			}
+		}
+	}
+}
+
+// TestPtermReceivesCorrectPreSelected simulates the exact data flow
+// that feeds into pterm's GetMultiSelection for each stack.
+// Verifies: allModules contains all preSelected items (pterm precondition).
+func TestPtermReceivesCorrectPreSelected(t *testing.T) {
+	nixhome := "/devcell-63/nixhome"
+	if _, err := os.Stat(nixhome); err != nil {
+		t.Skip("nixhome not available")
+	}
+
+	stacks, _ := scanLocalStacks(nixhome)
+	allModules := scanModulesFromNixhome(nixhome)
+	allSet := make(map[string]bool, len(allModules))
+	for _, m := range allModules {
+		allSet[m] = true
+	}
+	t.Logf("allModules (%d): %v", len(allModules), allModules)
+
+	for _, stack := range stacks {
+		preSelected := stackModulesFromNixhome(nixhome, stack)
+		t.Logf("stack %-12s preSelected (%d): %v", stack, len(preSelected), preSelected)
+
+		if len(preSelected) == 0 {
+			t.Errorf("stack %q: preSelected is EMPTY — pterm will show 0 checked", stack)
+		}
+		for _, m := range preSelected {
+			if !allSet[m] {
+				t.Errorf("stack %q: preSelected %q NOT in allModules — pterm will silently skip it", stack, m)
+			}
+		}
+	}
+}
+
+// TestParseStackSelection_RichFormat verifies ParseStackSelection extracts
+// the stack name from the rich formatted picker labels.
+func TestParseStackSelection_RichFormat(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"go             base, build, go, apple, infra, project-mgmt       ~3.6 GB", "go"},
+		{"fullstack      base, build, go, node, python, +4 more             ~4.2 GB", "fullstack"},
+		{"ultimate       all 18 modules                                     ~7.6 GB", "ultimate"},
+		{"base           base                                               ~0.5 GB", "base"},
+		{"go (~3.6 GB)", "go"},   // old format still works
+		{"base", "base"},          // plain name
+	}
+	for _, tt := range tests {
+		got := cfg.ParseStackSelection(tt.input)
+		if got != tt.want {
+			t.Errorf("ParseStackSelection(%q) = %q, want %q", tt.input, got, tt.want)
 		}
 	}
 }

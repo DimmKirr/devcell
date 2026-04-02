@@ -81,6 +81,7 @@ jobs:
           VERSION: v0.0.0-${{ matrix.arch }}
           PLATFORMS: ${{ matrix.platform }}
           REGISTRY: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}
+          CACHE_ARCH: -${{ matrix.arch }}
 
   docker-test:
     name: Docker Test (${{ matrix.arch }}, ${{ matrix.variant }})

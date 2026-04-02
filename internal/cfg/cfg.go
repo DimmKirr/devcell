@@ -339,25 +339,6 @@ var stackSizes = map[string]string{
 	"ultimate":    "~7.6 GB",
 }
 
-// Known module names (must match nixhome/modules/*.nix and flake.nix modules output).
-var knownModules = []string{
-	"apple", "base", "build", "desktop", "electronics", "financial",
-	"go", "graphics", "infra", "llm", "mise", "news", "nixos", "node",
-	"postgresql", "project-management", "python", "qa-tools", "scraping",
-	"security", "shell", "travel",
-}
-
-// stackModules maps each stack to its resolved list of nix modules.
-// Derived from nixhome/stacks/*.nix import lists (flattened, deduped).
-var stackModules = map[string][]string{
-	"base":        {"base"},
-	"go":          {"base", "build", "go", "apple", "infra", "project-management"},
-	"node":        {"base", "node", "scraping"},
-	"python":      {"base", "python", "scraping"},
-	"fullstack":   {"base", "build", "go", "apple", "infra", "node", "project-management", "python", "qa-tools", "scraping"},
-	"electronics": {"base", "build", "desktop", "electronics"},
-	"ultimate":    {"base", "build", "go", "apple", "infra", "node", "project-management", "python", "qa-tools", "scraping", "desktop", "electronics", "financial", "graphics", "news", "nixos", "security", "travel"},
-}
 
 // KnownStacks returns the list of valid stack names.
 func KnownStacks() []string {
@@ -380,62 +361,22 @@ func KnownStacksWithSizes() []string {
 	return out
 }
 
-// KnownStacksWithDetails returns stack labels with inline module lists and sizes
-// for the interactive picker. Each entry is "name  modules  size".
-// The last entry is the "custom" option for individual module selection.
-func KnownStacksWithDetails() []string {
-	const nameW = 14  // column width for stack name
-	const modsW = 52  // column width for modules summary
-	const maxMods = 6 // max modules to show before truncating
-
-	out := make([]string, 0, len(knownStacks)+1)
-	for _, s := range knownStacks {
-		mods := stackModules[s]
-		var modStr string
-		if s == "ultimate" {
-			modStr = fmt.Sprintf("all %d modules", len(mods))
-		} else if len(mods) > maxMods {
-			modStr = strings.Join(mods[:maxMods], ", ") + fmt.Sprintf(", +%d more", len(mods)-maxMods)
-		} else {
-			modStr = strings.Join(mods, ", ")
-		}
-		sz := stackSizes[s]
-		out = append(out, fmt.Sprintf("%-*s %-*s %s", nameW, s, modsW, modStr, sz))
-	}
-	return out
-}
-
 // StackSize returns the approximate download size for the given stack.
 func StackSize(stack string) (string, bool) {
 	sz, ok := stackSizes[stack]
 	return sz, ok
 }
 
-// StackModules returns the modules included in the given stack.
-// Returns nil for unknown stacks.
-func StackModules(stack string) []string {
-	mods, ok := stackModules[stack]
-	if !ok {
-		return nil
-	}
-	out := make([]string, len(mods))
-	copy(out, mods)
-	return out
-}
-
-// KnownModules returns the list of all available module names.
-func KnownModules() []string {
-	out := make([]string, len(knownModules))
-	copy(out, knownModules)
-	return out
-}
-
-// ParseStackSelection extracts the stack name from a picker label like "base (717 MB)".
+// ParseStackSelection extracts the stack name from a picker label.
+// Handles both formats:
+//   - "base (717 MB)"                           → "base"
+//   - "fullstack      base, build, ...  ~4.2 GB" → "fullstack"
 func ParseStackSelection(selection string) string {
-	if i := strings.Index(selection, " ("); i > 0 {
-		return selection[:i]
+	// New format: first whitespace-delimited token is the stack name.
+	if name, _, ok := strings.Cut(selection, " "); ok && name != "" {
+		return strings.TrimSpace(name)
 	}
-	return selection
+	return strings.TrimSpace(selection)
 }
 
 // ValidateStack checks that stack is a known stack name. Empty is valid (defaults to ultimate).
@@ -454,27 +395,3 @@ func ValidateStack(stack string) error {
 	return fmt.Errorf("unknown stack %q; available stacks: %s", stack, strings.Join(sorted, ", "))
 }
 
-// ValidateModules checks that all module names are known. Empty/nil is valid.
-func ValidateModules(modules []string) error {
-	if len(modules) == 0 {
-		return nil
-	}
-	known := make(map[string]bool, len(knownModules))
-	for _, m := range knownModules {
-		known[m] = true
-	}
-	var invalid []string
-	for _, m := range modules {
-		if !known[m] {
-			invalid = append(invalid, m)
-		}
-	}
-	if len(invalid) > 0 {
-		sorted := make([]string, len(knownModules))
-		copy(sorted, knownModules)
-		sort.Strings(sorted)
-		return fmt.Errorf("unknown module(s): %s; available modules: %s",
-			strings.Join(invalid, ", "), strings.Join(sorted, ", "))
-	}
-	return nil
-}

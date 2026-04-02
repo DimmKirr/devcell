@@ -38,6 +38,13 @@ variable "PLATFORMS" {
   default = "linux/amd64,linux/arm64"
 }
 
+variable "CACHE_ARCH" {
+  # Per-arch cache tags prevent amd64/arm64 from overwriting each other's
+  # buildx registry cache. CI sets this to "-amd64" or "-arm64".
+  # Empty for local builds (single arch, no collision).
+  default = ""
+}
+
 variable "NIX_CACHE_IMAGE" {
   # Previous ultimate image for nix store pre-seeding. Overridden to "busybox"
   # for genesis/local builds where no cache image exists yet.
@@ -74,8 +81,8 @@ target "core" {
     "${REGISTRY}:${VERSION}-core",
     "${REGISTRY}:${VERSION}",
   ]
-  cache-from = ["type=registry,ref=${REGISTRY}:cache-core"]
-  cache-to   = ["type=registry,ref=${REGISTRY}:cache-core,mode=max"]
+  cache-from = ["type=registry,ref=${REGISTRY}:cache-core${CACHE_ARCH}"]
+  cache-to   = ["type=registry,ref=${REGISTRY}:cache-core${CACHE_ARCH},mode=max"]
 }
 
 target "go" {
@@ -86,10 +93,10 @@ target "go" {
   platforms  = split(",", PLATFORMS)
   tags       = ["${REGISTRY}:${VERSION}-go"]
   cache-from = [
-    "type=registry,ref=${REGISTRY}:cache-go",
-    "type=registry,ref=${REGISTRY}:cache-core",
+    "type=registry,ref=${REGISTRY}:cache-go${CACHE_ARCH}",
+    "type=registry,ref=${REGISTRY}:cache-core${CACHE_ARCH}",
   ]
-  cache-to   = ["type=registry,ref=${REGISTRY}:cache-go,mode=max"]
+  cache-to   = ["type=registry,ref=${REGISTRY}:cache-go${CACHE_ARCH},mode=max"]
 }
 
 target "node" {
@@ -100,10 +107,10 @@ target "node" {
   platforms  = split(",", PLATFORMS)
   tags       = ["${REGISTRY}:${VERSION}-node"]
   cache-from = [
-    "type=registry,ref=${REGISTRY}:cache-node",
-    "type=registry,ref=${REGISTRY}:cache-core",
+    "type=registry,ref=${REGISTRY}:cache-node${CACHE_ARCH}",
+    "type=registry,ref=${REGISTRY}:cache-core${CACHE_ARCH}",
   ]
-  cache-to   = ["type=registry,ref=${REGISTRY}:cache-node,mode=max"]
+  cache-to   = ["type=registry,ref=${REGISTRY}:cache-node${CACHE_ARCH},mode=max"]
 }
 
 target "python" {
@@ -114,10 +121,10 @@ target "python" {
   platforms  = split(",", PLATFORMS)
   tags       = ["${REGISTRY}:${VERSION}-python"]
   cache-from = [
-    "type=registry,ref=${REGISTRY}:cache-python",
-    "type=registry,ref=${REGISTRY}:cache-core",
+    "type=registry,ref=${REGISTRY}:cache-python${CACHE_ARCH}",
+    "type=registry,ref=${REGISTRY}:cache-core${CACHE_ARCH}",
   ]
-  cache-to   = ["type=registry,ref=${REGISTRY}:cache-python,mode=max"]
+  cache-to   = ["type=registry,ref=${REGISTRY}:cache-python${CACHE_ARCH},mode=max"]
 }
 
 target "electronics" {
@@ -128,10 +135,10 @@ target "electronics" {
   platforms  = split(",", PLATFORMS)
   tags       = ["${REGISTRY}:${VERSION}-electronics"]
   cache-from = [
-    "type=registry,ref=${REGISTRY}:cache-electronics",
-    "type=registry,ref=${REGISTRY}:cache-core",
+    "type=registry,ref=${REGISTRY}:cache-electronics${CACHE_ARCH}",
+    "type=registry,ref=${REGISTRY}:cache-core${CACHE_ARCH}",
   ]
-  cache-to   = ["type=registry,ref=${REGISTRY}:cache-electronics,mode=max"]
+  cache-to   = ["type=registry,ref=${REGISTRY}:cache-electronics${CACHE_ARCH},mode=max"]
 }
 
 # fullstack — all language tools (tag: {version}-fullstack)
@@ -145,10 +152,10 @@ target "fullstack" {
     "${REGISTRY}:${VERSION}-fullstack",
   ]
   cache-from = [
-    "type=registry,ref=${REGISTRY}:cache-fullstack",
-    "type=registry,ref=${REGISTRY}:cache-core",
+    "type=registry,ref=${REGISTRY}:cache-fullstack${CACHE_ARCH}",
+    "type=registry,ref=${REGISTRY}:cache-core${CACHE_ARCH}",
   ]
-  cache-to   = ["type=registry,ref=${REGISTRY}:cache-fullstack,mode=max"]
+  cache-to   = ["type=registry,ref=${REGISTRY}:cache-fullstack${CACHE_ARCH},mode=max"]
 }
 
 # ultimate — fullstack + desktop + KiCad, ngspice, libspnav, poppler
@@ -167,10 +174,10 @@ target "ultimate" {
     "${REGISTRY}:${VERSION}-ultimate",
   ]
   cache-from = [
-    "type=registry,ref=${REGISTRY}:cache-ultimate",
-    "type=registry,ref=${REGISTRY}:cache-core",
+    "type=registry,ref=${REGISTRY}:cache-ultimate${CACHE_ARCH}",
+    "type=registry,ref=${REGISTRY}:cache-core${CACHE_ARCH}",
   ]
-  cache-to   = ["type=registry,ref=${REGISTRY}:cache-ultimate,mode=max"]
+  cache-to   = ["type=registry,ref=${REGISTRY}:cache-ultimate${CACHE_ARCH},mode=max"]
 }
 
 # ── Groups ────────────────────────────────────────────────────────────────────

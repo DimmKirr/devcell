@@ -250,9 +250,25 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 			return fmt.Errorf("ensure build dir: %w", err)
 		}
 		if nixhomePath := cellCfg.Cell.NixhomePath; nixhomePath != "" {
-			ux.Debugf("Syncing nixhome: %s → %s/nixhome/", nixhomePath, c.BuildDir)
-			if err := scaffold.SyncNixhome(nixhomePath, c.BuildDir); err != nil {
-				return fmt.Errorf("sync nixhome: %w", err)
+			// Check if nixhome source changed since last sync.
+			prevSource := scaffold.NixhomeSource(c.BuildDir)
+			if prevSource != "" && prevSource != nixhomePath {
+				ux.Debugf("nixhome source changed: %s → %s", prevSource, nixhomePath)
+				fmt.Printf(" ⚠ nixhome source changed: %s → %s\n", prevSource, nixhomePath)
+				overwrite, cErr := ux.GetConfirmation("Overwrite .devcell/nixhome with new source?")
+				if cErr != nil || !overwrite {
+					ux.Debugf("Skipping nixhome sync (user declined or error)")
+				} else {
+					ux.Debugf("Syncing nixhome: %s → %s/nixhome/", nixhomePath, c.BuildDir)
+					if err := scaffold.SyncNixhome(nixhomePath, c.BuildDir); err != nil {
+						return fmt.Errorf("sync nixhome: %w", err)
+					}
+				}
+			} else {
+				ux.Debugf("Syncing nixhome: %s → %s/nixhome/", nixhomePath, c.BuildDir)
+				if err := scaffold.SyncNixhome(nixhomePath, c.BuildDir); err != nil {
+					return fmt.Errorf("sync nixhome: %w", err)
+				}
 			}
 		}
 		if err := scaffold.RegenerateBuildContext(c.BuildDir, cellCfg); err != nil {

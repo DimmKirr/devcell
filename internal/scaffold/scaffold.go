@@ -258,36 +258,32 @@ func IsGitURL(source string) bool {
 func ResolveNixhome(source, buildDir, ver string, force bool) error {
 	dest := filepath.Join(buildDir, "nixhome")
 
-	// Skip if already present and not forcing.
-	if !force {
-		if fi, err := os.Stat(dest); err == nil && fi.IsDir() {
-			return nil
-		}
-	}
-
 	if source != "" && !IsGitURL(source) {
-		// Local path — copy.
+		// Local path — always sync (fast, user expects local changes picked up).
 		return SyncNixhome(source, buildDir)
 	}
 
-	// Git source — resolve URL.
-	repoURL := defaultNixhomeRepo
-	subdir := "nixhome"
-	if source != "" {
-		repoURL = normalizeGitURL(source)
-		// If the URL doesn't contain "devcell", assume it points directly to a
-		// nixhome repo (no subdirectory needed).
-		if !strings.Contains(repoURL, "devcell") {
-			subdir = ""
-		}
+	// Git source — always fetch latest.
+	gs := parseGitSource(source)
+	if gs.RepoURL == "" {
+		// No source provided — use upstream default with nixhome subdir.
+		gs = gitSource{RepoURL: defaultNixhomeRepo, Subdir: "nixhome"}
 	}
 
-	ref := ver
+	ref := gs.Ref
+	if ref == "" {
+		ref = ver
+	}
 	if ref == "" || ref == "v0.0.0" {
 		ref = "main"
 	}
+	subdir := gs.Subdir
 
-	sp := ux.NewProgressSpinner("Fetching nixhome from git")
+	label := fmt.Sprintf("Fetching nixhome from %s", gs.RepoURL)
+	if subdir != "" {
+		label += "/" + subdir
+	}
+	sp := ux.NewProgressSpinner(label)
 
 	tmpDir, err := os.MkdirTemp("", "devcell-nixhome-*")
 	if err != nil {
@@ -301,7 +297,7 @@ func ResolveNixhome(source, buildDir, ver string, force bool) error {
 	if subdir != "" {
 		cloneArgs = append(cloneArgs, "--sparse")
 	}
-	cloneArgs = append(cloneArgs, repoURL, tmpDir)
+	cloneArgs = append(cloneArgs, gs.RepoURL, tmpDir)
 
 	cmds := [][]string{{"git"}}
 	cmds[0] = append(cmds[0], cloneArgs...)
@@ -333,16 +329,77 @@ func ResolveNixhome(source, buildDir, ver string, force bool) error {
 		return err
 	}
 
+	// Record source origin for change detection.
+	sourceLabel := gs.RepoURL
+	if source != "" {
+		sourceLabel = source
+	}
+	os.WriteFile(filepath.Join(dest, NixhomeSourceFile), []byte(sourceLabel+"\n"), 0644)
+
 	sp.Success(fmt.Sprintf("Fetched nixhome (%s)", ref))
 	return nil
 }
 
-// normalizeGitURL converts shorthand like "github:user/repo" to a full URL.
-func normalizeGitURL(source string) string {
+// gitSource holds the parsed components of a git nixhome source.
+type gitSource struct {
+	RepoURL string // e.g. https://github.com/DimmKirr/devcell.git
+	Ref     string // branch/tag override (empty = use version default)
+	Subdir  string // subdirectory within repo (empty = repo root)
+}
+
+// parseGitSource parses various git URL formats into repo + ref + subdir.
+// Supported formats:
+//   - "github:user/repo"                                       → https://github.com/user/repo.git, subdir=""
+//   - "github:user/repo/subdir"                                → https://github.com/user/repo.git, subdir="subdir"
+//   - "https://github.com/user/repo/tree/branch/path/to/dir"  → repo.git, ref=branch, subdir="path/to/dir"
+//   - "https://github.com/user/repo.git"                       → as-is
+//   - "git@github.com:user/repo.git"                           → as-is
+func parseGitSource(source string) gitSource {
+	// GitHub shorthand: github:user/repo or github:user/repo/subdir
 	if strings.HasPrefix(source, "github:") {
-		return "https://github.com/" + strings.TrimPrefix(source, "github:") + ".git"
+		parts := strings.SplitN(strings.TrimPrefix(source, "github:"), "/", 3)
+		if len(parts) >= 2 {
+			gs := gitSource{RepoURL: "https://github.com/" + parts[0] + "/" + parts[1] + ".git"}
+			if len(parts) == 3 {
+				gs.Subdir = parts[2]
+			}
+			return gs
+		}
 	}
-	return source
+
+	// GitHub tree URL: https://github.com/user/repo/tree/branch/path/to/dir
+	if strings.Contains(source, "github.com/") && strings.Contains(source, "/tree/") {
+		// Split on /tree/ to get repo and branch+path
+		parts := strings.SplitN(source, "/tree/", 2)
+		repoURL := strings.TrimSuffix(parts[0], "/") + ".git"
+		if len(parts) == 2 {
+			// branch/path/to/dir — first segment is branch, rest is subdir
+			branchAndPath := strings.SplitN(parts[1], "/", 2)
+			gs := gitSource{RepoURL: repoURL, Ref: branchAndPath[0]}
+			if len(branchAndPath) == 2 {
+				gs.Subdir = branchAndPath[1]
+			}
+			return gs
+		}
+		return gitSource{RepoURL: repoURL}
+	}
+
+	return gitSource{RepoURL: source}
+}
+
+// NixhomeSourceFile is the metadata file that tracks which source was used
+// to populate .devcell/nixhome/. Used to detect when a different source
+// would overwrite an existing nixhome.
+const NixhomeSourceFile = ".devcell-source"
+
+// NixhomeSource reads the source origin from .devcell/nixhome/.devcell-source.
+// Returns "" if the file doesn't exist.
+func NixhomeSource(configDir string) string {
+	data, err := os.ReadFile(filepath.Join(configDir, "nixhome", NixhomeSourceFile))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
 }
 
 // SyncNixhome copies the nixhome directory from srcPath into configDir/nixhome/.
@@ -350,6 +407,7 @@ func normalizeGitURL(source string) string {
 // Also removes the outer flake.lock so nix regenerates it from the inner
 // nixhome's inputs — prevents stale lock from pinning different nixpkgs
 // than the base image, which would cause a full re-download.
+// Writes .devcell-source to track the origin.
 func SyncNixhome(srcPath, configDir string) error {
 	if _, err := os.Stat(srcPath); err != nil {
 		return fmt.Errorf("nixhome source %s: %w", srcPath, err)
@@ -359,7 +417,11 @@ func SyncNixhome(srcPath, configDir string) error {
 		return fmt.Errorf("remove old nixhome: %w", err)
 	}
 	os.Remove(filepath.Join(configDir, "flake.lock"))
-	return CopyDir(srcPath, dest)
+	if err := CopyDir(srcPath, dest); err != nil {
+		return err
+	}
+	// Record source origin for change detection.
+	return os.WriteFile(filepath.Join(dest, NixhomeSourceFile), []byte(srcPath+"\n"), 0644)
 }
 
 // CopyDir recursively copies src directory to dst.

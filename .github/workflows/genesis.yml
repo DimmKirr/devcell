@@ -68,6 +68,7 @@ jobs:
           VERSION: v0.0.0-${{ matrix.arch }}
           PLATFORMS: ${{ matrix.platform }}
           REGISTRY: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}
+          CACHE_ARCH: -${{ matrix.arch }}
           # Override to busybox — no nix cache donor on genesis build
           NIX_CACHE_IMAGE: public.ecr.aws/docker/library/debian:trixie-slim
 
