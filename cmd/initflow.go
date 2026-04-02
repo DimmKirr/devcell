@@ -61,7 +61,9 @@ func RunInitFlow(opts InitFlowOptions) (*InitFlowResult, error) {
 	if err := scaffold.ResolveNixhome(opts.NixhomeSrc, buildDir, version.Version, opts.Force); err != nil {
 		ux.Debugf("Failed to resolve nixhome: %v (falling back to built-in lists)", err)
 	}
-	validateNixhomeStructure(filepath.Join(buildDir, "nixhome"))
+	if err := validateNixhomeStructure(filepath.Join(buildDir, "nixhome")); err != nil {
+		return nil, err
+	}
 
 	// For scaffold: pass nixhomeSrc only if it's a local path (persisted in .devcell.toml).
 	nixhomePath := ""
@@ -211,23 +213,27 @@ func scanLocalModules(nixhomePath string) ([]string, error) {
 }
 
 // validateNixhomeStructure checks that the nixhome directory has the expected
-// stacks/ and modules/ subdirectories and warns via debug if missing.
-func validateNixhomeStructure(nixhomePath string) {
+// stacks/ and modules/ subdirectories. Returns an error if the structure is
+// incompatible with devcell (no stacks/ or no modules/).
+func validateNixhomeStructure(nixhomePath string) error {
 	if nixhomePath == "" {
-		return
+		return nil
 	}
 	if _, err := os.Stat(nixhomePath); err != nil {
-		ux.Debugf("nixhome not found at %s", nixhomePath)
-		return
+		return nil // nixhome not fetched — will use defaults
 	}
-	stacksDir := filepath.Join(nixhomePath, "stacks")
-	modulesDir := filepath.Join(nixhomePath, "modules")
-	if _, err := os.Stat(stacksDir); err != nil {
-		fmt.Printf(" ⚠ nixhome has no stacks/ directory at %s — using built-in stack list\n", nixhomePath)
+	var missing []string
+	if _, err := os.Stat(filepath.Join(nixhomePath, "stacks")); err != nil {
+		missing = append(missing, "stacks/")
 	}
-	if _, err := os.Stat(modulesDir); err != nil {
-		fmt.Printf(" ⚠ nixhome has no modules/ directory at %s — module picker will be empty\n", nixhomePath)
+	if _, err := os.Stat(filepath.Join(nixhomePath, "modules")); err != nil {
+		missing = append(missing, "modules/")
 	}
+	if len(missing) > 0 {
+		return fmt.Errorf("nixhome at %s is not devcell-compatible (missing %s). Expected stacks/*.nix and modules/*.nix",
+			nixhomePath, strings.Join(missing, ", "))
+	}
+	return nil
 }
 
 // scanStacksFromNixhome scans .devcell/nixhome/ for stacks.
@@ -249,8 +255,8 @@ func scanStacksFromNixhome(nixhomePath string) ([]string, string) {
 		}
 		return detailed, nixhomePath + "/stacks/*.nix"
 	}
-	// No nixhome on disk — fall back to plain stack names with sizes.
-	return cfg.KnownStacksWithSizes(), "built-in (no nixhome)"
+	// No nixhome on disk — fall back to known stack names (no module details).
+	return cfg.KnownStacksWithSizes(), "built-in (nixhome not available)"
 }
 
 // scanModulesFromNixhome scans .devcell/nixhome/modules/ for available modules.
