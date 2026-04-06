@@ -5,7 +5,6 @@ import FeatureCards from '../components/FeatureCards.astro';
 import Quickstart from '../components/Quickstart.astro';
 import WhatsInside from '../components/WhatsInside.astro';
 import StackTable from '../components/StackTable.astro';
-import CompareSection from '../components/CompareSection.astro';
 import FAQ from '../components/FAQ.astro';
 
 const stableVersion = process.env.STABLE_VERSION || '';
@@ -61,18 +60,6 @@ const stackFeatures = [
   { name: "12+ MCP servers",  note: "Finance, maps, productivity, vector graphics (Inkscape) — growing",   in: ["ultimate"] },
 ];
 
-const dcRows = [
-  { feature: "Designed for", devcell: "AI coding agents (Claude Code, Codex, OpenCode)", devcontainers: "VS Code and GitHub Codespaces" },
-  { feature: "Setup",        devcell: "cell claude — zero config, works from any project",    devcontainers: "Write a Dockerfile + devcontainer.json per project" },
-  { feature: "Toolchain",    devcell: "7 pre-built Nix-pinned stacks. Nothing to maintain",   devcontainers: "You build and maintain your own image" },
-  { feature: "MCP servers",  devcell: "12+ servers auto-merged into agent config at startup",  devcontainers: "Not included. Install and configure yourself" },
-  { feature: "Secrets",      devcell: "1Password injection at runtime, never written to disk", devcontainers: "Env files or docker-compose secrets" },
-  { feature: "Browser",      devcell: "Stealth Chromium + Playwright, passes bot detection",   devcontainers: "Not included" },
-  { feature: "GUI desktop",  devcell: "VNC + RDP built in, watch the agent work visually",     devcontainers: "Not included" },
-  { feature: "Permissions",  devcell: "Host UID pass-through, no file ownership issues",       devcontainers: "remoteUser config in devcontainer.json" },
-  { feature: "Agent auth",   devcell: "Claude Max/Pro subscription works directly",            devcontainers: "You handle auth yourself" },
-];
-
 const logoGrid = [
   "___#___",
   "#__#__#",
@@ -86,6 +73,10 @@ const logoGrid = [
 const faqItems = [
   { q: "Do I need an API key or Claude subscription?",
     a: "Bring your own license or model. Claude Max, Pro, and API keys all work — devcell starts the same client you already use, just inside a container. Same goes for Codex and OpenCode." },
+  { q: "How is DevCell different from Dev Containers?",
+    a: "Dev Containers are editor-first — you write a Dockerfile + devcontainer.json per project for VS Code or GitHub Codespaces. DevCell is agent-first: one command, 7 pre-built Nix-pinned stacks, 12+ MCP servers auto-merged at startup, stealth Chromium + Playwright, VNC/RDP built in, and 1Password secret injection. No per-project Dockerfile maintenance." },
+  { q: "How is DevCell different from OpenClaw?",
+    a: "OpenClaw is a multi-channel messaging gateway (WhatsApp, Telegram, Slack) with AI features. DevCell is a sandboxed coding environment for AI agents. Key differences: DevCell has mandatory container isolation (OpenClaw is network-exposed by default with multiple critical CVEs in 2026), curated MCP servers with backing tools shipped in the image (OpenClaw has an open marketplace with 1,184 malicious skills found), and Claude Max/Pro subscriptions work directly (OpenClaw requires API keys since Anthropic blocked subscription auth in Jan 2026)." },
   { q: "Can the agent install packages inside the container?",
     a: "Yes. The agent can run apt, npm install, pip install, nix — whatever the project needs. Network access is unrestricted. Port forwarding and extra volume mounts are configurable in devcell.toml." },
   { q: "What about file permissions?",
@@ -98,16 +89,6 @@ const faqItems = [
     a: "Base is ~1.3 GB, ultimate is ~20 GB. First run lets you pick a stack and builds automatically. Base builds in under 2 minutes, ultimate takes ~5 minutes." },
 ];
 
-const vsRows = [
-  { feature: "Built for",   devcell: "AI coding agents, with finance, maps, and design MCP servers included",  openclaw: "Multi-channel messaging hub (WhatsApp, Telegram, Slack)" },
-  { feature: "Setup",       devcell: "cd my-project && cell claude",                                            openclaw: "Gateway daemon + WebSocket config + channel integrations" },
-  { feature: "Toolchain",   devcell: "7 Nix-pinned stacks with per-project config. Go, Node.js, Python, Terraform, Chromium, KiCad",    openclaw: "Shell + file access, no pre-built dev environment. Tool config is system-wide only" },
-  { feature: "MCP servers", devcell: "12 curated, auto-merged at startup. Backing tools (OpenTofu, KiCad, Inkscape) ship in the image",                               openclaw: 'Open marketplace, no mandatory code review. 1,184 malicious skills found <sup><a href="https://thehackernews.com/2026/02/researchers-find-341-malicious-clawhub.html" target="_blank">[1]</a></sup>' },
-  { feature: "Security",    devcell: "Mandatory container isolation, ports opt-in via config, no plugin marketplace",   openclaw: 'Network-exposed by default. 21,000+ instances found on public internet <sup><a href="https://censys.com/blog/openclaw-in-the-wild-mapping-the-public-exposure-of-a-viral-ai-assistant/" target="_blank">[2]</a></sup>' },
-  { feature: "Claude sub",  devcell: "Claude Max and Pro work out of the box. Runs Claude Code directly",       openclaw: "Subscription auth blocked by Anthropic since Jan 2026. Requires API key (pay-per-use) or a proxy like OpenRouter" },
-  { feature: "Privacy",     devcell: "Agent runs locally, talks to the API from your machine",                  openclaw: "Messages route through centralized server infrastructure" },
-  { feature: "Isolation",   devcell: "Always on. SSH keys, credentials, host FS unreachable",                   openclaw: 'Optional, off by default. Multiple critical CVEs in 2026 <sup><a href="https://www.sonicwall.com/blog/openclaw-auth-token-theft-leading-to-rce-cve-2026-25253" target="_blank">[3]</a></sup> <sup><a href="https://www.oasis.security/blog/openclaw-vulnerability" target="_blank">[4]</a></sup>' },
-];
 ---
 
 <style is:global>
@@ -686,102 +667,6 @@ const vsRows = [
       border-bottom: var(--border);
     }
 
-    /* VS COMPARISON */
-    .compare-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 2rem;
-      margin-top: 1.5rem;
-    }
-
-    .compare-block h3 {
-      margin-bottom: 0.75rem;
-    }
-
-    @media (max-width: 768px) {
-      .compare-grid { grid-template-columns: 1fr; }
-    }
-
-    .compare-wrap {
-      background: var(--bg-muted);
-      border-top: var(--border);
-      border-bottom: var(--border);
-    }
-
-    .vs-table {
-      border: var(--border);
-      box-shadow: var(--shadow);
-      overflow-x: auto;
-    }
-
-    .vs-header {
-      display: grid;
-      grid-template-columns: 9rem 1fr 1fr;
-      border-bottom: var(--border);
-      background: var(--white);
-    }
-
-    .vs-header span {
-      font-size: 0.72rem;
-      font-weight: 900;
-      text-transform: uppercase;
-      letter-spacing: 1px;
-      padding: 0.7rem 1rem;
-    }
-
-    .vs-header span:not(:last-child) { border-right: 1px solid #CCC; }
-
-    .vs-row {
-      display: grid;
-      grid-template-columns: 9rem 1fr 1fr;
-      border-bottom: 1px solid #CCC;
-      background: var(--white);
-    }
-
-    .vs-row:last-child { border-bottom: none; }
-
-    .vs-feature {
-      font-size: 0.72rem;
-      font-weight: 900;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-      padding: 0.7rem 1rem;
-      border-right: 1px solid #CCC;
-    }
-
-    .vs-cell {
-      font-family: var(--font-mono);
-      font-size: 0.78rem;
-      color: #444;
-      padding: 0.7rem 1rem;
-      line-height: 1.55;
-    }
-
-    .vs-cell:first-of-type { border-right: 1px solid #CCC; }
-
-    .vs-cell sup a {
-      color: #888;
-      font-size: 0.65rem;
-      text-decoration: none;
-      font-family: var(--font-mono);
-    }
-    .vs-cell sup a:hover { color: var(--black); text-decoration: underline; }
-
-    .vs-sources {
-      font-family: var(--font-mono);
-      font-size: 0.68rem;
-      color: #888;
-      line-height: 1.8;
-      margin-top: 0.75rem;
-    }
-    .vs-sources a { color: #666; text-decoration: none; }
-    .vs-sources a:hover { color: var(--black); text-decoration: underline; }
-
-    @media (max-width: 600px) {
-      .vs-header, .vs-row { grid-template-columns: 6rem 1fr 1fr; }
-      .vs-cell, .vs-feature { font-size: 0.7rem; padding: 0.55rem 0.6rem; }
-    }
-
     /* FAQ */
     .faq-list { list-style: none; border: var(--border); box-shadow: var(--shadow); }
 
@@ -833,7 +718,6 @@ const vsRows = [
   <Quickstart />
   <WhatsInside stacks={stacks} logos={logos} />
   <StackTable stackColumns={stackColumns} stackFeatures={stackFeatures} />
-  <CompareSection dcRows={dcRows} vsRows={vsRows} />
   <FAQ faqItems={faqItems} />
 
   <div class="qs-wrap">
