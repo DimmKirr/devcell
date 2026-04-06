@@ -1,0 +1,5 @@
+[allowlist]
+  description = "Allowlisted test fixtures"
+  paths = [
+    '''test/testdata/devcell-config-simple/devcell/xrdp/key\.pem''',
+  ]

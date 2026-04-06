@@ -2,7 +2,7 @@
 // headless-signals-diag.js — Checks each CreepJS "like headless" signal individually.
 // Usage: node test/headless-signals-diag.js [--init-script path]
 
-const { chromium } = require('/opt/npm-tools/node_modules/patchright');
+const { chromium } = require('/opt/devcell/.local/state/nix/profiles/profile/lib/node_modules/nix-patchright-mcp-server/node_modules/patchright');
 const fs = require('fs');
 const path = require('path');
 

@@ -28,9 +28,12 @@ export HISTFILE="$HOME/.zsh_history"
 export PATH="$HOME/go/bin:/opt/devcell/.local/state/nix/profiles/profile/bin:$HOME/.local/share/mise/shims:/opt/python-tools/.venv/bin:/opt/npm-tools/node_modules/.bin\${PATH:+:}\${PATH}"
 # LD_LIBRARY_PATH from full nix profile closure (docker exec sessions don't
 # inherit PID 1's env, so each shell must source the file independently).
+# Guard: _DEVCELL_LD_SET prevents 3x accumulation across .zshenv, .zshrc,
+# and programs.zsh.initContent — without it, 35KB × 3 = 105KB exceeds ARG_MAX.
 _NLD="/opt/devcell/.nix-ld-library-path"
-if [ -f "\$_NLD" ]; then
+if [ -f "\$_NLD" ] && [ -z "\${_DEVCELL_LD_SET:-}" ]; then
   export LD_LIBRARY_PATH="\$(cat "\$_NLD")\${LD_LIBRARY_PATH:+:}\${LD_LIBRARY_PATH}"
+  export _DEVCELL_LD_SET=1
 fi
 RCEOF
     chown "$HOST_USER" "$HOME/$file"

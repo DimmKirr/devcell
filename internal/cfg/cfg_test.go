@@ -32,7 +32,7 @@ func TestLoadFile_BasicParsing(t *testing.T) {
 	dir := t.TempDir()
 	writeTOML(t, dir, "devcell.toml", `
 [cell]
-image_tag = "latest-go"
+image_tag = "v0.0.0-go"
 
 [env]
 MY_TOKEN = "abc123"
@@ -45,8 +45,8 @@ mount = "~/work/secrets:/run/secrets:ro"
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Cell.ImageTag != "latest-go" {
-		t.Errorf("image_tag: want latest-go, got %q", c.Cell.ImageTag)
+	if c.Cell.ImageTag != "v0.0.0-go" {
+		t.Errorf("image_tag: want v0.0.0-go, got %q", c.Cell.ImageTag)
 	}
 	if c.Env["MY_TOKEN"] != "abc123" {
 		t.Errorf("MY_TOKEN: want abc123, got %q", c.Env["MY_TOKEN"])
@@ -60,20 +60,20 @@ mount = "~/work/secrets:/run/secrets:ro"
 }
 
 func TestMerge_ProjectWinsOnScalar(t *testing.T) {
-	global := cfg.CellConfig{Cell: cfg.CellSection{ImageTag: "latest-ultimate"}}
-	project := cfg.CellConfig{Cell: cfg.CellSection{ImageTag: "latest-go"}}
+	global := cfg.CellConfig{Cell: cfg.CellSection{ImageTag: "v0.0.0-ultimate"}}
+	project := cfg.CellConfig{Cell: cfg.CellSection{ImageTag: "v0.0.0-go"}}
 	merged := cfg.Merge(global, project)
-	if merged.Cell.ImageTag != "latest-go" {
-		t.Errorf("want latest-go, got %q", merged.Cell.ImageTag)
+	if merged.Cell.ImageTag != "v0.0.0-go" {
+		t.Errorf("want v0.0.0-go, got %q", merged.Cell.ImageTag)
 	}
 }
 
 func TestMerge_GlobalScalarKeptWhenProjectEmpty(t *testing.T) {
-	global := cfg.CellConfig{Cell: cfg.CellSection{ImageTag: "latest-ultimate"}}
+	global := cfg.CellConfig{Cell: cfg.CellSection{ImageTag: "v0.0.0-ultimate"}}
 	project := cfg.CellConfig{}
 	merged := cfg.Merge(global, project)
-	if merged.Cell.ImageTag != "latest-ultimate" {
-		t.Errorf("want latest-ultimate, got %q", merged.Cell.ImageTag)
+	if merged.Cell.ImageTag != "v0.0.0-ultimate" {
+		t.Errorf("want v0.0.0-ultimate, got %q", merged.Cell.ImageTag)
 	}
 }
 
@@ -102,23 +102,59 @@ func TestMerge_VolumesAccumulate(t *testing.T) {
 }
 
 func TestApplyEnv_ImageTagOverride(t *testing.T) {
-	c := cfg.CellConfig{Cell: cfg.CellSection{ImageTag: "latest-ultimate"}}
+	c := cfg.CellConfig{Cell: cfg.CellSection{ImageTag: "v0.0.0-ultimate"}}
 	cfg.ApplyEnv(&c, func(k string) string {
 		if k == "IMAGE_TAG" {
-			return "latest-go"
+			return "v0.0.0-go"
 		}
 		return ""
 	})
-	if c.Cell.ImageTag != "latest-go" {
-		t.Errorf("want latest-go, got %q", c.Cell.ImageTag)
+	if c.Cell.ImageTag != "v0.0.0-go" {
+		t.Errorf("want v0.0.0-go, got %q", c.Cell.ImageTag)
+	}
+}
+
+func TestLoadFile_NixhomePath(t *testing.T) {
+	dir := t.TempDir()
+	p := writeTOML(t, dir, "test.toml", `
+[cell]
+nixhome = "~/dev/nixhome"
+`)
+	c, err := cfg.LoadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Cell.NixhomePath != "~/dev/nixhome" {
+		t.Errorf("want ~/dev/nixhome, got %q", c.Cell.NixhomePath)
+	}
+}
+
+func TestApplyEnv_NixhomePathOverride(t *testing.T) {
+	c := cfg.CellConfig{Cell: cfg.CellSection{NixhomePath: "~/dev/nixhome"}}
+	cfg.ApplyEnv(&c, func(k string) string {
+		if k == "DEVCELL_NIXHOME_PATH" {
+			return "/override/nixhome"
+		}
+		return ""
+	})
+	if c.Cell.NixhomePath != "/override/nixhome" {
+		t.Errorf("env should override toml: want /override/nixhome, got %q", c.Cell.NixhomePath)
+	}
+}
+
+func TestApplyEnv_NixhomePathNoOverrideWhenEnvEmpty(t *testing.T) {
+	c := cfg.CellConfig{Cell: cfg.CellSection{NixhomePath: "~/dev/nixhome"}}
+	cfg.ApplyEnv(&c, func(string) string { return "" })
+	if c.Cell.NixhomePath != "~/dev/nixhome" {
+		t.Errorf("toml value should persist: want ~/dev/nixhome, got %q", c.Cell.NixhomePath)
 	}
 }
 
 func TestApplyEnv_NoOverrideWhenEmpty(t *testing.T) {
-	c := cfg.CellConfig{Cell: cfg.CellSection{ImageTag: "latest-ultimate"}}
+	c := cfg.CellConfig{Cell: cfg.CellSection{ImageTag: "v0.0.0-ultimate"}}
 	cfg.ApplyEnv(&c, func(string) string { return "" })
-	if c.Cell.ImageTag != "latest-ultimate" {
-		t.Errorf("want latest-ultimate, got %q", c.Cell.ImageTag)
+	if c.Cell.ImageTag != "v0.0.0-ultimate" {
+		t.Errorf("want v0.0.0-ultimate, got %q", c.Cell.ImageTag)
 	}
 }
 
@@ -126,20 +162,20 @@ func TestLoadLayered_ProjectWins(t *testing.T) {
 	dir := t.TempDir()
 	globalPath := writeTOML(t, dir, "global.toml", `
 [cell]
-image_tag = "latest-ultimate"
+image_tag = "v0.0.0-ultimate"
 [env]
 SHARED = "global"
 `)
 	projectPath := writeTOML(t, dir, "project.toml", `
 [cell]
-image_tag = "latest-go"
+image_tag = "v0.0.0-go"
 [env]
 SHARED = "project"
 EXTRA = "yes"
 `)
 	c := cfg.LoadLayered(globalPath, projectPath, func(string) string { return "" })
-	if c.Cell.ImageTag != "latest-go" {
-		t.Errorf("image_tag: want latest-go, got %q", c.Cell.ImageTag)
+	if c.Cell.ImageTag != "v0.0.0-go" {
+		t.Errorf("image_tag: want v0.0.0-go, got %q", c.Cell.ImageTag)
 	}
 	if c.Env["SHARED"] != "project" {
 		t.Errorf("SHARED: want project, got %q", c.Env["SHARED"])
@@ -187,6 +223,8 @@ func TestMerge_MiseAccumulates(t *testing.T) {
 
 // --- GUI field ---
 
+func boolPtr(b bool) *bool { return &b }
+
 func TestLoadFile_GUITrue(t *testing.T) {
 	dir := t.TempDir()
 	writeTOML(t, dir, "devcell.toml", `
@@ -197,38 +235,83 @@ gui = true
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !c.Cell.GUI {
-		t.Error("expected GUI=true after parsing gui=true")
+	if !c.Cell.ResolvedGUI() {
+		t.Error("expected ResolvedGUI()=true after parsing gui=true")
 	}
 }
 
-func TestLoadFile_GUIDefaultsFalse(t *testing.T) {
+func TestLoadFile_GUIFalse(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[cell]
+gui = false
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Cell.ResolvedGUI() {
+		t.Error("expected ResolvedGUI()=false after parsing gui=false")
+	}
+}
+
+func TestLoadFile_GUIDefaultsTrue(t *testing.T) {
 	dir := t.TempDir()
 	writeTOML(t, dir, "devcell.toml", `[cell]`)
 	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Cell.GUI {
-		t.Error("expected GUI=false when not set")
+	if c.Cell.GUI != nil {
+		t.Error("expected GUI=nil when not set in TOML")
+	}
+	if !c.Cell.ResolvedGUI() {
+		t.Error("expected ResolvedGUI()=true when gui not set (default on)")
 	}
 }
 
-func TestMerge_GUIProjectEnablesOverGlobal(t *testing.T) {
-	global := cfg.CellConfig{Cell: cfg.CellSection{GUI: false}}
-	project := cfg.CellConfig{Cell: cfg.CellSection{GUI: true}}
+func TestMerge_GUIProjectTrueOverGlobalFalse(t *testing.T) {
+	global := cfg.CellConfig{Cell: cfg.CellSection{GUI: boolPtr(false)}}
+	project := cfg.CellConfig{Cell: cfg.CellSection{GUI: boolPtr(true)}}
 	merged := cfg.Merge(global, project)
-	if !merged.Cell.GUI {
+	if !merged.Cell.ResolvedGUI() {
 		t.Error("expected project gui=true to win over global gui=false")
 	}
 }
 
+func TestMerge_GUIProjectFalseOverGlobalTrue(t *testing.T) {
+	global := cfg.CellConfig{Cell: cfg.CellSection{GUI: boolPtr(true)}}
+	project := cfg.CellConfig{Cell: cfg.CellSection{GUI: boolPtr(false)}}
+	merged := cfg.Merge(global, project)
+	if merged.Cell.ResolvedGUI() {
+		t.Error("expected project gui=false to win over global gui=true")
+	}
+}
+
 func TestMerge_GUIGlobalKeptWhenProjectUnset(t *testing.T) {
-	global := cfg.CellConfig{Cell: cfg.CellSection{GUI: true}}
+	global := cfg.CellConfig{Cell: cfg.CellSection{GUI: boolPtr(true)}}
 	project := cfg.CellConfig{}
 	merged := cfg.Merge(global, project)
-	if !merged.Cell.GUI {
+	if !merged.Cell.ResolvedGUI() {
 		t.Error("expected global gui=true to be preserved when project has no gui setting")
+	}
+}
+
+func TestMerge_GUIGlobalFalseKeptWhenProjectUnset(t *testing.T) {
+	global := cfg.CellConfig{Cell: cfg.CellSection{GUI: boolPtr(false)}}
+	project := cfg.CellConfig{}
+	merged := cfg.Merge(global, project)
+	if merged.Cell.ResolvedGUI() {
+		t.Error("expected global gui=false to be preserved when project unset")
+	}
+}
+
+func TestMerge_GUIBothUnsetDefaultsTrue(t *testing.T) {
+	global := cfg.CellConfig{}
+	project := cfg.CellConfig{}
+	merged := cfg.Merge(global, project)
+	if !merged.Cell.ResolvedGUI() {
+		t.Error("expected ResolvedGUI()=true when neither global nor project set gui")
 	}
 }
 
@@ -511,23 +594,405 @@ func TestGitSection_ExplicitCommitterOverridesAuthor(t *testing.T) {
 	}
 }
 
-// --- Op section ---
+// --- Stack and Modules fields ---
 
-func TestLoadFile_OpSection(t *testing.T) {
+func TestLoadFile_StackField(t *testing.T) {
 	dir := t.TempDir()
 	writeTOML(t, dir, "devcell.toml", `
-[op]
-items = ["prod-nmd-trips", "dev-api-keys"]
+[cell]
+stack = "go"
 `)
 	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(c.Op.Items) != 2 {
-		t.Fatalf("want 2 op items, got %d", len(c.Op.Items))
+	if c.Cell.Stack != "go" {
+		t.Errorf("stack: want go, got %q", c.Cell.Stack)
 	}
-	if c.Op.Items[0] != "prod-nmd-trips" || c.Op.Items[1] != "dev-api-keys" {
-		t.Errorf("unexpected op items: %v", c.Op.Items)
+}
+
+func TestLoadFile_ModulesField(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[cell]
+modules = ["electronics", "desktop"]
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Cell.Modules) != 2 {
+		t.Fatalf("want 2 modules, got %d", len(c.Cell.Modules))
+	}
+	if c.Cell.Modules[0] != "electronics" || c.Cell.Modules[1] != "desktop" {
+		t.Errorf("modules: want [electronics desktop], got %v", c.Cell.Modules)
+	}
+}
+
+func TestLoadFile_StackDefaultsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `[cell]`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Cell.Stack != "" {
+		t.Errorf("expected empty stack when not set, got %q", c.Cell.Stack)
+	}
+}
+
+func TestLoadFile_ModulesDefaultsNil(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `[cell]`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Cell.Modules != nil {
+		t.Errorf("expected nil modules when not set, got %v", c.Cell.Modules)
+	}
+}
+
+func TestLoadFile_StackAndModulesTogether(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[cell]
+stack = "base"
+modules = ["go", "electronics", "desktop"]
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Cell.Stack != "base" {
+		t.Errorf("stack: want base, got %q", c.Cell.Stack)
+	}
+	if len(c.Cell.Modules) != 3 {
+		t.Fatalf("want 3 modules, got %d", len(c.Cell.Modules))
+	}
+}
+
+func TestLoadFile_EmptyModulesArray(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[cell]
+stack = "go"
+modules = []
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Cell.Stack != "go" {
+		t.Errorf("stack: want go, got %q", c.Cell.Stack)
+	}
+	// Empty array should parse as non-nil empty slice
+	if c.Cell.Modules == nil {
+		t.Error("expected non-nil empty modules for explicit empty array")
+	}
+	if len(c.Cell.Modules) != 0 {
+		t.Errorf("want 0 modules, got %d", len(c.Cell.Modules))
+	}
+}
+
+func TestLoadFile_SingleModule(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[cell]
+modules = ["python"]
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Cell.Modules) != 1 || c.Cell.Modules[0] != "python" {
+		t.Errorf("modules: want [python], got %v", c.Cell.Modules)
+	}
+}
+
+func TestLoadFile_AllStacks(t *testing.T) {
+	stacks := []string{"base", "go", "node", "python", "fullstack", "electronics", "ultimate"}
+	for _, stack := range stacks {
+		t.Run(stack, func(t *testing.T) {
+			dir := t.TempDir()
+			writeTOML(t, dir, "devcell.toml", `
+[cell]
+stack = "`+stack+`"
+`)
+			c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.Cell.Stack != stack {
+				t.Errorf("stack: want %s, got %q", stack, c.Cell.Stack)
+			}
+		})
+	}
+}
+
+// --- ResolvedStack ---
+
+func TestCellSection_ResolvedStack_Default(t *testing.T) {
+	c := cfg.CellSection{}
+	if c.ResolvedStack() != "base" {
+		t.Errorf("want base, got %q", c.ResolvedStack())
+	}
+}
+
+func TestCellSection_ResolvedStack_Explicit(t *testing.T) {
+	c := cfg.CellSection{Stack: "go"}
+	if c.ResolvedStack() != "go" {
+		t.Errorf("want go, got %q", c.ResolvedStack())
+	}
+}
+
+func TestCellSection_ResolvedStack_Base(t *testing.T) {
+	c := cfg.CellSection{Stack: "base"}
+	if c.ResolvedStack() != "base" {
+		t.Errorf("want base, got %q", c.ResolvedStack())
+	}
+}
+
+// --- Stack/Modules merge ---
+
+func TestMerge_StackProjectWins(t *testing.T) {
+	global := cfg.CellConfig{Cell: cfg.CellSection{Stack: "ultimate"}}
+	project := cfg.CellConfig{Cell: cfg.CellSection{Stack: "go"}}
+	merged := cfg.Merge(global, project)
+	if merged.Cell.Stack != "go" {
+		t.Errorf("want go, got %q", merged.Cell.Stack)
+	}
+}
+
+func TestMerge_StackGlobalKeptWhenProjectEmpty(t *testing.T) {
+	global := cfg.CellConfig{Cell: cfg.CellSection{Stack: "go"}}
+	project := cfg.CellConfig{}
+	merged := cfg.Merge(global, project)
+	if merged.Cell.Stack != "go" {
+		t.Errorf("want go, got %q", merged.Cell.Stack)
+	}
+}
+
+func TestMerge_ModulesProjectReplaces(t *testing.T) {
+	global := cfg.CellConfig{Cell: cfg.CellSection{Modules: []string{"a"}}}
+	project := cfg.CellConfig{Cell: cfg.CellSection{Modules: []string{"b", "c"}}}
+	merged := cfg.Merge(global, project)
+	if len(merged.Cell.Modules) != 2 || merged.Cell.Modules[0] != "b" || merged.Cell.Modules[1] != "c" {
+		t.Errorf("want [b c], got %v", merged.Cell.Modules)
+	}
+}
+
+func TestMerge_ModulesGlobalKeptWhenProjectNil(t *testing.T) {
+	global := cfg.CellConfig{Cell: cfg.CellSection{Modules: []string{"a"}}}
+	project := cfg.CellConfig{}
+	merged := cfg.Merge(global, project)
+	if len(merged.Cell.Modules) != 1 || merged.Cell.Modules[0] != "a" {
+		t.Errorf("want [a], got %v", merged.Cell.Modules)
+	}
+}
+
+func TestMerge_ModulesProjectEmptyArrayClearsGlobal(t *testing.T) {
+	global := cfg.CellConfig{Cell: cfg.CellSection{Modules: []string{"a", "b"}}}
+	project := cfg.CellConfig{Cell: cfg.CellSection{Modules: []string{}}}
+	merged := cfg.Merge(global, project)
+	if len(merged.Cell.Modules) != 0 {
+		t.Errorf("explicit empty modules should clear global, got %v", merged.Cell.Modules)
+	}
+}
+
+func TestMerge_StackAndModulesFromLayeredTOML(t *testing.T) {
+	dir := t.TempDir()
+	globalPath := writeTOML(t, dir, "global.toml", `
+[cell]
+stack = "ultimate"
+modules = ["desktop"]
+`)
+	projectPath := writeTOML(t, dir, "project.toml", `
+[cell]
+stack = "go"
+modules = ["electronics"]
+`)
+	c := cfg.LoadLayered(globalPath, projectPath, func(string) string { return "" })
+	if c.Cell.Stack != "go" {
+		t.Errorf("stack: want go, got %q", c.Cell.Stack)
+	}
+	if len(c.Cell.Modules) != 1 || c.Cell.Modules[0] != "electronics" {
+		t.Errorf("modules: want [electronics], got %v", c.Cell.Modules)
+	}
+}
+
+// --- Validation ---
+
+func TestValidateStack_ValidNames(t *testing.T) {
+	valid := []string{"base", "go", "node", "python", "fullstack", "electronics", "ultimate"}
+	for _, name := range valid {
+		t.Run(name, func(t *testing.T) {
+			if err := cfg.ValidateStack(name); err != nil {
+				t.Errorf("valid stack %q rejected: %v", name, err)
+			}
+		})
+	}
+}
+
+func TestValidateStack_InvalidName(t *testing.T) {
+	err := cfg.ValidateStack("rust")
+	if err == nil {
+		t.Fatal("expected error for invalid stack 'rust'")
+	}
+	s := err.Error()
+	if !strings.Contains(s, "rust") {
+		t.Errorf("error should mention invalid name 'rust': %s", s)
+	}
+	// Error should list available stacks
+	for _, valid := range []string{"base", "go", "node", "python", "ultimate"} {
+		if !strings.Contains(s, valid) {
+			t.Errorf("error should list available stack %q: %s", valid, s)
+		}
+	}
+}
+
+func TestValidateStack_EmptyIsValid(t *testing.T) {
+	// Empty stack means "use default (base)" — not an error
+	if err := cfg.ValidateStack(""); err != nil {
+		t.Errorf("empty stack should be valid (defaults to ultimate): %v", err)
+	}
+}
+
+// --- KnownStacks ---
+
+func TestKnownStacks_ReturnsExpectedList(t *testing.T) {
+	stacks := cfg.KnownStacks()
+	want := []string{"base", "go", "node", "python", "fullstack", "electronics", "ultimate"}
+	if len(stacks) != len(want) {
+		t.Fatalf("want %d stacks, got %d: %v", len(want), len(stacks), stacks)
+	}
+	for i, w := range want {
+		if stacks[i] != w {
+			t.Errorf("stack[%d]: want %q, got %q", i, w, stacks[i])
+		}
+	}
+}
+
+func TestKnownStacks_ReturnsCopy(t *testing.T) {
+	stacks := cfg.KnownStacks()
+	stacks[0] = "mutated"
+	fresh := cfg.KnownStacks()
+	if fresh[0] == "mutated" {
+		t.Error("KnownStacks should return a copy, not a reference to internal slice")
+	}
+}
+
+// --- Ports section ---
+
+func TestLoadFile_PortsSection(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[ports]
+forward = ["3000", "8080:3000", "9090:9090"]
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Ports.Forward) != 3 {
+		t.Fatalf("want 3 ports, got %d", len(c.Ports.Forward))
+	}
+	if c.Ports.Forward[0] != "3000" {
+		t.Errorf("port[0]: want 3000, got %q", c.Ports.Forward[0])
+	}
+	if c.Ports.Forward[1] != "8080:3000" {
+		t.Errorf("port[1]: want 8080:3000, got %q", c.Ports.Forward[1])
+	}
+}
+
+func TestLoadFile_PortsDefaultsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `[cell]`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Ports.Forward) != 0 {
+		t.Errorf("expected no ports when [ports] not set, got %v", c.Ports.Forward)
+	}
+}
+
+func TestMerge_PortsAccumulate(t *testing.T) {
+	global := cfg.CellConfig{Ports: cfg.PortsSection{Forward: []string{"3000"}}}
+	project := cfg.CellConfig{Ports: cfg.PortsSection{Forward: []string{"8080:3000"}}}
+	merged := cfg.Merge(global, project)
+	if len(merged.Ports.Forward) != 2 {
+		t.Fatalf("want 2 ports, got %d: %v", len(merged.Ports.Forward), merged.Ports.Forward)
+	}
+	if merged.Ports.Forward[0] != "3000" || merged.Ports.Forward[1] != "8080:3000" {
+		t.Errorf("want [3000 8080:3000], got %v", merged.Ports.Forward)
+	}
+}
+
+func TestMerge_PortsDeduped(t *testing.T) {
+	global := cfg.CellConfig{Ports: cfg.PortsSection{Forward: []string{"3000", "4000"}}}
+	project := cfg.CellConfig{Ports: cfg.PortsSection{Forward: []string{"3000", "5000"}}}
+	merged := cfg.Merge(global, project)
+	if len(merged.Ports.Forward) != 3 {
+		t.Fatalf("want 3 ports (deduped), got %d: %v", len(merged.Ports.Forward), merged.Ports.Forward)
+	}
+}
+
+// --- Op section ---
+
+func TestLoadFile_OpDocuments(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[op]
+documents = ["prod-nmd-trips", "dev-api-keys"]
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	docs := c.Op.ResolvedDocuments()
+	if len(docs) != 2 {
+		t.Fatalf("want 2 op documents, got %d", len(docs))
+	}
+	if docs[0] != "prod-nmd-trips" || docs[1] != "dev-api-keys" {
+		t.Errorf("unexpected op documents: %v", docs)
+	}
+}
+
+func TestLoadFile_OpLegacyItems(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[op]
+items = ["legacy-secret"]
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	docs := c.Op.ResolvedDocuments()
+	if len(docs) != 1 || docs[0] != "legacy-secret" {
+		t.Errorf("legacy items should be resolved via ResolvedDocuments: %v", docs)
+	}
+}
+
+func TestLoadFile_OpDocumentsAndItemsMerged(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[op]
+documents = ["new-doc"]
+items = ["legacy-item", "new-doc"]
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	docs := c.Op.ResolvedDocuments()
+	// new-doc from documents, legacy-item from items, "new-doc" deduped
+	if len(docs) != 2 {
+		t.Fatalf("want 2 (deduped), got %v", docs)
+	}
+	if docs[0] != "new-doc" || docs[1] != "legacy-item" {
+		t.Errorf("unexpected merged documents: %v", docs)
 	}
 }
 
@@ -538,22 +1003,123 @@ func TestLoadFile_OpDefaultsEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(c.Op.Items) != 0 {
-		t.Errorf("expected no op items when [op] not set, got %v", c.Op.Items)
+	if len(c.Op.ResolvedDocuments()) != 0 {
+		t.Errorf("expected no op documents when [op] not set, got %v", c.Op.ResolvedDocuments())
 	}
 }
 
-func TestMerge_OpItemsAccumulateDeduped(t *testing.T) {
-	global := cfg.CellConfig{Op: cfg.OpSection{Items: []string{"shared-keys", "global-only"}}}
-	project := cfg.CellConfig{Op: cfg.OpSection{Items: []string{"shared-keys", "project-only"}}}
+func TestMerge_OpDocumentsAccumulateDeduped(t *testing.T) {
+	global := cfg.CellConfig{Op: cfg.OpSection{Documents: []string{"shared-keys", "global-only"}}}
+	project := cfg.CellConfig{Op: cfg.OpSection{Documents: []string{"shared-keys", "project-only"}}}
 	merged := cfg.Merge(global, project)
 	want := []string{"shared-keys", "global-only", "project-only"}
-	if len(merged.Op.Items) != len(want) {
-		t.Fatalf("want %v, got %v", want, merged.Op.Items)
+	docs := merged.Op.ResolvedDocuments()
+	if len(docs) != len(want) {
+		t.Fatalf("want %v, got %v", want, docs)
 	}
 	for i, w := range want {
-		if merged.Op.Items[i] != w {
-			t.Errorf("item[%d]: want %q, got %q", i, w, merged.Op.Items[i])
+		if docs[i] != w {
+			t.Errorf("doc[%d]: want %q, got %q", i, w, docs[i])
 		}
+	}
+}
+
+func TestMerge_OpLegacyItemsMergedWithDocuments(t *testing.T) {
+	global := cfg.CellConfig{Op: cfg.OpSection{Items: []string{"legacy-global"}}}
+	project := cfg.CellConfig{Op: cfg.OpSection{Documents: []string{"new-project"}}}
+	merged := cfg.Merge(global, project)
+	docs := merged.Op.ResolvedDocuments()
+	if len(docs) != 2 {
+		t.Fatalf("want 2, got %v", docs)
+	}
+}
+
+// --- [aws] section ---
+
+func TestLoadFile_AwsReadOnlyTrue(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[aws]
+read_only = true
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Aws.ReadOnly == nil || !*c.Aws.ReadOnly {
+		t.Error("expected aws.read_only = true")
+	}
+}
+
+func TestLoadFile_AwsReadOnlyFalse(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[aws]
+read_only = false
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Aws.ReadOnly == nil || *c.Aws.ReadOnly {
+		t.Error("expected aws.read_only = false")
+	}
+}
+
+func TestLoadFile_AwsDefaultsFalse(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `[cell]`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Aws.ReadOnly != nil {
+		t.Errorf("expected nil (defaults to false via ResolvedReadOnly), got %v", *c.Aws.ReadOnly)
+	}
+	if c.Aws.ResolvedReadOnly() {
+		t.Error("ResolvedReadOnly should return false when ReadOnly is nil")
+	}
+}
+
+func TestAwsSection_ResolvedReadOnly(t *testing.T) {
+	trueVal := true
+	falseVal := false
+	tests := []struct {
+		name string
+		ptr  *bool
+		want bool
+	}{
+		{"nil defaults false", nil, false},
+		{"explicit true", &trueVal, true},
+		{"explicit false", &falseVal, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := cfg.AwsSection{ReadOnly: tt.ptr}
+			if got := s.ResolvedReadOnly(); got != tt.want {
+				t.Errorf("ResolvedReadOnly() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMerge_AwsProjectWins(t *testing.T) {
+	trueVal := true
+	falseVal := false
+	global := cfg.CellConfig{Aws: cfg.AwsSection{ReadOnly: &trueVal}}
+	project := cfg.CellConfig{Aws: cfg.AwsSection{ReadOnly: &falseVal}}
+	merged := cfg.Merge(global, project)
+	if merged.Aws.ReadOnly == nil || *merged.Aws.ReadOnly {
+		t.Error("project aws.read_only=false should override global true")
+	}
+}
+
+func TestMerge_AwsGlobalKeptWhenProjectUnset(t *testing.T) {
+	falseVal := false
+	global := cfg.CellConfig{Aws: cfg.AwsSection{ReadOnly: &falseVal}}
+	project := cfg.CellConfig{}
+	merged := cfg.Merge(global, project)
+	if merged.Aws.ReadOnly == nil || *merged.Aws.ReadOnly {
+		t.Error("global aws.read_only=false should be kept when project unset")
 	}
 }

@@ -38,12 +38,19 @@ merge_claude_nix() {
     local nix_hooks_dir="/etc/claude-code/hooks"
     local nix_settings="/etc/claude-code/nix-settings.json"
     if [ -d "$nix_hooks_dir" ] && [ -n "$(ls -A "$nix_hooks_dir" 2>/dev/null)" ]; then
+        mkdir -p "$HOME/.claude/hooks"
         rsync -a --chmod=+x --chown="$HOST_USER" --delete \
             "$nix_hooks_dir/" "$HOME/.claude/hooks/"
         log "✓ Claude hooks synced from nix"
     fi
     if [ -f "$nix_settings" ]; then
         merge_claude_settings "$nix_settings" "$HOME/.claude/settings.json"
+    fi
+    # Sync nix-managed commands (any module can drop commands into $DEVCELL_HOME/.claude/commands/)
+    if [ -d "$DEVCELL_HOME/.claude/commands" ] && [ -n "$(ls -A "$DEVCELL_HOME/.claude/commands" 2>/dev/null)" ]; then
+        mkdir -p "$HOME/.claude/commands"
+        rsync -a --chown="$HOST_USER" "$DEVCELL_HOME/.claude/commands/" "$HOME/.claude/commands/"
+        log "✓ Claude commands synced from nix"
     fi
 }
 
@@ -111,14 +118,17 @@ merge_claude_mcp() {
         ls -t "${target_file}.backup-"* 2>/dev/null | tail -n +6 | xargs rm -f 2>/dev/null || true
     fi
 
-    # Merge: nix servers are written over same-named user entries (infra wins).
-    # User servers with unique names are preserved unchanged.
+    # Merge: first remove stale nix-managed servers (command starts with /opt/devcell/),
+    # then add current stack's servers. User-defined servers are preserved.
     local temp_file
     temp_file=$(mktemp)
     jq -s '
       .[0] as $existing |
       .[1].mcpServers as $nix |
-      $existing | .mcpServers = (($existing.mcpServers // {}) + ($nix // {}))
+      (($existing.mcpServers // {}) | to_entries |
+        map(select(.value.command == null or (.value.command | startswith("/opt/devcell/") | not))) |
+        from_entries) as $cleaned |
+      $existing | .mcpServers = ($cleaned + ($nix // {}))
     ' "$target_file" "$nix_file" > "$temp_file" 2>/dev/null
     if [ $? -eq 0 ] && [ -s "$temp_file" ] && jq empty "$temp_file" 2>/dev/null; then
         mv "$temp_file" "$target_file"

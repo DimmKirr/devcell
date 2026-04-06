@@ -122,7 +122,7 @@ func TestArgv_ContainerName(t *testing.T) {
 
 func TestArgv_MandatoryEnvVars(t *testing.T) {
 	argv := buildArgv(t, func(s *runner.RunSpec) {
-		s.CellCfg.Cell.GUI = true
+		s.CellCfg.Cell.GUI = boolPtr(true)
 	})
 	mustHaveEnv := []string{
 		"APP_NAME=myproject-3",
@@ -288,11 +288,55 @@ func TestArgv_MiseEnvVars(t *testing.T) {
 	}
 }
 
+// --- Port forwarding from config ---
+
+func TestArgv_CfgPortsSinglePort(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.CellCfg.Ports = cfg.PortsSection{Forward: []string{"3000"}}
+	})
+	if !hasConsecutive(argv, "-p", "3000:3000") {
+		t.Errorf("expected -p 3000:3000 for bare port '3000': %v", argv)
+	}
+}
+
+func TestArgv_CfgPortsMappedPort(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.CellCfg.Ports = cfg.PortsSection{Forward: []string{"8080:3000"}}
+	})
+	if !hasConsecutive(argv, "-p", "8080:3000") {
+		t.Errorf("expected -p 8080:3000: %v", argv)
+	}
+}
+
+func TestArgv_CfgPortsMultiple(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.CellCfg.Ports = cfg.PortsSection{Forward: []string{"3000", "8080:3000"}}
+	})
+	if !hasConsecutive(argv, "-p", "3000:3000") {
+		t.Errorf("expected -p 3000:3000: %v", argv)
+	}
+	if !hasConsecutive(argv, "-p", "8080:3000") {
+		t.Errorf("expected -p 8080:3000: %v", argv)
+	}
+}
+
+func TestArgv_CfgPortsEmpty(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.CellCfg.Cell.GUI = boolPtr(false)
+	})
+	// No -p flags when no ports configured and GUI explicitly off
+	for i, a := range argv {
+		if a == "-p" && i+1 < len(argv) {
+			t.Errorf("unexpected -p flag when no ports configured: -p %s", argv[i+1])
+		}
+	}
+}
+
 // --- Network and port ---
 
 func TestArgv_VNCPort(t *testing.T) {
 	argv := buildArgv(t, func(s *runner.RunSpec) {
-		s.CellCfg.Cell.GUI = true
+		s.CellCfg.Cell.GUI = boolPtr(true)
 	})
 	if !hasConsecutive(argv, "-p", "350:5900") {
 		t.Errorf("expected -p 350:5900 in argv: %v", argv)
@@ -353,17 +397,29 @@ func TestArgv_UserArgsAppended(t *testing.T) {
 
 // --- GUI flag ---
 
-func TestArgv_GUIEnabled(t *testing.T) {
+func boolPtr(b bool) *bool { return &b }
+
+func TestArgv_GUIEnabledByDefault(t *testing.T) {
+	// GUI defaults to true when not set (nil)
+	argv := buildArgv(t)
+	if !hasArg(argv, "DEVCELL_GUI_ENABLED=true") {
+		t.Errorf("expected DEVCELL_GUI_ENABLED=true by default: %v", argv)
+	}
+}
+
+func TestArgv_GUIExplicitTrue(t *testing.T) {
 	argv := buildArgv(t, func(s *runner.RunSpec) {
-		s.CellCfg.Cell.GUI = true
+		s.CellCfg.Cell.GUI = boolPtr(true)
 	})
 	if !hasArg(argv, "DEVCELL_GUI_ENABLED=true") {
 		t.Errorf("expected DEVCELL_GUI_ENABLED=true in argv: %v", argv)
 	}
 }
 
-func TestArgv_GUIDisabledByDefault(t *testing.T) {
-	argv := buildArgv(t)
+func TestArgv_GUIExplicitFalse(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.CellCfg.Cell.GUI = boolPtr(false)
+	})
 	if hasArg(argv, "DEVCELL_GUI_ENABLED=true") {
 		t.Error("DEVCELL_GUI_ENABLED should not be present when gui=false")
 	}
@@ -442,9 +498,193 @@ func TestArgv_GitFallbackDefaults(t *testing.T) {
 	}
 }
 
+// --- tmpfs for secrets ---
+
+func TestArgv_TmpfsSecretsMount(t *testing.T) {
+	argv := buildArgv(t)
+	if !hasConsecutive(argv, "--tmpfs", "/run/secrets:mode=700,noexec,nosuid,size=1m") {
+		t.Errorf("expected --tmpfs /run/secrets:mode=700,noexec,nosuid,size=1m in argv: %v", argv)
+	}
+}
+
+func TestArgv_SecretKeysEnvVar(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.InheritEnv = []string{"DB_PASS", "API_KEY"}
+	})
+	if !hasArg(argv, "DEVCELL_SECRET_KEYS=DB_PASS,API_KEY") {
+		t.Errorf("expected DEVCELL_SECRET_KEYS=DB_PASS,API_KEY in argv: %v", argv)
+	}
+}
+
+func TestArgv_SecretKeysEmpty_NoEnvVar(t *testing.T) {
+	argv := buildArgv(t)
+	for _, a := range argv {
+		if strings.HasPrefix(a, "DEVCELL_SECRET_KEYS=") {
+			t.Errorf("DEVCELL_SECRET_KEYS should not be present when InheritEnv is empty: %v", argv)
+		}
+	}
+}
+
 func min(a, b int) int {
 	if a < b {
 		return a
 	}
 	return b
+}
+
+// --- UserImageTag per-session ---
+
+func TestUserImageTag_DefaultSession(t *testing.T) {
+	t.Setenv("DEVCELL_USER_IMAGE", "")
+	t.Setenv("DEVCELL_SESSION_NAME", "")
+	t.Setenv("TMUX_SESSION_NAME", "")
+	got := runner.UserImageTag()
+	if got != "devcell-user:main" {
+		t.Errorf("default session: want devcell-user:main, got %q", got)
+	}
+}
+
+func TestUserImageTag_SessionName(t *testing.T) {
+	t.Setenv("DEVCELL_USER_IMAGE", "")
+	t.Setenv("DEVCELL_SESSION_NAME", "webdev")
+	t.Setenv("TMUX_SESSION_NAME", "")
+	got := runner.UserImageTag()
+	if got != "devcell-user:webdev" {
+		t.Errorf("session name: want devcell-user:webdev, got %q", got)
+	}
+}
+
+func TestUserImageTag_TmuxSessionFallback(t *testing.T) {
+	t.Setenv("DEVCELL_USER_IMAGE", "")
+	t.Setenv("DEVCELL_SESSION_NAME", "")
+	t.Setenv("TMUX_SESSION_NAME", "tmux-dev")
+	got := runner.UserImageTag()
+	if got != "devcell-user:tmux-dev" {
+		t.Errorf("tmux fallback: want devcell-user:tmux-dev, got %q", got)
+	}
+}
+
+func TestUserImageTag_SessionNameBeatssTmux(t *testing.T) {
+	t.Setenv("DEVCELL_USER_IMAGE", "")
+	t.Setenv("DEVCELL_SESSION_NAME", "explicit")
+	t.Setenv("TMUX_SESSION_NAME", "tmux-session")
+	got := runner.UserImageTag()
+	if got != "devcell-user:explicit" {
+		t.Errorf("precedence: want devcell-user:explicit, got %q", got)
+	}
+}
+
+func TestUserImageTag_EnvOverrideWins(t *testing.T) {
+	t.Setenv("DEVCELL_USER_IMAGE", "custom:override")
+	t.Setenv("DEVCELL_SESSION_NAME", "ignored")
+	got := runner.UserImageTag()
+	if got != "custom:override" {
+		t.Errorf("override: want custom:override, got %q", got)
+	}
+}
+
+// --- ParseImageMetadata ---
+
+func TestParseImageMetadata_ValidJSON(t *testing.T) {
+	input := `{"base_image":"ghcr.io/dimmkirr/devcell:v1.2.3-go","stack":"go","modules":["desktop"],"git_commit":"a3f2e1","build_date":"2026-03-26T10:15:30Z","packages":142}`
+	m := runner.ParseImageMetadata([]byte(input))
+	if m.BaseImage != "ghcr.io/dimmkirr/devcell:v1.2.3-go" {
+		t.Errorf("base_image: want v1.2.3-go, got %q", m.BaseImage)
+	}
+	if m.Stack != "go" {
+		t.Errorf("stack: want go, got %q", m.Stack)
+	}
+	if len(m.Modules) != 1 || m.Modules[0] != "desktop" {
+		t.Errorf("modules: want [desktop], got %v", m.Modules)
+	}
+	if m.GitCommit != "a3f2e1" {
+		t.Errorf("git_commit: want a3f2e1, got %q", m.GitCommit)
+	}
+	if m.Packages != 142 {
+		t.Errorf("packages: want 142, got %d", m.Packages)
+	}
+}
+
+func TestParseImageMetadata_EmptyInput(t *testing.T) {
+	m := runner.ParseImageMetadata(nil)
+	if m.Stack != "" || m.BaseImage != "" {
+		t.Errorf("empty input should return zero value, got %+v", m)
+	}
+}
+
+func TestParseImageMetadata_InvalidJSON(t *testing.T) {
+	m := runner.ParseImageMetadata([]byte("not json"))
+	if m.Stack != "" {
+		t.Errorf("invalid JSON should return zero value, got %+v", m)
+	}
+}
+
+// --- StackImageTag ---
+
+func TestStackImageTag_GoStack(t *testing.T) {
+	got := runner.StackImageTag("go")
+	// version.Version is v0.0.0 in tests → v0.0.0-go
+	if got != "ghcr.io/dimmkirr/devcell:v0.0.0-go" {
+		t.Errorf("want ghcr.io/dimmkirr/devcell:v0.0.0-go, got %q", got)
+	}
+}
+
+func TestStackImageTag_UltimateStack(t *testing.T) {
+	got := runner.StackImageTag("ultimate")
+	if got != "ghcr.io/dimmkirr/devcell:v0.0.0-ultimate" {
+		t.Errorf("want ghcr.io/dimmkirr/devcell:v0.0.0-ultimate, got %q", got)
+	}
+}
+
+// --- AWS read-only ---
+
+func TestArgv_AwsReadOnlyDefault(t *testing.T) {
+	// Default (nil) → read-only disabled
+	argv := buildArgv(t)
+	if hasArg(argv, "AWS_CONFIG_FILE=/opt/devcell/.aws/config") {
+		t.Error("AWS_CONFIG_FILE should not be present when aws.read_only defaults false")
+	}
+	if hasArg(argv, "AWS_READ_OPERATIONS_ONLY=true") {
+		t.Error("AWS_READ_OPERATIONS_ONLY should not be present when aws.read_only defaults false")
+	}
+	if hasArg(argv, "READ_OPERATIONS_ONLY=true") {
+		t.Error("READ_OPERATIONS_ONLY should not be present when aws.read_only defaults false")
+	}
+}
+
+func TestArgv_AwsReadOnlyExplicitTrue(t *testing.T) {
+	trueVal := true
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.CellCfg.Aws = cfg.AwsSection{ReadOnly: &trueVal}
+	})
+	if !hasArg(argv, "AWS_CONFIG_FILE=/opt/devcell/.aws/config") {
+		t.Errorf("expected AWS_CONFIG_FILE: %v", argv)
+	}
+	if !hasArg(argv, "AWS_READ_OPERATIONS_ONLY=true") {
+		t.Errorf("expected AWS_READ_OPERATIONS_ONLY=true: %v", argv)
+	}
+}
+
+func TestArgv_AwsReadOnlyFalse(t *testing.T) {
+	falseVal := false
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.CellCfg.Aws = cfg.AwsSection{ReadOnly: &falseVal}
+	})
+	if hasArg(argv, "AWS_CONFIG_FILE=/opt/devcell/.aws/config") {
+		t.Error("AWS_CONFIG_FILE should not be present when aws.read_only=false")
+	}
+	if hasArg(argv, "AWS_READ_OPERATIONS_ONLY=true") {
+		t.Error("AWS_READ_OPERATIONS_ONLY should not be present when aws.read_only=false")
+	}
+	if hasArg(argv, "READ_OPERATIONS_ONLY=true") {
+		t.Error("READ_OPERATIONS_ONLY should not be present when aws.read_only=false")
+	}
+}
+
+func TestBaseImageTag_DefaultIsVersioned(t *testing.T) {
+	t.Setenv("DEVCELL_BASE_IMAGE", "")
+	got := runner.BaseImageTag()
+	if got != "ghcr.io/dimmkirr/devcell:v0.0.0-core" {
+		t.Errorf("want ghcr.io/dimmkirr/devcell:v0.0.0-core, got %q", got)
+	}
 }

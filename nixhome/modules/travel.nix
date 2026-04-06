@@ -1,5 +1,6 @@
 # travel.nix — Travel and geospatial tools
-{pkgs, ...}: let
+{pkgs, config, ...}: let
+  bin = config.devcell.managedMcp.nixBinPrefix;
   py = pkgs.python312Packages;
 
   # mcp-google-map: Google Maps MCP — 17 tools (geocoding, routing, places, elevation, air quality, timezone, etc.)
@@ -50,7 +51,7 @@ in {
   # Google Maps — 17 tools: geocoding, routing, places, elevation, air quality.
   # Requires GOOGLE_MAPS_API_KEY env var at runtime.
   devcell.managedMcp.servers."google-maps" = {
-    command = "mcp-google-map";
+    command = "${bin}/mcp-google-map";
     args = ["--stdio"];
     env.GOOGLE_MAPS_API_KEY = "\${GOOGLE_MAPS_API_KEY}";
   };
@@ -58,7 +59,7 @@ in {
   # TripIt — list_trips, get_trip with date filtering.
   # Requires TRIPIT_USERNAME, TRIPIT_PASSWORD, TRIPIT_CLIENT_ID, TRIPIT_CLIENT_SECRET env vars at runtime.
   devcell.managedMcp.servers."tripit" = {
-    command = "tripit-mcp";
+    command = "${bin}/tripit-mcp";
     args = [];
   };
 }

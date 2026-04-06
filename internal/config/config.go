@@ -16,6 +16,7 @@ type Config struct {
 	SessionName   string
 	CellHome      string
 	ConfigDir     string
+	BuildDir      string // build context dir: .devcell/ when project config exists, else ConfigDir
 	ImageTag      string
 	Image         string
 	ContainerName string
@@ -37,18 +38,20 @@ func Load(cwd string, getenv func(string) string) Config {
 	portPrefix := resolvePortPrefix(getenv, cellID)
 	appName := filepath.Base(cwd) + "-" + cellID
 	home := getenv("HOME")
-	imageTag := "latest-ultimate"
+	imageTag := "v0.0.0-ultimate"
 
 	if tag := getenv("IMAGE_TAG"); tag != "" {
 		imageTag = tag
 	}
 
+	configDir := resolveConfigDir(getenv)
 	return Config{
 		CellID:        cellID,
 		AppName:       appName,
 		SessionName:   sessionName,
 		CellHome:      home + "/.devcell/" + sessionName,
-		ConfigDir:     resolveConfigDir(getenv),
+		ConfigDir:     configDir,
+		BuildDir:      configDir,
 		ImageTag:      imageTag,
 		Image:         "ghcr.io/dimmkirr/devcell:" + imageTag,
 		ContainerName: "cell-" + appName + "-run",
@@ -69,7 +72,20 @@ func LoadFromOS() (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("getwd: %w", err)
 	}
-	return Load(cwd, os.Getenv), nil
+	c := Load(cwd, os.Getenv)
+	_, statErr := os.Stat(filepath.Join(cwd, ".devcell.toml"))
+	c.BuildDir = ResolveBuildDir(cwd, c.ConfigDir, statErr == nil)
+	return c, nil
+}
+
+// ResolveBuildDir returns the build context directory.
+// When projectConfigExists is true, returns cwd/.devcell (project-local).
+// Otherwise falls back to configDir (global).
+func ResolveBuildDir(cwd, configDir string, projectConfigExists bool) string {
+	if projectConfigExists {
+		return filepath.Join(cwd, ".devcell")
+	}
+	return configDir
 }
 
 func resolveCellID(getenv func(string) string) string {
@@ -101,6 +117,11 @@ func resolveConfigDir(getenv func(string) string) string {
 		return xdg + "/devcell"
 	}
 	return getenv("HOME") + "/.config/devcell"
+}
+
+// EnsureBuildDir creates the build context directory if it doesn't exist.
+func EnsureBuildDir(buildDir string) error {
+	return os.MkdirAll(buildDir, 0755)
 }
 
 // ResolveAvailablePorts checks whether VNCPort and RDPPort are free and

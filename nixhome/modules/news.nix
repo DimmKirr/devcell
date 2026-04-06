@@ -1,5 +1,6 @@
 # news.nix — RSS/News tools
-{pkgs, ...}: let
+{pkgs, config, ...}: let
+  bin = config.devcell.managedMcp.nixBinPrefix;
   # inoreader-mcp: Inoreader RSS MCP — 19 tools (feeds, articles, search, tagging, analytics)
   # https://github.com/justmytwospence/inoreader-mcp
   inoreaderMcp = pkgs.buildNpmPackage {
@@ -24,7 +25,7 @@ in {
   # Get credentials: https://www.inoreader.com/developers/ → create app → redirect URI: http://localhost:3333/callback
   # Auth: use setup_auth tool to complete OAuth flow. Tokens stored in ~/.config/inoreader-mcp/tokens.json
   devcell.managedMcp.servers."inoreader" = {
-    command = "inoreader-mcp";
+    command = "${bin}/inoreader-mcp";
     args = [];
     env = {
       INOREADER_CLIENT_ID = "\${INOREADER_CLIENT_ID}";

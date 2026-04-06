@@ -1,0 +1,44 @@
+---
+interface Props {
+  stackColumns: string[];
+  stackFeatures: { name: string; note: string; in: string[]; partial?: string[] }[];
+}
+const { stackColumns, stackFeatures } = Astro.props;
+---
+
+<section id="stacks">
+  <p class="section-label">Image stacks</p>
+  <h2>Pick your stack.</h2>
+  <p class="stacks-more" style="margin-bottom: 1.25rem;">Need a different mix? Set <code>stack</code> and <code>modules</code> in your <code>devcell.toml</code> to combine what you need.</p>
+  <div class="plan-grid">
+    <table>
+      <thead>
+        <tr>
+          <th></th>
+          {stackColumns.map(col => (
+            <th class={col === "ultimate" ? "col-default" : ""}>{col}</th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {stackFeatures.map(feat => (
+          <tr>
+            <td title={feat.note}>{feat.name}</td>
+            {stackColumns.map(col => {
+              const included = feat.in.includes(col);
+              const isPartial = feat.partial?.includes(col);
+              return (
+                <td class={`${included ? "has" : ""} ${col === "ultimate" ? "col-default" : ""}`}>
+                  <span set:html={included ? (isPartial ? "✓<sup>*</sup>" : "✓") : "—"} />
+                </td>
+              );
+            })}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
+  <p class="stacks-more"><sup>*</sup> Headless only. GUI desktop (VNC/RDP) available in electronics and ultimate stacks.</p>
+  <p class="stacks-more">Multi-arch: linux/amd64 and linux/arm64. Published to <code>ghcr.io/dimmkirr/devcell</code>.</p>
+  <p class="stacks-more">Base nix image size ~1.3 GB.</p>
+</section>

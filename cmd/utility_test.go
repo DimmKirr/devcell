@@ -60,7 +60,7 @@ func TestVNCPort_SamePaneSamePort(t *testing.T) {
 }
 
 func TestVNCPort_DifferentPanesDifferentPorts(t *testing.T) {
-	guiCfg := cfg.CellConfig{Cell: cfg.CellSection{GUI: true}}
+	guiCfg := cfg.CellConfig{Cell: cfg.CellSection{GUI: ptrBool(true)}}
 	argv3 := buildBehaviourArgv("/tmp/myproject", []string{"TMUX_PANE", "%3"}, "claude", nil, nil, guiCfg)
 	argv4 := buildBehaviourArgv("/tmp/myproject", []string{"TMUX_PANE", "%4"}, "claude", nil, nil, guiCfg)
 	port3 := extractPort(argv3)

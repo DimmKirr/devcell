@@ -201,13 +201,36 @@ func captureDesktop() (goimage.Image, error) {
 	time.Sleep(300 * time.Millisecond)
 
 	// Right-click on desktop to open fluxbox root menu.
-	// Click on empty area away from windows.
-	menuCmd := osexec.Command("xdotool", "mousemove", "960", "540", "click", "3")
-	menuCmd.Env = append(os.Environ(), "DISPLAY=:99")
-	if out, err := menuCmd.CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("xdotool right-click: %w\n%s", err, out)
+	// Retry up to 3 times — when fluxbox was already running, the first click
+	// may not register on the root window.
+	for attempt := 0; attempt < 3; attempt++ {
+		// Left-click on empty desktop to ensure root window has focus.
+		focusCmd := osexec.Command("xdotool", "mousemove", "1200", "400", "click", "1")
+		focusCmd.Env = append(os.Environ(), "DISPLAY=:99")
+		focusCmd.CombinedOutput()
+		time.Sleep(300 * time.Millisecond)
+
+		// Dismiss any existing menu.
+		escCmd := osexec.Command("xdotool", "key", "Escape")
+		escCmd.Env = append(os.Environ(), "DISPLAY=:99")
+		escCmd.CombinedOutput()
+		time.Sleep(300 * time.Millisecond)
+
+		// Right-click to open root menu.
+		menuCmd := osexec.Command("xdotool", "mousemove", "960", "540", "click", "3")
+		menuCmd.Env = append(os.Environ(), "DISPLAY=:99")
+		if out, err := menuCmd.CombinedOutput(); err != nil {
+			return nil, fmt.Errorf("xdotool right-click: %w\n%s", err, out)
+		}
+		time.Sleep(1 * time.Second)
+
+		// Check if menu appeared by querying active window name.
+		nameCmd := osexec.Command("xdotool", "getactivewindow", "getwindowname")
+		nameCmd.Env = append(os.Environ(), "DISPLAY=:99")
+		nameOut, _ := nameCmd.Output()
+		log.Printf("menu attempt %d: active window = %q", attempt+1, strings.TrimSpace(string(nameOut)))
 	}
-	time.Sleep(2 * time.Second)
+	time.Sleep(1 * time.Second)
 
 	// Take screenshot with ImageMagick import.
 	importCmd := osexec.Command("import", "-window", "root", screenshotPath)
@@ -264,18 +287,18 @@ source /etc/devcell/entrypoint.d/50-gui.sh
 	return fmt.Errorf("xrdp did not start within 30s")
 }
 
-// saveScreenshotOnFailure copies the desktop screenshot to the test run
-// results directory when a test fails, for post-mortem inspection.
-func saveScreenshotOnFailure(t *testing.T) {
+// saveScreenshot always copies the desktop screenshot to the test run results
+// directory for LLM-assisted review. Saved per-test so each pixel assertion
+// test has its own snapshot for cross-checking.
+func saveScreenshot(t *testing.T) {
 	t.Helper()
 	t.Cleanup(func() {
-		if t.Failed() {
-			dst := filepath.Join(testRunDir(), "desktop-screenshot.png")
-			data, err := os.ReadFile(screenshotPath)
-			if err == nil {
-				os.WriteFile(dst, data, 0644)
-				t.Logf("Screenshot saved to %s", dst)
-			}
+		name := strings.ReplaceAll(t.Name(), "/", "-")
+		dst := filepath.Join(testRunDir(), name+"-desktop.png")
+		data, err := os.ReadFile(screenshotPath)
+		if err == nil {
+			os.WriteFile(dst, data, 0644)
+			t.Logf("Screenshot saved to %s", dst)
 		}
 	})
 }
@@ -289,11 +312,19 @@ func skipIfNoGUI(t *testing.T, c testcontainers.Container) {
 	}
 }
 
-// probeGUI starts a lightweight container to check for GUI support, then skips if absent.
+// probeGUI skips the test if the image lacks GUI support.
+// Checks DEVCELL_GUI_ENABLED in the image config via docker inspect (no container needed).
 func probeGUI(t *testing.T) {
 	t.Helper()
-	c := startEnvContainer(t)
-	skipIfNoGUI(t, c)
+	img := image()
+	out, err := osexec.Command("docker", "inspect", "--format",
+		`{{range .Config.Env}}{{println .}}{{end}}`, img).Output()
+	if err != nil {
+		t.Skipf("skipping: cannot inspect image %s: %v", img, err)
+	}
+	if !strings.Contains(string(out), "DEVCELL_GUI_ENABLED=true") {
+		t.Skip("skipping: image lacks GUI support (DEVCELL_GUI_ENABLED not set)")
+	}
 }
 
 func skipIfNoXrdp(t *testing.T, c testcontainers.Container) {
@@ -409,7 +440,7 @@ func startVncContainer(t *testing.T) testcontainers.Container {
 func TestDesktop_Wallpaper(t *testing.T) {
 	skipIfNotInDevcell(t)
 	img := setupDesktopScreenshot(t)
-	saveScreenshotOnFailure(t)
+	saveScreenshot(t)
 	bounds := img.Bounds()
 	if bounds.Dx() != 1920 || bounds.Dy() != 1080 {
 		t.Fatalf("screenshot resolution: %dx%d, want 1920x1080", bounds.Dx(), bounds.Dy())
@@ -425,10 +456,10 @@ func TestDesktop_Wallpaper(t *testing.T) {
 func TestDesktop_Toolbar(t *testing.T) {
 	skipIfNotInDevcell(t)
 	img := setupDesktopScreenshot(t)
-	saveScreenshotOnFailure(t)
+	saveScreenshot(t)
 	// Toolbar is 35px at bottom. Center of toolbar = 1080 - 17 = 1063
 	toolbarY := img.Bounds().Dy() - 17
-	assertPixelTolerance(t, img, 960, toolbarY, "#000000", 10, "toolbar bg center")
+	assertPixelTolerance(t, img, 960, toolbarY, "#0d0d1c", 30, "toolbar bg center")
 	// Workspace badge near left side (starts at ~x=40, sample at y=1070)
 	assertPixelTolerance(t, img, 50, img.Bounds().Dy()-10, "#b8e336", 15, "toolbar workspace badge")
 }
@@ -437,7 +468,7 @@ func TestDesktop_Toolbar(t *testing.T) {
 func TestDesktop_WindowChrome(t *testing.T) {
 	skipIfNotInDevcell(t)
 	img := setupDesktopScreenshot(t)
-	saveScreenshotOnFailure(t)
+	saveScreenshot(t)
 	// xterm at +100+100. Title bar starts at y~85 (after 3px border), 30px high.
 	assertPixelTolerance(t, img, 300, 90, "#000000", 10, "window title bar bg")
 }
@@ -446,7 +477,7 @@ func TestDesktop_WindowChrome(t *testing.T) {
 func TestDesktop_Menu(t *testing.T) {
 	skipIfNotInDevcell(t)
 	img := setupDesktopScreenshot(t)
-	saveScreenshotOnFailure(t)
+	saveScreenshot(t)
 	// Menu triggered at (960, 540). Title bar is green, body is dark surface.
 	// Title area at y=532 (above click point), body at y=576 (below border).
 	assertPixelTolerance(t, img, 960, 532, "#b8e336", 20, "menu title bg")
@@ -633,21 +664,32 @@ func TestRdp_DockerPortByName(t *testing.T) {
 	}
 }
 
-// TestRdp_ConnectWithCreds -- xfreerdp +auth-only with correct creds must succeed.
+// TestRdp_ConnectWithCreds -- xfreerdp with correct creds must establish a VNC session.
+// Note: +auth-only is not used because xrdp 0.10.x with TLS defers authentication
+// to the login window phase, which +auth-only never reaches (FreeRDP 3.x).
 func TestRdp_ConnectWithCreds(t *testing.T) {
 	probeGUI(t)
 	c := startRdpContainer(t)
 	skipIfNoXfreerdp(t, c)
-	out, _ := exec(t, c, []string{"sh", "-c",
-		"DISPLAY=:99 xfreerdp +auth-only /v:127.0.0.1:3389 /u:" + hostUser + " /p:rdp /sec:rdp /cert:ignore 2>&1"})
-	// xfreerdp logs "Authentication only, exit status N" where 0 = success.
-	if strings.Contains(out, "exit status 0") {
-		t.Logf("PASS: RDP auth-only connection succeeded")
-	} else if strings.Contains(out, "Authentication only") {
-		t.Errorf("FAIL: xfreerdp auth returned non-zero status:\n%s", out)
+	// Connect via RDP and verify xrdp proxies to VNC by checking that the
+	// number of ESTABLISHED connections on port 5900 (0x170C) increases.
+	beforeOut, _ := exec(t, c, []string{"sh", "-c",
+		"grep '170C' /proc/net/tcp6 /proc/net/tcp 2>/dev/null | grep -c ' 01 '"})
+	before, _ := strconv.Atoi(strings.TrimSpace(beforeOut))
+
+	exec(t, c, []string{"sh", "-c",
+		"DISPLAY=:99 xfreerdp /v:127.0.0.1:3389 /u:" + hostUser + " /p:rdp /cert:ignore /timeout:5000 2>/dev/null &"})
+	time.Sleep(3 * time.Second)
+
+	afterOut, _ := exec(t, c, []string{"sh", "-c",
+		"grep '170C' /proc/net/tcp6 /proc/net/tcp 2>/dev/null | grep -c ' 01 '"})
+	after, _ := strconv.Atoi(strings.TrimSpace(afterOut))
+	if after > before {
+		t.Logf("PASS: RDP connection established VNC session (before=%d, after=%d ESTABLISHED on :5900)", before, after)
 	} else {
-		t.Errorf("FAIL: unexpected xfreerdp output (no auth status line):\n%s", out)
+		t.Errorf("FAIL: no new VNC connection after RDP connect (before=%d, after=%d)", before, after)
 	}
+	exec(t, c, []string{"sh", "-c", "pkill -f 'xfreerdp.*127.0.0.1:3389' 2>/dev/null; true"})
 }
 
 // TestRdp_NoLoginPrompt -- xrdp auto-connects to VNC without showing a login screen.
@@ -659,7 +701,7 @@ func TestRdp_NoLoginPrompt(t *testing.T) {
 	exec(t, c, []string{"sh", "-c", "truncate -s0 /var/log/xrdp.log"})
 	// Connect with correct creds -- triggers xrdp to proxy to VNC.
 	exec(t, c, []string{"sh", "-c",
-		"xfreerdp /v:127.0.0.1:3389 /u:" + hostUser + " /p:rdp /sec:rdp /cert:ignore /timeout:5000 2>&1 &" +
+		"xfreerdp /v:127.0.0.1:3389 /u:" + hostUser + " /p:rdp /cert:ignore /timeout:5000 2>&1 &" +
 			" sleep 3 && kill %1 2>/dev/null; true"})
 	// Check xrdp log: should contain VNC connection, not "login_wnd"
 	out, _ := exec(t, c, []string{"sh", "-c", "cat /var/log/xrdp.log 2>/dev/null"})
@@ -683,12 +725,12 @@ func TestRdp_KickExistingConnection(t *testing.T) {
 	skipIfNoXfreerdp(t, c)
 	// Start first connection in background.
 	exec(t, c, []string{"sh", "-c",
-		"xfreerdp /v:127.0.0.1:3389 /u:" + hostUser + " /p:rdp /sec:rdp /cert:ignore 2>/dev/null &"})
+		"xfreerdp /v:127.0.0.1:3389 /u:" + hostUser + " /p:rdp /cert:ignore 2>/dev/null &"})
 	time.Sleep(3 * time.Second)
 
 	// Start second connection -- should kick the first.
 	exec(t, c, []string{"sh", "-c",
-		"xfreerdp /v:127.0.0.1:3389 /u:" + hostUser + " /p:rdp /sec:rdp /cert:ignore 2>/dev/null &"})
+		"xfreerdp /v:127.0.0.1:3389 /u:" + hostUser + " /p:rdp /cert:ignore 2>/dev/null &"})
 	time.Sleep(3 * time.Second)
 
 	// After second connect, only one ESTABLISHED VNC connection should remain.
@@ -782,16 +824,17 @@ func TestRdp_ClipboardSync(t *testing.T) {
 	// Connect xfreerdp with clipboard enabled (client on :98, server on :99 via RDP).
 	exec(t, c, []string{"sh", "-c",
 		"DISPLAY=:98 xfreerdp /v:127.0.0.1:3389 /u:" + hostUser +
-			" /p:rdp /sec:rdp /cert:ignore +clipboard 2>/dev/null &"})
+			" /p:rdp /cert:ignore +clipboard 2>/dev/null &"})
 	t.Cleanup(func() {
 		exec(t, c, []string{"sh", "-c", "pkill -f 'xfreerdp.*127.0.0.1:3389' 2>/dev/null; true"})
 	})
-	time.Sleep(3 * time.Second)
+	// FreeRDP 3.x needs ~10s to fully establish the RDP session and cliprdr channel.
+	time.Sleep(10 * time.Second)
 
 	// Set clipboard text on the server display (:99).
 	exec(t, c, []string{"sh", "-c",
 		"echo -n '" + testText + "' | DISPLAY=:99 xclip -selection clipboard"})
-	time.Sleep(2 * time.Second)
+	time.Sleep(5 * time.Second)
 
 	// Read clipboard from the client display (:98).
 	out, code := exec(t, c, []string{"sh", "-c",

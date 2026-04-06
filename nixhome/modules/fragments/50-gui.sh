@@ -88,6 +88,12 @@ log "VNC server ready - connect to localhost:${EXT_VNC_PORT:-5900}"
 log "DISPLAY=:${DISPLAY_NUM}"
 
 # ── xrdp (RDP gateway to existing VNC session) ────────────────────────
+# Set a system password so RDP clients can authenticate via PAM.
+# The password is not security-sensitive — the container is already isolated.
+# useradd creates accounts with locked passwords (! in shadow) which blocks
+# chpasswd via pam_unix. Use usermod -p with a pre-hashed password instead.
+usermod -p "$(openssl passwd -6 rdp)" "$HOST_USER" 2>/dev/null || true
+
 XRDP_BIN=$(command -v xrdp 2>/dev/null)
 if [ -n "$XRDP_BIN" ]; then
     XRDP_CFG="/tmp/xrdp"

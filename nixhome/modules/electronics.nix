@@ -5,7 +5,8 @@
 #
 # kicad pulls in opencascade-occt and wx as transitive dependencies —
 # no need to list them explicitly.
-{pkgs, ...}: let
+{pkgs, config, ...}: let
+  bin = config.devcell.managedMcp.nixBinPrefix;
   # wokwi-cli: hardware simulator CLI — not in nixpkgs; use pre-built static binary.
   # SHA256 hashes verified from: https://github.com/wokwi/wokwi-cli/releases/tag/v0.26.0
   wokwi-cli = let
@@ -71,7 +72,7 @@ in {
     ];
 
   devcell.managedMcp.servers."kicad-mcp" = {
-    command = "kicad-mcp";
+    command = "${bin}/kicad-mcp";
     args = [];
     # kicad-mcp reads KICAD_PROJECT_PATH from the environment at runtime
   };

@@ -3,10 +3,22 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"strings"
 
 	"github.com/DimmKirr/devcell/internal/ollama"
-	"github.com/pterm/pterm"
+	"github.com/DimmKirr/devcell/internal/ux"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/lipgloss/table"
 	"github.com/spf13/cobra"
+)
+
+// Reuse shared styles from ux package.
+var (
+	modGray  = ux.StyleMuted
+	modGreen = ux.StyleSuccess
+	modRed   = ux.StyleError
+	modBold  = ux.StyleBold
 )
 
 var modelsCmd = &cobra.Command{
@@ -27,24 +39,22 @@ Examples:
     cell models --debug`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		debug, _ := cmd.Flags().GetBool("debug")
-		if debug {
-			pterm.EnableDebugMessages()
-		}
+		log := slog.Default()
 		ctx := context.Background()
 		baseURL := ollama.DefaultBaseURL
 
 		if debug {
-			pterm.Debug.Println("Checking ollama at " + baseURL)
+			log.Debug("Checking ollama at " + baseURL)
 		}
 
 		if !ollama.Detect(ctx, baseURL) {
-			pterm.Warning.Println("Ollama not detected at " + baseURL)
-			pterm.Info.Println("Install ollama: https://ollama.com/download")
+			ux.Warn("Ollama not detected at " + baseURL)
+			ux.Info("Install ollama: https://ollama.com/download")
 			return nil
 		}
 
 		if debug {
-			pterm.Debug.Println("Ollama reachable, fetching model list via SDK (GET /api/tags)")
+			log.Debug("Ollama reachable, fetching model list via SDK (GET /api/tags)")
 		}
 
 		models, err := ollama.FetchModels(ctx, baseURL)
@@ -53,32 +63,32 @@ Examples:
 		}
 
 		if debug {
-			pterm.Debug.Printfln("Fetched %d models from ollama", len(models))
+			log.Debug(fmt.Sprintf("Fetched %d models from ollama", len(models)))
 			for _, m := range models {
-				pterm.Debug.Printfln("  %s (size=%s, family=%s)", m.Name, m.ParameterSize, m.Family)
+				log.Debug(fmt.Sprintf("  %s (size=%s, family=%s)", m.Name, m.ParameterSize, m.Family))
 			}
 		}
 
 		if len(models) == 0 {
-			pterm.Warning.Println("Ollama is running but no models installed.")
-			pterm.Info.Println("Pull a model: ollama pull deepseek-r1:32b")
+			ux.Warn("Ollama is running but no models installed.")
+			ux.Info("Pull a model: ollama pull deepseek-r1:32b")
 			return nil
 		}
 
 		// Fetch live SWE-bench scores (falls back to hardcoded on failure).
 		var sweScores map[string]float64
 		if debug {
-			pterm.Debug.Printfln("Fetching SWE-bench Verified leaderboard from %s", ollama.SWEBenchURL)
+			log.Debug(fmt.Sprintf("Fetching SWE-bench Verified leaderboard from %s", ollama.SWEBenchURL))
 		}
 		sweScores, sweErr := ollama.FetchSWEBenchScores(ctx, ollama.SWEBenchURL)
 		if sweErr != nil {
 			if debug {
-				pterm.Debug.Printfln("SWE-bench fetch failed (using fallback ratings): %v", sweErr)
+				log.Debug(fmt.Sprintf("SWE-bench fetch failed (using fallback ratings): %v", sweErr))
 			}
 		} else if debug {
-			pterm.Debug.Printfln("Fetched %d open-source model scores from SWE-bench Verified", len(sweScores))
+			log.Debug(fmt.Sprintf("Fetched %d open-source model scores from SWE-bench Verified", len(sweScores)))
 			for model, score := range sweScores {
-				pterm.Debug.Printfln("  %s → %.1f%%", model, score)
+				log.Debug(fmt.Sprintf("  %s → %.1f%%", model, score))
 			}
 		}
 
@@ -93,28 +103,28 @@ Examples:
 			info, hfErr := ollama.FetchHFModelInfo(ctx, ollama.HuggingFaceAPIURL, family)
 			if hfErr != nil {
 				if debug {
-					pterm.Debug.Printfln("HuggingFace lookup failed for %s: %v", family, hfErr)
+					log.Debug(fmt.Sprintf("HuggingFace lookup failed for %s: %v", family, hfErr))
 				}
 				continue
 			}
 			hfInfoMap[family] = info
 			if debug {
-				pterm.Debug.Printfln("HuggingFace: %s → %s (tags: %v)", family, info.ModelID, info.Tags)
+				log.Debug(fmt.Sprintf("HuggingFace: %s → %s (tags: %v)", family, info.ModelID, info.Tags))
 			}
 		}
 
 		ranked := ollama.RankModels(models, 10, sweScores, hfInfoMap)
 
 		if debug {
-			pterm.Debug.Println("Ranking models (live SWE-bench scores where available, fallback estimates otherwise)")
-			pterm.Debug.Println("Note: SWE-bench scores are for full-precision models with agentic scaffolding.")
-			pterm.Debug.Println("      Quantized ollama variants will score lower in practice.")
-			pterm.Debug.Println("Sources: https://www.swebench.com/ | https://epoch.ai/benchmarks/swe-bench-verified")
+			log.Debug("Ranking models (live SWE-bench scores where available, fallback estimates otherwise)")
+			log.Debug("Note: SWE-bench scores are for full-precision models with agentic scaffolding.")
+			log.Debug("      Quantized ollama variants will score lower in practice.")
+			log.Debug("Sources: https://www.swebench.com/ | https://epoch.ai/benchmarks/swe-bench-verified")
 			for _, r := range ranked {
 				if r.SWEScore > 0 {
-					pterm.Debug.Printfln("  %s → %.1f%% [%s]", r.Name, r.SWEScore, r.ScoreSource)
+					log.Debug(fmt.Sprintf("  %s → %.1f%% [%s]", r.Name, r.SWEScore, r.ScoreSource))
 				} else {
-					pterm.Debug.Printfln("  %s → no rating data", r.Name)
+					log.Debug(fmt.Sprintf("  %s → no rating data", r.Name))
 				}
 			}
 		}
@@ -122,20 +132,21 @@ Examples:
 		// Detect system RAM for hardware check.
 		systemRAM := ollama.GetSystemRAMGB()
 		if debug {
-			pterm.Debug.Printfln("System RAM: %.1f GB", systemRAM)
+			log.Debug(fmt.Sprintf("System RAM: %.1f GB", systemRAM))
 		}
 
-		pterm.DefaultSection.Println("Local Models (ranked by SWE-Bench score)")
+		fmt.Println()
+		fmt.Println(modBold.Render(" Local Models (ranked by SWE-Bench score)"))
+		fmt.Println()
 
-		tableData := pterm.TableData{
-			{"#", "Model", "Rating", "Size", "Type", "Hardware"},
-		}
+		// Build table rows.
+		rows := make([][]string, 0, len(ranked))
 		for _, r := range ranked {
-			score := pterm.Gray("-")
+			score := modGray.Render("-")
 			if r.SWEScore > 0 {
 				label := fmt.Sprintf("~%.0f%%", r.SWEScore)
 				if r.ScoreSource != "" {
-					label += " " + pterm.Gray(r.ScoreSource)
+					label += " " + modGray.Render(r.ScoreSource)
 				}
 				score = label
 			}
@@ -154,19 +165,19 @@ Examples:
 			}
 
 			// Hardware check.
-			hwLabel := pterm.Gray("-")
+			hwLabel := modGray.Render("-")
 			if systemRAM > 0 {
 				ok, needed := ollama.CheckHardware(r.ParameterSize, systemRAM)
 				if needed > 0 {
 					if ok {
-						hwLabel = pterm.Green(fmt.Sprintf("OK (%.0fGB)", needed))
+						hwLabel = modGreen.Render(fmt.Sprintf("OK (%.0fGB)", needed))
 					} else {
-						hwLabel = pterm.Red(fmt.Sprintf("%.0fGB needed", needed))
+						hwLabel = modRed.Render(fmt.Sprintf("%.0fGB needed", needed))
 					}
 				}
 			}
 
-			tableData = append(tableData, []string{
+			rows = append(rows, []string{
 				fmt.Sprintf("%d", r.Rank),
 				r.Name,
 				score,
@@ -176,25 +187,30 @@ Examples:
 			})
 		}
 
-		pterm.DefaultTable.WithHasHeader().WithBoxed().WithData(tableData).Render()
-		pterm.DefaultBasicText.WithStyle(pterm.NewStyle(pterm.FgGray)).
-			Printfln("%*s", 70, fmt.Sprintf("ollama %s", baseURL))
+		t := table.New().
+			Border(lipgloss.NormalBorder()).
+			BorderStyle(ux.TableBorder).
+			Headers("#", "Model", "Rating", "Size", "Type", "Hardware").
+			Rows(rows...)
+		fmt.Println(t)
+		fmt.Println(modGray.Render(fmt.Sprintf("%*s", 70, fmt.Sprintf("ollama %s", baseURL))))
 
-		pterm.Println()
+		fmt.Println()
 		if sweErr != nil {
-			pterm.Info.Printfln("Scores from built-in estimates (SWE-bench fetch failed).")
+			ux.Info("Scores from built-in estimates (SWE-bench fetch failed).")
 		} else {
-			pterm.Info.Printfln("Scores from SWE-bench Verified (full-model, not quantized).")
+			ux.Info("Scores from SWE-bench Verified (full-model, not quantized).")
 		}
-		pterm.Info.Printfln("Hardware: Q4 estimate vs %.0fGB RAM. --debug for details.", systemRAM)
-		pterm.Println()
+		ux.Info(fmt.Sprintf("Hardware: Q4 estimate vs %.0fGB RAM. --debug for details.", systemRAM))
+		fmt.Println()
 
 		snippet := ollama.FormatTOMLSnippet(ranked)
-		pterm.Info.Printfln("%d models found. Add to ~/.config/devcell/devcell.toml:\n", len(ranked))
-		for _, line := range splitLines(snippet) {
+		ux.Info(fmt.Sprintf("%d models found. Add to ~/.config/devcell/devcell.toml:", len(ranked)))
+		fmt.Println()
+		for _, line := range strings.Split(snippet, "\n") {
 			fmt.Printf("  %s\n", line)
 		}
-		pterm.Println()
+		fmt.Println()
 
 		return nil
 	},
@@ -202,19 +218,4 @@ Examples:
 
 func init() {
 	modelsCmd.Flags().Bool("debug", false, "Show detailed detection and ranking logs")
-}
-
-func splitLines(s string) []string {
-	var lines []string
-	start := 0
-	for i := 0; i < len(s); i++ {
-		if s[i] == '\n' {
-			lines = append(lines, s[start:i])
-			start = i + 1
-		}
-	}
-	if start < len(s) {
-		lines = append(lines, s[start:])
-	}
-	return lines
 }

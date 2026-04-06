@@ -68,18 +68,21 @@ func init() {
 	rootCmd.PersistentFlags().Bool("macos", false, "use macOS VM via Vagrant (alias for --engine=vagrant)")
 	rootCmd.PersistentFlags().String("vagrant-provider", "utm", "Vagrant provider (e.g. utm)")
 	rootCmd.PersistentFlags().String("vagrant-box", "", "Vagrant box name override")
-	rootCmd.PersistentFlags().String("base-image", "", "base image for scaffold Dockerfile (default: ghcr.io/dimmkirr/devcell:base-local)")
+	rootCmd.PersistentFlags().String("base-image", "", "core image for scaffold Dockerfile (default: ghcr.io/dimmkirr/devcell:core-local)")
 	rootCmd.PersistentFlags().String("session-name", "", "session name for persistent home (~/.devcell/<name>)")
 	rootCmd.AddCommand(
 		claudeCmd,
 		codexCmd,
 		opencodeCmd,
 		shellCmd,
+		chromeCmd,
+		loginCmd,
 		buildCmd,
 		initCmd,
 		vncCmd,
 		rdpCmd,
 		modelsCmd,
+		serveCmd,
 	)
 }
 
@@ -176,17 +179,23 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 		os.Setenv("DEVCELL_SESSION_NAME", sn)
 	}
 
-	// First-run: scaffold if devcell.toml absent
-	if !scaffold.IsInitialized(c.ConfigDir) {
-		fmt.Printf(" First run — scaffolding %s\n", c.ConfigDir)
-		if err := scaffold.Scaffold(c.ConfigDir, "", "", false); err != nil {
-			return fmt.Errorf("scaffold: %w", err)
+	// First-run: scaffold if .devcell.toml absent in project dir
+	if !scaffold.IsInitialized(c.BaseDir) {
+		globalCfg := cfg.LoadFromOS(c.ConfigDir, c.BaseDir)
+		result, err := RunInitFlow(InitFlowOptions{
+			BaseDir:    c.BaseDir,
+			ConfigDir:  c.ConfigDir,
+			NixhomeSrc: globalCfg.Cell.NixhomePath,
+			Yes:        false,
+		})
+		if err != nil {
+			return err
 		}
-		ok, promptErr := ux.GetConfirmation("Build image now? (~5 min first time)")
-		if promptErr == nil && ok {
-			if buildErr := buildImageWithSpinner(c.ConfigDir, false, "Building devcell image", false); buildErr != nil {
-				return buildErr
-			}
+		c.BuildDir = config.ResolveBuildDir(c.BaseDir, c.ConfigDir, true)
+		fmt.Printf(" First run — scaffolding %s (stack: %s)\n", c.BaseDir, result.Stack)
+
+		if err := buildImageWithSpinner(c.BuildDir, false, "Building devcell image", false); err != nil {
+			return err
 		}
 	}
 
@@ -208,20 +217,64 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 	cellCfg := cfg.LoadFromOS(c.ConfigDir, c.BaseDir)
 
 	// Resolve available GUI ports — probe and bump if already bound
-	if cellCfg.Cell.GUI {
+	if cellCfg.Cell.ResolvedGUI() {
 		c.ResolveAvailablePorts()
 	}
 
-	if scanFlag("--build") && !scanFlag("--dry-run") {
-		if err := scaffold.RegeneratePackageFiles(c.ConfigDir); err != nil {
-			return fmt.Errorf("regenerate package files: %w", err)
+	needsBuild := scanFlag("--build") && !scanFlag("--dry-run")
+	autoDetect := !scanFlag("--dry-run") && !scanFlag("--build") &&
+		!runner.ImageExists(context.Background(), runner.UserImageTag())
+	// DIMM-124: also rebuild when build context is newer than the existing image
+	// (catches stale images left after a failed build or config change)
+	var changedFiles []string
+	staleImage := false
+	if !scanFlag("--dry-run") && !scanFlag("--build") && !autoDetect {
+		changedFiles, staleImage = runner.ChangedBuildFiles(c.BuildDir)
+	}
+
+	if needsBuild || autoDetect || staleImage {
+		if autoDetect {
+			fmt.Printf(" No %s image found — building automatically\n", runner.UserImageTag())
+		} else if staleImage {
+			fmt.Printf(" Build context changed (%s in %s) — rebuilding %s\n",
+				strings.Join(changedFiles, ", "), c.BuildDir, runner.UserImageTag())
+			if ux.Verbose {
+				for _, f := range changedFiles {
+					if diff := runner.DiffBuildFile(c.BuildDir, f); diff != "" {
+						fmt.Printf("\n%s\n", diff)
+					}
+				}
+			}
 		}
-		if err := buildImageWithSpinner(c.ConfigDir, true, "Building devcell image", false); err != nil {
-			return err
+		if err := config.EnsureBuildDir(c.BuildDir); err != nil {
+			return fmt.Errorf("ensure build dir: %w", err)
 		}
-	} else if !scanFlag("--dry-run") && !runner.ImageExists(context.Background(), runner.UserImageTag()) {
-		fmt.Printf(" No %s image found — building automatically\n", runner.UserImageTag())
-		if err := buildImageWithSpinner(c.ConfigDir, false, "Building devcell image", false); err != nil {
+		if nixhomePath := cellCfg.Cell.NixhomePath; nixhomePath != "" {
+			// Check if nixhome source changed since last sync.
+			prevSource := scaffold.NixhomeSource(c.BuildDir)
+			if prevSource != "" && prevSource != nixhomePath {
+				ux.Debugf("nixhome source changed: %s → %s", prevSource, nixhomePath)
+				fmt.Printf(" ⚠ nixhome source changed: %s → %s\n", prevSource, nixhomePath)
+				overwrite, cErr := ux.GetConfirmation("Overwrite .devcell/nixhome with new source?")
+				if cErr != nil || !overwrite {
+					ux.Debugf("Skipping nixhome sync (user declined or error)")
+				} else {
+					ux.Debugf("Syncing nixhome: %s → %s/nixhome/", nixhomePath, c.BuildDir)
+					if err := scaffold.SyncNixhome(nixhomePath, c.BuildDir); err != nil {
+						return fmt.Errorf("sync nixhome: %w", err)
+					}
+				}
+			} else {
+				ux.Debugf("Syncing nixhome: %s → %s/nixhome/", nixhomePath, c.BuildDir)
+				if err := scaffold.SyncNixhome(nixhomePath, c.BuildDir); err != nil {
+					return fmt.Errorf("sync nixhome: %w", err)
+				}
+			}
+		}
+		if err := scaffold.RegenerateBuildContext(c.BuildDir, cellCfg); err != nil {
+			return fmt.Errorf("regenerate build context: %w", err)
+		}
+		if err := buildImageWithSpinner(c.BuildDir, needsBuild, "Building devcell image", false); err != nil {
 			return err
 		}
 	}
@@ -241,7 +294,12 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 		}
 	}
 
+	// Show a spinner during pre-launch setup (network, cleanup, backup, etc.).
+	// In verbose mode, just print the header — debug output follows.
+	var openSp *ux.ProgressSpinner
 	if !ux.Verbose {
+		openSp = ux.NewProgressSpinner(fmt.Sprintf("Opening Cell %s", c.AppName))
+	} else {
 		ux.Println(fmt.Sprintf("Opening Cell %s ...", c.AppName))
 	}
 
@@ -252,6 +310,9 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 
 	// Remove orphaned stopped container from a previous crashed run
 	if err := runner.RemoveOrphanedContainer(context.Background(), c.ContainerName); err != nil {
+		if openSp != nil {
+			openSp.Fail("setup failed")
+		}
 		return err
 	}
 
@@ -297,18 +358,33 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 
 	// Resolve 1Password items → set in process env so docker inherits via -e KEY
 	var inheritEnv []string
-	if len(cellCfg.Op.Items) > 0 {
+	opDocs := cellCfg.Op.ResolvedDocuments()
+	if len(opDocs) > 0 {
+		if openSp != nil {
+			openSp.UpdateText(fmt.Sprintf("Opening Cell %s (resolving secrets)", c.AppName))
+		}
+		ux.Debugf("1Password: resolving %d document(s): %v", len(opDocs), opDocs)
 		if _, err := exec.LookPath("op"); err == nil {
-			resolved, err := op.ResolveItems(cellCfg.Op.Items)
+			resolved, err := op.ResolveItems(opDocs)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "warning: 1Password: %v\n", err)
 			} else {
+				keys := make([]string, 0, len(resolved))
 				for k, v := range resolved {
 					os.Setenv(k, v)
 					inheritEnv = append(inheritEnv, k)
+					keys = append(keys, k)
 				}
+				ux.Debugf("1Password: resolved %d secret(s): %v", len(keys), keys)
 			}
+		} else {
+			ux.Debugf("1Password: op CLI not found, skipping secret resolution")
 		}
+	}
+
+	// Stop spinner before handing terminal to child process.
+	if openSp != nil {
+		openSp.Stop()
 	}
 
 	spec := runner.RunSpec{

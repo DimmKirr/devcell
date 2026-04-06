@@ -1,5 +1,5 @@
 # Starship prompt configuration — https://starship.rs/config/
-# This file is scaffolded by `cell init` into homedir/.config/starship.toml
+# This file is scaffolded by `cell init` into .devcell/homedir/.config/starship.toml
 # and copied into the container at ~/.config/starship.toml by the entrypoint.
 # Edit to customize your prompt per-project; run `cell build` is NOT needed.
 

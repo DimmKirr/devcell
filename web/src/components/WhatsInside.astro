@@ -1,0 +1,29 @@
+---
+interface Props {
+  stacks: { category: string; tools: string[] }[];
+  logos: { src: string; alt: string; title: string }[];
+}
+const { stacks, logos } = Astro.props;
+---
+
+<div class="features-wrap" id="inside">
+  <section>
+    <p class="section-label">What's inside</p>
+    <h2>What ships in the box.</h2>
+    <p class="stacks-more" style="margin-bottom: 1.25rem;">Everything below ships in the <strong>ultimate</strong> stack. Pick a focused stack below and get exactly what you need.</p>
+    <div class="stacks-grid">
+      {stacks.map((group) => (
+        <div class="stack-row">
+          <span class="stack-cat">{group.category}</span>
+          <span class="stack-tools">{group.tools.join(' · ')}</span>
+        </div>
+      ))}
+    </div>
+    <div class="logo-grid">
+      {logos.map((logo) => (
+        <span class="logo-item" data-title={logo.title}><img src={logo.src} alt={logo.alt} loading="lazy" /></span>
+      ))}
+    </div>
+    <p class="stacks-more">Drop a <code>.tool-versions</code> for runtime versions, add packages via config, extend a stack with nix overlays, or <a href="https://github.com/DimmKirr/devcell/tree/main/nixhome">fork nixhome</a> and build your own. Upstream updates still merge cleanly.</p>
+  </section>
+</div>

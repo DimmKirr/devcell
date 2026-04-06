@@ -1,0 +1,8 @@
+{
+  "name": "nix-patchright-mcp-server",
+  "version": "0.0.68",
+  "private": true,
+  "dependencies": {
+    "patchright-mcp": "0.0.68"
+  }
+}

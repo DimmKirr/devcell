@@ -1,0 +1,56 @@
+---
+interface Props {
+  stableVersion: string;
+  logoGrid: string[];
+}
+const { stableVersion, logoGrid } = Astro.props;
+---
+
+<div class="hero-wrap">
+  <div class="hero">
+    <div>
+      <p class="hero-eyebrow">AI Agent Sandbox · Open Source · Apache 2.0 · <a href="https://github.com/DimmKirr/devcell" class="eyebrow-stars">★ Star on GitHub</a> <a href="https://github.com/DimmKirr/devcell"><img src="https://img.shields.io/github/stars/DimmKirr/devcell?style=flat&label=&color=C8FF00" alt="GitHub stars" class="star-badge" /></a>{stableVersion ? <Fragment> · <a href="https://github.com/DimmKirr/devcell/releases" class="eyebrow-stars">{stableVersion}</a></Fragment> : <Fragment> · <a href="https://github.com/DimmKirr/devcell/releases" class="eyebrow-stars">Releases</a></Fragment>}</p>
+      <h1>Agentic Coding,<br/>Without the<br/><span class="hl">Blast Radius.</span></h1>
+      <p class="hero-desc">
+        Your AI agent can <code>rm -rf /</code> and you're fine.
+        Auto-approve on your bare machine means the agent sees your SSH keys, other repos,
+        every credential on disk.<br/><br/>
+        devcell puts a container between your project and everything else.
+        Your code goes in. Nothing else comes along.
+      </p>
+      <div class="hero-actions">
+        <a href="https://github.com/DimmKirr/devcell" class="btn btn-primary">View on GitHub →</a>
+        <a href="#quickstart" class="btn btn-secondary">Quickstart</a>
+      </div>
+    </div>
+
+    <div class="terminal">
+      <div class="terminal-bar">
+        <span class="dot dot-r"></span>
+        <span class="dot dot-y"></span>
+        <span class="dot dot-g"></span>
+      </div>
+      <div><span class="t-path">~/myproject</span> <span class="t-dim">$</span> <span class="t-cmd"> cell claude</span></div>
+      <div class="t-dim">Opening Cell myproject …</div>
+      <div><span class="t-ok">✔</span><span class="t-dim"> mounted /home/alex/myproject</span></div>
+      <div class="t-hr">───────────────────────────────────────</div>
+      <div class="t-splash">
+        <div class="t-splash-logo">
+          {logoGrid.map((row) =>
+            [...row].map((cell) =>
+              <span class={cell === '#' ? 'b' : ''} />
+            )
+          )}
+        </div>
+        <pre class="t-splash-info">  <span class="t-title">Claude Code</span>
+<span class="t-dot">·</span> <span class="t-dim">Sonnet 4.6 · Claude Max</span>
+  <span class="t-path">/myproject</span>
+  <span class="t-path">&nbsp;</span></pre>
+      </div>
+      <div class="t-hr">───────────────────────────────────────</div>
+      <div><span class="t-prompt">❯</span><span class="t-cmd"> implement login form</span></div>
+      <div class="t-hr">───────────────────────────────────────</div>
+      <div><span class="t-safe">⏵⏵ auto-approve · <span style="color:#fff">[</span><span style="color:#E85D26">*</span><span style="color:#AAAAAA">.</span><span style="color:#fff">]</span> Cell Active</span></div>
+    </div>
+  </div>
+</div>

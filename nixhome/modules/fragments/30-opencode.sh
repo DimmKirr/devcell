@@ -113,7 +113,10 @@ merge_opencode_mcp() {
     jq -s '
       .[0] as $existing |
       .[1].mcp as $nix |
-      $existing | .mcp = (($existing.mcp // {}) + ($nix // {}))
+      (($existing.mcp // {}) | to_entries |
+        map(select(.value.command == null or (.value.command[0] == null) or (.value.command[0] | startswith("/opt/devcell/") | not))) |
+        from_entries) as $cleaned |
+      $existing | .mcp = ($cleaned + ($nix // {}))
     ' "$target_file" "$nix_file" > "$temp_file" 2>/dev/null
     if [ $? -eq 0 ] && [ -s "$temp_file" ] && jq empty "$temp_file" 2>/dev/null; then
         mv "$temp_file" "$target_file"
@@ -128,6 +131,13 @@ merge_opencode_mcp() {
         return 1
     fi
 }
+
+# ── Sync nix-managed commands ──
+if [ -d "$DEVCELL_HOME/.config/opencode/commands" ] && [ -n "$(ls -A "$DEVCELL_HOME/.config/opencode/commands" 2>/dev/null)" ]; then
+    mkdir -p "$HOME/.config/opencode/commands"
+    rsync -a --chown="$HOST_USER" "$DEVCELL_HOME/.config/opencode/commands/" "$HOME/.config/opencode/commands/"
+    log "✓ OpenCode commands synced from nix"
+fi
 
 # ── Run merges ──
 merge_opencode_providers "$HOME/opencode.json"
