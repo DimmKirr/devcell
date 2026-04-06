@@ -1,11 +1,11 @@
-# ~/.config/devcell/devcell.toml
-# Global DevCell configuration. Project-level overrides go in <project>/.devcell.toml
+# .devcell.toml
+# DevCell project configuration. Optional global defaults at ~/.config/devcell/devcell.toml
 
 [cell]
 # Override the default image tag.
-# Available tags: latest-base, latest-go, latest-node, latest-python,
-#   latest-electronics, latest-fullstack, latest-ultimate (default)
-# image_tag = "latest-go"
+# Available tags: v0.0.0-base, v0.0.0-go, v0.0.0-node, v0.0.0-python,
+#   v0.0.0-electronics, v0.0.0-fullstack, v0.0.0-ultimate (default)
+# image_tag = "v0.0.0-go"
 # Enable GUI (Xvfb + VNC + browser). Injects DEVCELL_GUI_ENABLED=true.
 gui = true
 # Timezone (IANA format). If omitted, inherits host $TZ.
@@ -49,15 +49,10 @@ default = "ollama/qwen3-coder-next:latest"
 models = ["qwen3-coder-next:latest", "qwen3-coder-next:latest-128k", "qwen3-coder:30b", "qwen3-coder:30b-128k", "glm-4.7-flash:latest", "deepseek-r1:32b", "qwen2.5-coder:32b", "qwen3:8b", "qwen3:8b-128k", "qwen3:0.6b"]
 
 
-[packages.npm]
+# [packages.npm]
 # npm packages installed in the container. Edit and run 'cell build'.
-# NOTE: claude-code and opencode are managed via nix (nixhome/modules/base.nix).
-# Only add packages here that are NOT in nixhome.
-"@openai/codex" = "^0.96.0"
-"@opentofu/opentofu-mcp-server" = "^0.1.5"
-"patchright-mcp" = "^0.0.68"
-"@playwright/test" = "^1.57.0"
-"@slidev/cli" = "^52.11.0"
+# All core tools are managed via nix modules. Only add packages here
+# that are NOT in nixhome.
 
 [packages.python]
 # Python packages installed in the container. Edit and run 'cell build'.

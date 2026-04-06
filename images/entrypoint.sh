@@ -25,8 +25,22 @@ else
 fi
 
 log "Entrypoint start (user=$HOST_USER app=${APP_NAME:-})"
-log "Base image: $(cat /etc/devcell/base-image-version 2>/dev/null || echo 'unknown')"
-log "User image: $(cat /etc/devcell/user-image-version 2>/dev/null || echo 'unknown')"
+
+# Read build metadata — prefer structured metadata.json, fall back to legacy files
+if [ -f /etc/devcell/metadata.json ] && command -v jq &>/dev/null; then
+    _meta_base=$(jq -r '.base_image // "unknown"' /etc/devcell/metadata.json 2>/dev/null)
+    _meta_commit=$(jq -r '.git_commit // "unknown"' /etc/devcell/metadata.json 2>/dev/null)
+    _meta_date=$(jq -r '.build_date // ""' /etc/devcell/metadata.json 2>/dev/null)
+    _meta_stack=$(jq -r '.stack // ""' /etc/devcell/metadata.json 2>/dev/null)
+    _meta_modules=$(jq -r '.modules // [] | join(",")' /etc/devcell/metadata.json 2>/dev/null)
+    _meta_pkgs=$(jq -r '.packages // 0' /etc/devcell/metadata.json 2>/dev/null)
+    log "Base image: $_meta_base"
+    log "User image: $_meta_commit $_meta_date"
+    log "Stack: $_meta_stack | Modules: ${_meta_modules:-none} | Nix packages: $_meta_pkgs"
+else
+    log "Base image: $(cat /etc/devcell/base-image-version 2>/dev/null || echo 'unknown')"
+    log "User image: $(cat /etc/devcell/user-image-version 2>/dev/null || echo 'unknown')"
+fi
 
 # ── Create session user if needed ─────────────────────────────────────────────
 if ! id "$HOST_USER" &>/dev/null; then
@@ -46,7 +60,10 @@ if [ -S /var/run/docker.sock ]; then
 fi
 
 mkdir -p "$HOME/.local/bin" "$HOME/tmp"
-chown "$HOST_USER" "$HOME/.local" "$HOME/.local/bin" "$HOME/tmp"
+# Symlink cell binary so it's on the session user's PATH
+# (shell rc rewrites /opt/devcell → $HOME, so /opt/devcell/.local/bin is not in PATH)
+ln -sf /opt/devcell/.local/bin/cell "$HOME/.local/bin/cell" 2>/dev/null || true
+chown -h "$HOST_USER" "$HOME/.local" "$HOME/.local/bin" "$HOME/tmp"
 
 # ── Isolate GPG per container ────────────────────────────────────────────────
 # Persistent $HOME is shared across containers. GnuPG 2.4+ uses keyboxd with

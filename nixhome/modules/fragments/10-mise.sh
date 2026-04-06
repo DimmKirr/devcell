@@ -58,6 +58,9 @@ setup_mise_home() {
     # Regenerate shims for all currently visible installs.
     MISE_DATA_DIR="$user_mise" HOME="$HOME" "$mise_bin" reshim 2>/dev/null || true
 
+    # Fix ownership of mise state dir (created by reshim running as root).
+    [ -d "$HOME/.local/state/mise" ] && chown -R "$HOST_USER" "$HOME/.local/state/mise"
+
     # Install any versions listed in ~/.tool-versions that aren't baked.
     # Skips if the file hasn't changed since the last successful install
     # (checksum stored in mise data dir). First start or edits trigger a full check.

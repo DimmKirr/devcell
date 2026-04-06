@@ -1,21 +1,93 @@
-# .devcell.toml — project-level DevCell overrides (merged on top of ~/.config/devcell/devcell.toml)
+# .devcell.toml
+# DevCell project configuration. Optional global defaults at ~/.config/devcell/devcell.toml
 
-# [cell]
-# image_tag = "latest-go"
-# gui = true
+[cell]
+# Base stack (one of: base, go, node, python, fullstack, electronics, ultimate)
+stack = "ultimate"
+#
+# Addon modules (from nixhome/modules/): desktop, electronics, financial,
+# graphics, infra, news, nixos, qa-tools, scraping, travel, go, node, python
+# modules = ["electronics", "desktop"]
+#
+# Disable GUI (Xvfb + VNC + browser). GUI is enabled by default.
+# gui = false
+# Timezone (IANA format). If omitted, inherits host $TZ.
 # timezone = "Europe/Prague"
 
-[op]
-# 1Password items to resolve and inject as env vars.
-# Requires `op` CLI on the host.
-items = [
-    "prod-nmd-trips",
-    "prod-nmd-finances"
-]
+# AI agent configuration — all LLM settings in one place.
+# [llm]
+# Route Claude Code through a local ollama instance (Anthropic API compat).
+# Equivalent to: cell claude --ollama
+# use_ollama = false
+#
+# Project context injected into all AI agents (Claude, Codex, OpenCode).
+# Sits on top of CLAUDE.md and agent-native config files.
+# system_prompt = """
+# This project uses PostgreSQL 16 with pgx/v5.
+# API endpoints follow REST conventions at /api/v2/.
+# """
 
-# [env]
+# Git identity forwarded into the container.
+# If omitted and no GIT_AUTHOR_* env vars are set, ~/.config/git/config is mounted read-only instead.
+# [git]
+# author_name = "Your Name"
+# author_email = "you@example.com"
+# committer_name = "Your Name"   # defaults to author_name if omitted
+# committer_email = "you@example.com"  # defaults to author_email if omitted
+
+# 1Password documents whose fields are passed into the container as env vars.
+# Requires `op` CLI on the host. Each field in the document becomes an env var:
+# e.g. a field labeled "API_KEY" with value "sk-123" → env var API_KEY=sk-123.
+# [op]
+# documents = ["prod-api-keys", "dev-secrets"]
+
+# AWS credential scoping. When true, credentials are scoped to read-only
+# via IAM session policy. All AWS tools (cli, terraform, SDKs, MCP servers)
+# get read-only creds. Default: false (full access).
+# [aws]
+# read_only = true
+
+# Port forwarding from container to host. Bare port = same on both sides.
+# [ports]
+# forward = ["3000", "8080:3000"]
+
 # Extra environment variables forwarded into the container.
-# MY_VAR = "value"
+[env]
+# GITHUB_TOKEN = "ghp_xxx"
+# ANTHROPIC_API_KEY = "sk-ant-xxx"
 
+# mise runtime settings forwarded as MISE_<UPPER_KEY> env vars.
+# See: https://mise.jdx.dev/configuration.html
+[mise]
+# trusted_config_paths = "/"
+# idiomatic_version_file = "true"
+
+# Extra volume mounts appended to docker run.
 # [[volumes]]
 # mount = "~/work/secrets:/run/secrets:ro"
+#
+# [[volumes]]
+# mount = "~/.ssh:/home/user/.ssh:ro"
+
+# [llm.models]
+# Default LLM model (format: provider/model). Used by opencode and other agents.
+# default = "ollama/deepseek-r1:32b"
+
+# [llm.models.providers.ollama]
+# models = ["deepseek-r1:32b", "qwen3:8b"]
+
+# [llm.models.providers.lmstudio]
+# base_url = "http://host.docker.internal:1234/v1"
+# models = ["deepseek-r1:32b"]
+
+# npm packages installed in the container. Edit and run 'cell build'.
+# All core tools (claude-code, codex, slidev, patchright, opentofu-mcp) are
+# managed via nix modules. Only add packages here that are NOT in nixhome.
+# [packages.npm]
+# "some-tool" = "^1.0.0"
+
+# Python packages installed in the container. Edit and run 'cell build'.
+[packages.python]
+"pre-commit" = "*"
+# "httpie" = "*"
+# "pipx" = "*"

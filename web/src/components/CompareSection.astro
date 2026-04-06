@@ -1,0 +1,57 @@
+---
+interface Props {
+  dcRows: { feature: string; devcell: string; devcontainers: string }[];
+  vsRows: { feature: string; devcell: string; openclaw: string }[];
+}
+const { dcRows, vsRows } = Astro.props;
+---
+
+<section id="compare">
+  <p class="section-label">How we compare</p>
+  <h2>How we compare.</h2>
+  <div class="compare-grid">
+    <div class="compare-block">
+      <h3>DevCell vs Dev Containers</h3>
+      <p style="margin-bottom: 0.75rem;">Dev Containers are editor-first — great for VS Code workflows. DevCell is agent-first — built for AI coding agents that run headless with auto-approve.</p>
+      <div class="vs-table">
+        <div class="vs-header">
+          <span></span>
+          <span>DevCell</span>
+          <span>Dev Containers</span>
+        </div>
+        {dcRows.map((r) => (
+          <div class="vs-row">
+            <span class="vs-feature">{r.feature}</span>
+            <span class="vs-cell">{r.devcell}</span>
+            <span class="vs-cell">{r.devcontainers}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+    <div class="compare-block">
+      <h3>DevCell vs OpenClaw</h3>
+      <p style="margin-bottom: 0.75rem;">OpenClaw is an open-source messaging gateway that added AI agent features. Different architecture, different trade-offs.</p>
+      <div class="vs-table">
+        <div class="vs-header">
+          <span></span>
+          <span>DevCell</span>
+          <span>OpenClaw</span>
+        </div>
+        {vsRows.map((r) => (
+          <div class="vs-row">
+            <span class="vs-feature">{r.feature}</span>
+            <span class="vs-cell" set:html={r.devcell} />
+            <span class="vs-cell" set:html={r.openclaw} />
+          </div>
+        ))}
+      </div>
+      <p class="vs-sources" style="margin-top: 0.75rem; margin-bottom: 0.5rem;">OpenClaw's individual bugs get patched. But the architecture keeps producing them: an open plugin marketplace, network-exposed by default, and unauthenticated local WebSockets created three separate critical vulnerability classes in under two months.</p>
+      <div class="vs-sources">
+        [1] <a href="https://thehackernews.com/2026/02/researchers-find-341-malicious-clawhub.html" target="_blank">Malicious ClawHub Skills Stealing Data</a> — The Hacker News, Feb 2026<br/>
+        [2] <a href="https://censys.com/blog/openclaw-in-the-wild-mapping-the-public-exposure-of-a-viral-ai-assistant/" target="_blank">OpenClaw in the Wild: Mapping Public Exposure</a> — Censys, Jan 2026<br/>
+        [3] <a href="https://www.sonicwall.com/blog/openclaw-auth-token-theft-leading-to-rce-cve-2026-25253" target="_blank">CVE-2026-25253: One-Click RCE</a> — SonicWall. Affects all versions before v2026.1.29<br/>
+        [4] <a href="https://www.oasis.security/blog/openclaw-vulnerability" target="_blank">ClawJacked: Website-to-Agent Hijack</a> — Oasis Security. Affects all versions before v2026.2.25
+      </div>
+    </div>
+  </div>
+</section>

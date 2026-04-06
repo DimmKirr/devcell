@@ -10,6 +10,8 @@ import (
 	"github.com/DimmKirr/devcell/internal/runner"
 )
 
+func ptrBool(b bool) *bool { return &b }
+
 // buildTestArgv builds argv for a given binary+defaultFlags+userArgs using a
 // controlled environment — no real docker, no real filesystem.
 func buildTestArgv(binary string, defaultFlags, userArgs []string, envPairs ...string) []string {

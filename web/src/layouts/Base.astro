@@ -19,10 +19,19 @@ const {
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;700&family=Inter:wght@700;900&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.2/css/all.min.css" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="description" content={description} />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:image" content="https://devcell.sh/og-image.png" />
+    <meta property="og:url" content="https://devcell.sh" />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content="https://devcell.sh/og-image.png" />
+    <script defer src="https://cloud.umami.is/script.js" data-website-id="e97edbc2-cf4c-4565-a9f2-21db19e1a57b"></script>
     <slot name="head" />
     <title>{title}</title>
   </head>
@@ -41,11 +50,12 @@ const {
         --><span class="logo-dev-container"><span class="logo-dev">dev</span></span><!--
         --><span class="logo-accent">cell</span>
       </a>
+      <button class="nav-toggle" aria-label="Menu" onclick="this.nextElementSibling.classList.toggle('open')">☰</button>
       <nav>
         <a href="/#why">Why it matters</a>
         <a href="/#inside">What's inside</a>
         <a href="/#quickstart">Quickstart</a>
-        <a href="/docs/cell" class:list={[{ active: activeNav === 'docs' }]}>Docs</a>
+        <a href="/docs/quickstart" class:list={[{ active: activeNav === 'docs' }]}>Docs</a>
         <a href="https://github.com/DimmKirr/devcell">GitHub</a>
       </nav>
     </header>
@@ -175,6 +185,42 @@ const {
 
   nav a:hover { border-bottom-color: var(--black); }
   nav a.active { border-bottom-color: var(--accent); }
+
+  /* MOBILE NAV */
+  .nav-toggle {
+    display: none;
+    background: none;
+    border: none;
+    font-size: 1.4rem;
+    cursor: pointer;
+    padding: 0.25rem;
+    line-height: 1;
+  }
+
+  @media (max-width: 768px) {
+    header { padding: 0.75rem 1.25rem; }
+    .nav-toggle { display: block; }
+    nav {
+      display: none;
+      position: absolute;
+      top: 100%;
+      left: 0;
+      right: 0;
+      background: var(--white);
+      border-bottom: var(--border);
+      padding: 0.75rem 1.25rem;
+      flex-direction: column;
+      gap: 0;
+    }
+    nav.open { display: flex; }
+    nav a {
+      margin-left: 0;
+      padding: 0.6rem 0;
+      border-bottom: 1px solid #EEE;
+      font-size: 0.82rem;
+    }
+    nav a:last-child { border-bottom: none; }
+  }
 
   /* SHARED INLINE CODE */
   :not(pre) > code {

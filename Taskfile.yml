@@ -33,13 +33,13 @@ tasks:
     aliases: [image:build, bake:local]
     silent: true
     cmds:
-      - USER_UID=$(id -u) USER_GID=$(id -g) GIT_COMMIT={{.GIT_COMMIT_HASH}} PLATFORMS="" docker buildx bake --file {{.TASKFILE_DIR}}/docker-bake.hcl --load local {{.CLI_ARGS}}
+      - USER_UID=$(id -u) USER_GID=$(id -g) GIT_COMMIT={{.GIT_COMMIT_HASH}} NIX_CACHE_IMAGE=public.ecr.aws/docker/library/debian:trixie-slim PLATFORMS="" docker buildx bake --file {{.TASKFILE_DIR}}/docker-bake.hcl --load local {{.CLI_ARGS}}
 
   image:build:ultimate:
     desc: Build ultimate base image locally (FROM base, adds nix ultimate stack + KiCad)
     silent: true
     cmds:
-      - USER_UID=$(id -u) USER_GID=$(id -g) GIT_COMMIT={{.GIT_COMMIT_HASH}} PLATFORMS="" docker buildx bake --file {{.TASKFILE_DIR}}/docker-bake.hcl --load local-ultimate {{.CLI_ARGS}}
+      - USER_UID=$(id -u) USER_GID=$(id -g) GIT_COMMIT={{.GIT_COMMIT_HASH}} NIX_CACHE_IMAGE=public.ecr.aws/docker/library/debian:trixie-slim PLATFORMS="" docker buildx bake --file {{.TASKFILE_DIR}}/docker-bake.hcl --load local-ultimate {{.CLI_ARGS}}
 
   image:build:user-local:dev:
     desc: "Build user image for dev/test (wraps: cell init --force --yes --local-nixhome)"
@@ -47,7 +47,7 @@ tasks:
     dir: "{{.TASKFILE_DIR}}"
     env:
       XDG_CONFIG_HOME: "{{.TASKFILE_DIR}}/test/testdata/devcell-config-simple"
-      DEVCELL_BASE_IMAGE: "ghcr.io/dimmkirr/devcell:base-local"
+      DEVCELL_BASE_IMAGE: "ghcr.io/dimmkirr/devcell:core-local"
       DEVCELL_NIXHOME_PATH: "{{.TASKFILE_DIR}}/nixhome"
     cmds:
       - cell build --debug {{.CLI_ARGS}}
@@ -58,7 +58,7 @@ tasks:
     dir: "{{.TASKFILE_DIR}}"
     env:
       XDG_CONFIG_HOME: "{{.TASKFILE_DIR}}/test/testdata/devcell-config-simple"
-      DEVCELL_BASE_IMAGE: "ghcr.io/dimmkirr/devcell:base-local"
+      DEVCELL_BASE_IMAGE: "ghcr.io/dimmkirr/devcell:core-local"
     cmds:
       - cell init --force --yes --local-nixhome {{.TASKFILE_DIR}}/nixhome --debug {{.CLI_ARGS}}
 
@@ -66,7 +66,7 @@ tasks:
     desc: Build ci group and push to registry (multi-arch)
     silent: true
     cmds:
-      - GIT_COMMIT={{.GIT_COMMIT_HASH}} docker buildx bake --file {{.TASKFILE_DIR}}/docker-bake.hcl --push ci {{.CLI_ARGS}}
+      - GIT_COMMIT={{.GIT_COMMIT_HASH}} docker buildx bake --file {{.TASKFILE_DIR}}/docker-bake.hcl --set '*.output=type=image,push=true,compression=zstd,compression-level=3,force-compression=true' ci {{.CLI_ARGS}}
 
   nix:validate:
     desc: Validate all nixhome stacks — syntax check then attr check (no build, no activation)

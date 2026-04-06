@@ -3,9 +3,7 @@ name = "devcell-tools"
 version = "1.0.0"
 description = "Global Python tools for devcell"
 requires-python = ">=3.13"
-dependencies = [
-    "pre-commit",
-]
+dependencies = []
 
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]

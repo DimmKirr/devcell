@@ -2,6 +2,7 @@
 # Merged from managed-opencode.nix + OpenCode parts of managed-mcp.nix.
 {
   pkgs,
+  pkgsEdge,
   lib,
   config,
   ...
@@ -50,7 +51,7 @@ in {
 
   config = {
     home.packages = with pkgs; [
-      opencode # AI coding agent for terminal
+      pkgsEdge.opencode # AI coding agent for terminal (edge for latest)
     ];
 
     # ── Default OpenCode provider config ─────────────────────────────────

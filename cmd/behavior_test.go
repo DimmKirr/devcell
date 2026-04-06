@@ -28,7 +28,7 @@ func buildBehaviourArgv(cwd string, envPairs []string, binary string, defaultFla
 
 // Scenario A: cwd=/tmp/myproject, TMUX_PANE=%3
 func TestScenarioA_ContainerNameAndVNC(t *testing.T) {
-	guiCfg := cfg.CellConfig{Cell: cfg.CellSection{GUI: true}}
+	guiCfg := cfg.CellConfig{Cell: cfg.CellSection{GUI: ptrBool(true)}}
 	argv := buildBehaviourArgv("/tmp/myproject", []string{"TMUX_PANE", "%3"},
 		"claude", []string{"--dangerously-skip-permissions"}, nil, guiCfg)
 
@@ -42,7 +42,7 @@ func TestScenarioA_ContainerNameAndVNC(t *testing.T) {
 
 // Scenario B: two panes — names and VNC ports differ
 func TestScenarioB_TwoPanesNamesAndPortsDiffer(t *testing.T) {
-	guiCfg := cfg.CellConfig{Cell: cfg.CellSection{GUI: true}}
+	guiCfg := cfg.CellConfig{Cell: cfg.CellSection{GUI: ptrBool(true)}}
 	argv3 := buildBehaviourArgv("/tmp/myproject", []string{"TMUX_PANE", "%3"},
 		"claude", nil, nil, guiCfg)
 	argv4 := buildBehaviourArgv("/tmp/myproject", []string{"TMUX_PANE", "%4"},
@@ -104,7 +104,7 @@ func hasConsecutive(argv []string, a, b string) bool {
 
 // Scenario: GUI=true publishes both VNC and RDP ports
 func TestScenarioA_RDPPortPublished(t *testing.T) {
-	guiCfg := cfg.CellConfig{Cell: cfg.CellSection{GUI: true}}
+	guiCfg := cfg.CellConfig{Cell: cfg.CellSection{GUI: ptrBool(true)}}
 	argv := buildBehaviourArgv("/tmp/myproject", []string{"TMUX_PANE", "%3"},
 		"claude", nil, nil, guiCfg)
 
@@ -134,8 +134,9 @@ func TestScenarioA_ConfigDirVolume(t *testing.T) {
 }
 
 func TestScenarioA_RDPPortNotPublishedWithoutGUI(t *testing.T) {
+	noGUI := cfg.CellConfig{Cell: cfg.CellSection{GUI: ptrBool(false)}}
 	argv := buildBehaviourArgv("/tmp/myproject", []string{"TMUX_PANE", "%3"},
-		"claude", nil, nil, cfg.CellConfig{})
+		"claude", nil, nil, noGUI)
 
 	for i, a := range argv {
 		if a == "-p" && i+1 < len(argv) && strings.Contains(argv[i+1], "3389") {

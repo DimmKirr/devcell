@@ -14,7 +14,7 @@ cd your-project
 cell claude
 ```
 
-On first run, `cell` scaffolds `~/.config/devcell/devcell.toml` and builds the image (~5 min). Works with `cell codex` and `cell opencode` too.
+On first run, `cell` creates `.devcell.toml` and `.devcell/` in your project directory, then builds the image (~5 min). Works with `cell codex` and `cell opencode` too.
 
 ## What you get
 
@@ -71,7 +71,7 @@ Baked into the image and auto-merged into each agent's config at container start
 
 ## Configuration
 
-Global config at `~/.config/devcell/devcell.toml`. Per-project overrides via `.devcell.toml` (create with `cell init .`). See `cell --help` and the [CLI docs](https://devcell.sh/docs/cell) for the full reference.
+Project config at `.devcell.toml` (created by `cell init` or first run). Optional global defaults at `~/.config/devcell/devcell.toml`. See `cell --help` and the [CLI docs](https://devcell.sh/docs/cell) for the full reference.
 
 ## Customization
 
@@ -81,7 +81,7 @@ Start simple, go deeper when you need to.
 
 **Add packages** - add npm or Python packages in `devcell.toml`, then `cell build`.
 
-**Extend a stack** - edit `~/.config/devcell/flake.nix` to add nix packages. Run `cell build` to apply.
+**Extend a stack** - edit `.devcell/flake.nix` to add nix packages. Run `cell build` to apply.
 
 **Fork nixhome** - fork the [nixhome](https://github.com/DimmKirr/devcell/tree/main/nixhome) repo, point your flake to your fork. Upstream updates still merge cleanly.
 

@@ -30,7 +30,11 @@ in {
         idiomatic_version_file = true
         idiomatic_version_file_enable_tools = ["node", "go"]
         trusted_config_paths = ["/"]
-      '';
+
+        [tools]
+      '' + lib.concatStringsSep "\n"
+        (lib.mapAttrsToList (name: version: "${name} = \"${version}\"") cfg.tools)
+      + "\n";
     };
 
     # .tool-versions is written to /etc/devcell/ (not home.file) to avoid

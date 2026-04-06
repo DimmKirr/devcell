@@ -2,6 +2,7 @@ package config_test
 
 import (
 	"net"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -117,6 +118,76 @@ func TestConfigDir_DefaultHome(t *testing.T) {
 	}
 }
 
+// --- BuildDir ---
+
+func TestBuildDir_DefaultSameAsConfigDir(t *testing.T) {
+	c := config.Load("/cwd", env("HOME", "/home/bob"))
+	if c.BuildDir != c.ConfigDir {
+		t.Errorf("BuildDir should default to ConfigDir, got %q vs %q", c.BuildDir, c.ConfigDir)
+	}
+}
+
+func TestResolveBuildDir_WithProjectConfig(t *testing.T) {
+	got := config.ResolveBuildDir("/myproject", "/home/bob/.config/devcell", true)
+	if got != "/myproject/.devcell" {
+		t.Errorf("want /myproject/.devcell, got %q", got)
+	}
+}
+
+func TestResolveBuildDir_WithoutProjectConfig(t *testing.T) {
+	got := config.ResolveBuildDir("/myproject", "/home/bob/.config/devcell", false)
+	if got != "/home/bob/.config/devcell" {
+		t.Errorf("want /home/bob/.config/devcell, got %q", got)
+	}
+}
+
+func TestLoadFromOS_BuildDirWithProjectConfig(t *testing.T) {
+	// Create a temp dir with .devcell.toml to simulate project config
+	tmp := t.TempDir()
+	if err := os.WriteFile(tmp+"/.devcell.toml", []byte("[cell]\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// LoadFromOS uses os.Getwd, so we test ResolveBuildDir directly
+	// with the filesystem check
+	_, err := os.Stat(tmp + "/.devcell.toml")
+	exists := err == nil
+	got := config.ResolveBuildDir(tmp, "/home/bob/.config/devcell", exists)
+	if got != tmp+"/.devcell" {
+		t.Errorf("want %s/.devcell, got %q", tmp, got)
+	}
+}
+
+func TestEnsureBuildDir_CreatesDirectory(t *testing.T) {
+	tmp := t.TempDir()
+	buildDir := tmp + "/subproject/.devcell"
+	// Directory doesn't exist yet
+	if _, err := os.Stat(buildDir); err == nil {
+		t.Fatal("buildDir should not exist yet")
+	}
+	if err := config.EnsureBuildDir(buildDir); err != nil {
+		t.Fatalf("EnsureBuildDir: %v", err)
+	}
+	info, err := os.Stat(buildDir)
+	if err != nil {
+		t.Fatalf("buildDir should exist after EnsureBuildDir: %v", err)
+	}
+	if !info.IsDir() {
+		t.Error("buildDir should be a directory")
+	}
+}
+
+func TestEnsureBuildDir_Idempotent(t *testing.T) {
+	tmp := t.TempDir()
+	buildDir := tmp + "/.devcell"
+	if err := config.EnsureBuildDir(buildDir); err != nil {
+		t.Fatal(err)
+	}
+	// Calling again should not error
+	if err := config.EnsureBuildDir(buildDir); err != nil {
+		t.Fatalf("second EnsureBuildDir should not error: %v", err)
+	}
+}
+
 // --- PortPrefix / VNCPort ---
 
 func TestPortPrefix_NoPrefixCellID3(t *testing.T) {
@@ -177,7 +248,7 @@ func TestContainerName_NoSpacesOrSlashes(t *testing.T) {
 
 func TestImage_Default(t *testing.T) {
 	c := config.Load("/cwd", env())
-	if c.Image != "ghcr.io/dimmkirr/devcell:latest-ultimate" {
+	if c.Image != "ghcr.io/dimmkirr/devcell:v0.0.0-ultimate" {
 		t.Errorf("unexpected default image: %q", c.Image)
 	}
 }

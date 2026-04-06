@@ -1,9 +1,11 @@
 # nixos.nix — Nix/NixOS development tools and MCP server
 {
   pkgs,
+  config,
   mcp-nixos,
   ...
 }: let
+  bin = config.devcell.managedMcp.nixBinPrefix;
   mcpPkg = mcp-nixos.packages.${pkgs.system}.default;
 in {
   home.packages = with pkgs; [
@@ -18,7 +20,7 @@ in {
   ];
 
   devcell.managedMcp.servers.nixos = {
-    command = "${mcpPkg}/bin/mcp-nixos";
+    command = "${bin}/mcp-nixos";
     args = [];
   };
 }

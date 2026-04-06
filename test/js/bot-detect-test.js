@@ -5,7 +5,7 @@
 // Uses the same Chrome flags and init-script as patchright-mcp-cell wrapper.
 // Outputs structured results for fast iteration without MCP reconnection.
 
-const { chromium } = require('/opt/npm-tools/node_modules/patchright');
+const { chromium } = require('/opt/devcell/.local/state/nix/profiles/profile/lib/node_modules/nix-patchright-mcp-server/node_modules/patchright');
 const fs = require('fs');
 const path = require('path');
 
