@@ -21,3 +21,5 @@ test/testdata/**/nixhome
 test/results
 .devcell
 .devcell.toml
+.gocache
+.gomodcache

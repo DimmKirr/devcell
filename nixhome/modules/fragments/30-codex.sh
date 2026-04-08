@@ -127,5 +127,12 @@ if [ -d "$DEVCELL_HOME/.codex/skills" ] && [ -n "$(ls -A "$DEVCELL_HOME/.codex/s
     log "✓ Codex skills synced from nix"
 fi
 
+# ── Migrate: remove stale oss_provider = "lms" (set by old -p lms flag) ──
+config_toml="$HOME/.codex/config.toml"
+if [ -f "$config_toml" ] && grep -q '^oss_provider = "lms"' "$config_toml"; then
+    sed -i '/^oss_provider = "lms"/d' "$config_toml"
+    log "✓ Removed stale oss_provider = \"lms\" from ~/.codex/config.toml"
+fi
+
 merge_codex_mcp "$HOME/.codex/config.toml"
 [ -d "$HOME/.codex" ] && chown -R "$HOST_USER" "$HOME/.codex"

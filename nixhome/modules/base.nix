@@ -8,7 +8,9 @@
   # ── Locale support ──────────────────────────────────────────────────────────
   # Container needs en_US.UTF-8 locale for consistent browser fingerprinting
   # and correct text handling. LOCALE_ARCHIVE tells glibc where to find locales.
-  home.sessionVariables.LOCALE_ARCHIVE = "${pkgs.glibcLocales}/lib/locale/locale-archive";
+  home.sessionVariables = lib.mkIf pkgs.stdenv.isLinux {
+    LOCALE_ARCHIVE = "${pkgs.glibcLocales}/lib/locale/locale-archive";
+  };
 
   # ── Stage entrypoint fragments to /etc/devcell/entrypoint.d/ ───────────────
   # Any module can drop a fragment into ~/.config/devcell/entrypoint.d/ via home.file.
@@ -49,31 +51,32 @@
     fi
   '';
 
-  home.file = {
-    # ── Entrypoint fragments ─────────────────────────────────────────────────
-    # Standalone shell scripts sourced by entrypoint.sh at container start.
-    # See fragments/ directory for the actual shell code.
-    # Locale — must run before any other fragment so bash doesn't warn.
-    ".config/devcell/entrypoint.d/01-locale.sh" = {
-      executable = true;
-      text = ''
-        #!/bin/sh
-        export LOCALE_ARCHIVE="${pkgs.glibcLocales}/lib/locale/locale-archive"
-      '';
+  home.file =
+    {
+      # ── Entrypoint fragments ───────────────────────────────────────────────
+      # Standalone shell scripts sourced by entrypoint.sh at container start.
+      # See fragments/ directory for the actual shell code.
+      ".config/devcell/entrypoint.d/05-shell-rc.sh" = {
+        executable = true;
+        source = ./fragments/05-shell-rc.sh;
+      };
+      ".config/devcell/entrypoint.d/20-homedir.sh" = {
+        executable = true;
+        source = ./fragments/20-homedir.sh;
+      };
+    }
+    // lib.optionalAttrs pkgs.stdenv.isLinux {
+      # Locale — must run before any other fragment so bash doesn't warn.
+      ".config/devcell/entrypoint.d/01-locale.sh" = {
+        executable = true;
+        text = ''
+          #!/bin/sh
+          export LOCALE_ARCHIVE="${pkgs.glibcLocales}/lib/locale/locale-archive"
+        '';
+      };
     };
-    ".config/devcell/entrypoint.d/05-shell-rc.sh" = {
-      executable = true;
-      source = ./fragments/05-shell-rc.sh;
-    };
-    ".config/devcell/entrypoint.d/20-homedir.sh" = {
-      executable = true;
-      source = ./fragments/20-homedir.sh;
-    };
-  };
 
   home.packages = with pkgs; [
-    glibcLocales  # en_US.UTF-8 locale for browser fingerprinting + text handling
-
     # fonts — monospace with good Unicode block element coverage
     cascadia-code  # Microsoft terminal font; seamless block elements
     fira-code      # popular terminal font; decent block elements
@@ -103,5 +106,8 @@
     wget # HTTP downloader
     rsync # fast file sync (used by entrypoint fragment staging)
     yq-go # TOML/YAML/JSON processor
+  ] ++ lib.optionals pkgs.stdenv.isLinux [
+    glibcLocales # en_US.UTF-8 locale for browser fingerprinting + text handling
+    bubblewrap   # unprivileged sandboxing tool used by Linux-only tooling
   ];
 }
