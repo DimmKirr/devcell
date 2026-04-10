@@ -11,8 +11,6 @@ import (
 	"github.com/DimmKirr/devcell/internal/config"
 	internalrdp "github.com/DimmKirr/devcell/internal/rdp"
 	"github.com/DimmKirr/devcell/internal/ux"
-	"github.com/charmbracelet/lipgloss"
-	"github.com/charmbracelet/lipgloss/table"
 	"github.com/spf13/cobra"
 )
 
@@ -246,20 +244,26 @@ func rdpList() error {
 	if err != nil {
 		return err
 	}
+	return renderRDPList(m)
+}
+
+// renderRDPList renders the RDP container map in the current OutputFormat.
+// Extracted for testability without a live docker daemon.
+func renderRDPList(m map[string]string) error {
+	headers := []string{"APP_NAME", "PORT", "URL"}
 	if len(m) == 0 {
-		fmt.Println("No running cell containers with RDP found.")
+		if ux.OutputFormat != "text" {
+			ux.PrintTable(headers, nil)
+		} else {
+			fmt.Println("No running cell containers with RDP found.")
+		}
 		return nil
 	}
 	var rows [][]string
 	for app, port := range m {
 		rows = append(rows, []string{app, port, internalrdp.RDPUrl(port)})
 	}
-	t := table.New().
-		Border(lipgloss.NormalBorder()).
-		BorderStyle(ux.TableBorder).
-		Headers("APP_NAME", "PORT", "URL").
-		Rows(rows...)
-	fmt.Println(t)
+	ux.PrintTable(headers, rows)
 	return nil
 }
 

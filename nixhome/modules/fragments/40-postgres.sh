@@ -33,8 +33,14 @@ fi
 chown -R "$HOST_USER" "$PGDATA"
 
 # Start PostgreSQL as session user (TCP on localhost:5432 + Unix socket in /tmp)
-gosu "$HOST_USER" "$NIX_BIN/pg_ctl" -D "$PGDATA" -l "$PGDATA/postgresql.log" \
-    -o "-p $PGPORT -k /tmp" start
+# pg_ctl prints "waiting for server to start..." to stdout — suppress unless debug mode.
+if [ "${DEVCELL_DEBUG:-false}" = "true" ]; then
+    gosu "$HOST_USER" "$NIX_BIN/pg_ctl" -D "$PGDATA" -l "$PGDATA/postgresql.log" \
+        -o "-p $PGPORT -k /tmp" start
+else
+    gosu "$HOST_USER" "$NIX_BIN/pg_ctl" -D "$PGDATA" -l "$PGDATA/postgresql.log" \
+        -o "-p $PGPORT -k /tmp" start >/dev/null 2>&1
+fi
 
 # Readiness gate — block until accepting connections (up to 15s)
 for _ in $(seq 1 30); do

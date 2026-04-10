@@ -8,10 +8,18 @@ import (
 
 	"github.com/DimmKirr/devcell/internal/ollama"
 	"github.com/DimmKirr/devcell/internal/ux"
-	"github.com/charmbracelet/lipgloss"
-	"github.com/charmbracelet/lipgloss/table"
 	"github.com/spf13/cobra"
 )
+
+// ModelEntry is the typed representation of a ranked model for JSON/YAML output.
+type ModelEntry struct {
+	Rank     int     `json:"rank"      yaml:"rank"`
+	Name     string  `json:"name"      yaml:"name"`
+	SWEScore float64 `json:"swe_score" yaml:"swe_score"`
+	Size     string  `json:"size"      yaml:"size"`
+	Type     string  `json:"type"      yaml:"type"`
+	Hardware string  `json:"hardware"  yaml:"hardware"`
+}
 
 // Reuse shared styles from ux package.
 var (
@@ -135,27 +143,39 @@ Examples:
 			log.Debug(fmt.Sprintf("System RAM: %.1f GB", systemRAM))
 		}
 
-		fmt.Println()
-		fmt.Println(modBold.Render(" Local Models (ranked by SWE-Bench score)"))
-		fmt.Println()
+		renderModels(ranked, hfInfoMap, systemRAM)
 
-		// Build table rows.
-		rows := make([][]string, 0, len(ranked))
+		if ux.OutputFormat == "text" {
+			fmt.Println(modGray.Render(fmt.Sprintf("%*s", 70, fmt.Sprintf("ollama %s", baseURL))))
+			fmt.Println()
+			if sweErr != nil {
+				ux.Info("Scores from built-in estimates (SWE-bench fetch failed).")
+			} else {
+				ux.Info("Scores from SWE-bench Verified (full-model, not quantized).")
+			}
+			ux.Info(fmt.Sprintf("Hardware: Q4 estimate vs %.0fGB RAM. --debug for details.", systemRAM))
+			fmt.Println()
+
+			snippet := ollama.FormatTOMLSnippet(ranked)
+			ux.Info(fmt.Sprintf("%d models found. Add to ~/.config/devcell/devcell.toml:", len(ranked)))
+			fmt.Println()
+			for _, line := range strings.Split(snippet, "\n") {
+				fmt.Printf("  %s\n", line)
+			}
+			fmt.Println()
+		}
+
+		return nil
+	},
+}
+
+// renderModels displays the ranked model list in the current OutputFormat.
+// In json/yaml mode, prose (header, TOML snippet, footer) is suppressed.
+// Extracted for testability without a live ollama daemon.
+func renderModels(ranked []ollama.RankedModel, hfInfoMap map[string]ollama.HFModelInfo, systemRAM float64) {
+	if ux.OutputFormat != "text" {
+		entries := make([]ModelEntry, 0, len(ranked))
 		for _, r := range ranked {
-			score := modGray.Render("-")
-			if r.SWEScore > 0 {
-				label := fmt.Sprintf("~%.0f%%", r.SWEScore)
-				if r.ScoreSource != "" {
-					label += " " + modGray.Render(r.ScoreSource)
-				}
-				score = label
-			}
-			size := r.ParameterSize
-			if size == "" {
-				size = "-"
-			}
-
-			// Task type from HuggingFace.
 			family := ollama.ModelFamily(r.Name)
 			taskLabel := "General"
 			if info, ok := hfInfoMap[family]; ok {
@@ -163,57 +183,82 @@ Examples:
 			} else {
 				taskLabel = ollama.InferTaskLabel(ollama.HFModelInfo{}, r.Name)
 			}
-
-			// Hardware check.
-			hwLabel := modGray.Render("-")
+			hw := ""
 			if systemRAM > 0 {
 				ok, needed := ollama.CheckHardware(r.ParameterSize, systemRAM)
 				if needed > 0 {
 					if ok {
-						hwLabel = modGreen.Render(fmt.Sprintf("OK (%.0fGB)", needed))
+						hw = fmt.Sprintf("OK (%.0fGB)", needed)
 					} else {
-						hwLabel = modRed.Render(fmt.Sprintf("%.0fGB needed", needed))
+						hw = fmt.Sprintf("%.0fGB needed", needed)
 					}
 				}
 			}
-
-			rows = append(rows, []string{
-				fmt.Sprintf("%d", r.Rank),
-				r.Name,
-				score,
-				size,
-				taskLabel,
-				hwLabel,
+			size := r.ParameterSize
+			if size == "" {
+				size = "-"
+			}
+			entries = append(entries, ModelEntry{
+				Rank:     r.Rank,
+				Name:     r.Name,
+				SWEScore: r.SWEScore,
+				Size:     size,
+				Type:     taskLabel,
+				Hardware: hw,
 			})
 		}
+		ux.PrintData(entries)
+		return
+	}
 
-		t := table.New().
-			Border(lipgloss.NormalBorder()).
-			BorderStyle(ux.TableBorder).
-			Headers("#", "Model", "Rating", "Size", "Type", "Hardware").
-			Rows(rows...)
-		fmt.Println(t)
-		fmt.Println(modGray.Render(fmt.Sprintf("%*s", 70, fmt.Sprintf("ollama %s", baseURL))))
+	// Text mode: prose header + styled table.
+	fmt.Println()
+	fmt.Println(modBold.Render(" Local Models (ranked by SWE-Bench score)"))
+	fmt.Println()
 
-		fmt.Println()
-		if sweErr != nil {
-			ux.Info("Scores from built-in estimates (SWE-bench fetch failed).")
+	headers := []string{"#", "Model", "Rating", "Size", "Type", "Hardware"}
+	rows := make([][]string, 0, len(ranked))
+	for _, r := range ranked {
+		score := modGray.Render("-")
+		if r.SWEScore > 0 {
+			label := fmt.Sprintf("~%.0f%%", r.SWEScore)
+			if r.ScoreSource != "" {
+				label += " " + modGray.Render(r.ScoreSource)
+			}
+			score = label
+		}
+		size := r.ParameterSize
+		if size == "" {
+			size = "-"
+		}
+		family := ollama.ModelFamily(r.Name)
+		taskLabel := "General"
+		if info, ok := hfInfoMap[family]; ok {
+			taskLabel = ollama.InferTaskLabel(info, r.Name)
 		} else {
-			ux.Info("Scores from SWE-bench Verified (full-model, not quantized).")
+			taskLabel = ollama.InferTaskLabel(ollama.HFModelInfo{}, r.Name)
 		}
-		ux.Info(fmt.Sprintf("Hardware: Q4 estimate vs %.0fGB RAM. --debug for details.", systemRAM))
-		fmt.Println()
-
-		snippet := ollama.FormatTOMLSnippet(ranked)
-		ux.Info(fmt.Sprintf("%d models found. Add to ~/.config/devcell/devcell.toml:", len(ranked)))
-		fmt.Println()
-		for _, line := range strings.Split(snippet, "\n") {
-			fmt.Printf("  %s\n", line)
+		hwLabel := modGray.Render("-")
+		if systemRAM > 0 {
+			ok, needed := ollama.CheckHardware(r.ParameterSize, systemRAM)
+			if needed > 0 {
+				if ok {
+					hwLabel = modGreen.Render(fmt.Sprintf("OK (%.0fGB)", needed))
+				} else {
+					hwLabel = modRed.Render(fmt.Sprintf("%.0fGB needed", needed))
+				}
+			}
 		}
-		fmt.Println()
-
-		return nil
-	},
+		rows = append(rows, []string{
+			fmt.Sprintf("%d", r.Rank),
+			r.Name,
+			score,
+			size,
+			taskLabel,
+			hwLabel,
+		})
+	}
+	ux.PrintTable(headers, rows)
 }
 
 func init() {

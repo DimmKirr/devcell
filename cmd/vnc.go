@@ -12,8 +12,6 @@ import (
 	internalrdp "github.com/DimmKirr/devcell/internal/rdp"
 	"github.com/DimmKirr/devcell/internal/ux"
 	internalvnc "github.com/DimmKirr/devcell/internal/vnc"
-	"github.com/charmbracelet/lipgloss"
-	"github.com/charmbracelet/lipgloss/table"
 	"github.com/spf13/cobra"
 )
 
@@ -225,20 +223,26 @@ func vncList() error {
 	if err != nil {
 		return err
 	}
+	return renderVNCList(m)
+}
+
+// renderVNCList renders the VNC container map in the current OutputFormat.
+// Extracted for testability without a live docker daemon.
+func renderVNCList(m map[string]string) error {
+	headers := []string{"APP_NAME", "PORT", "URL"}
 	if len(m) == 0 {
-		fmt.Println("No running cell containers found.")
+		if ux.OutputFormat != "text" {
+			ux.PrintTable(headers, nil)
+		} else {
+			fmt.Println("No running cell containers found.")
+		}
 		return nil
 	}
 	var rows [][]string
 	for app, port := range m {
 		rows = append(rows, []string{app, port, internalvnc.VNCUrl(port)})
 	}
-	t := table.New().
-		Border(lipgloss.NormalBorder()).
-		BorderStyle(ux.TableBorder).
-		Headers("APP_NAME", "PORT", "URL").
-		Rows(rows...)
-	fmt.Println(t)
+	ux.PrintTable(headers, rows)
 	return nil
 }
 

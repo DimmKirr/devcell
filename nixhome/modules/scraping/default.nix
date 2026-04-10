@@ -793,6 +793,7 @@ async function __hmMove(page, tx, ty) {\
     exec ${pkgs.chromium}/bin/chromium \
       --user-data-dir="''${CHROMIUM_PROFILE_PATH:-$HOME/.chrome-''${APP_NAME:-default}}" \
       --no-sandbox \
+      --disable-infobars \
       --disable-gpu \
       --disable-dev-shm-usage \
       "$@"

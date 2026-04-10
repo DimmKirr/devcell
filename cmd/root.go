@@ -64,6 +64,7 @@ func init() {
 	rootCmd.PersistentFlags().Bool("dry-run", false, "print docker run argv and exit without running")
 	rootCmd.PersistentFlags().Bool("plain-text", false, "disable spinners, use plain log output (for CI/non-TTY)")
 	rootCmd.PersistentFlags().Bool("debug", false, "plain-text mode plus stream full build log to stdout")
+	rootCmd.PersistentFlags().String("format", "text", "output format: text, yaml, or json")
 	rootCmd.PersistentFlags().String("engine", "docker", "execution engine: docker or vagrant")
 	rootCmd.PersistentFlags().Bool("macos", false, "use macOS VM via Vagrant (alias for --engine=vagrant)")
 	rootCmd.PersistentFlags().String("vagrant-provider", "utm", "Vagrant provider (e.g. utm)")
@@ -103,6 +104,9 @@ func applyOutputFlags() {
 			ux.Verbose = true
 		}
 	}
+	if f := scanStringFlag("--format"); f != "" {
+		ux.OutputFormat = f
+	}
 }
 
 // cellBoolFlags are boolean flags consumed by devcell: strip the flag token only.
@@ -123,6 +127,7 @@ var cellStringFlags = map[string]bool{
 	"--vagrant-box":      true,
 	"--base-image":       true,
 	"--session-name":     true,
+	"--format":           true,
 }
 
 // stripCellFlags removes devcell-specific flags (and their values) from args

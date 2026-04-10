@@ -149,4 +149,19 @@ merge_claude_nix
 
 # Merge nix MCP servers into user config
 merge_claude_mcp "$HOME/.claude.json"
+
+# Linear MCP: inject Bearer token auth when LINEAR_API_KEY is set,
+# overriding the OAuth plugin entry. Falls back to plugin OAuth when unset.
+if [ -n "${LINEAR_API_KEY:-}" ] && [ -f "$HOME/.claude.json" ]; then
+    _tmp=$(mktemp)
+    jq --arg key "$LINEAR_API_KEY" \
+      '.mcpServers.linear = {type:"http", url:"https://mcp.linear.app/mcp", headers:{Authorization:("Bearer "+$key)}}' \
+      "$HOME/.claude.json" > "$_tmp" 2>/dev/null \
+      && mv "$_tmp" "$HOME/.claude.json" \
+      && log "✓ Linear MCP: Bearer token auth (LINEAR_API_KEY set)" \
+      || { rm -f "$_tmp"; log "⚠ Linear MCP: failed to inject Bearer token"; }
+else
+    log "Linear MCP: no LINEAR_API_KEY — using OAuth plugin"
+fi
+
 [ -f "$HOME/.claude.json" ] && chown "$HOST_USER" "$HOME/.claude.json"
