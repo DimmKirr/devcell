@@ -55,6 +55,7 @@ const testLeaderboardJSON = `{
 
 func serveSWEBench(t *testing.T, payload string) *httptest.Server {
 	t.Helper()
+	t.Setenv("XDG_CACHE_HOME", t.TempDir()) // isolate on-disk cache per test
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(payload))
 	}))
@@ -145,6 +146,7 @@ func TestFetchSWEBenchScores_SkipsEntriesWithoutModelTag(t *testing.T) {
 }
 
 func TestFetchSWEBenchScores_ReturnsErrorOnBadJSON(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	srv := serveSWEBench(t, "not json")
 
 	_, err := ollama.FetchSWEBenchScores(context.Background(), srv.URL)
@@ -154,6 +156,7 @@ func TestFetchSWEBenchScores_ReturnsErrorOnBadJSON(t *testing.T) {
 }
 
 func TestFetchSWEBenchScores_ReturnsErrorOnHTTPFailure(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	_, err := ollama.FetchSWEBenchScores(context.Background(), "http://127.0.0.1:0")
 	if err == nil {
 		t.Error("expected error for unreachable server")
@@ -161,6 +164,7 @@ func TestFetchSWEBenchScores_ReturnsErrorOnHTTPFailure(t *testing.T) {
 }
 
 func TestFetchSWEBenchScores_ReturnsErrorWhenNoVerifiedLeaderboard(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	data := `{"leaderboards": [{"name": "Other", "results": []}]}`
 	srv := serveSWEBench(t, data)
 
@@ -285,5 +289,26 @@ func TestMatchModelScore_NilScores(t *testing.T) {
 	_, ok := ollama.MatchModelScore("deepseek-r1:32b", nil)
 	if ok {
 		t.Error("expected no match with nil scores")
+	}
+}
+
+func TestNormalizeCloudID(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"anthropic/claude-opus-4.6", "claude-opus-4-6"},
+		{"anthropic/claude-sonnet-4.5", "claude-sonnet-4-5"},
+		{"google/gemini-2.5-pro", "gemini-2-5-pro"},
+		{"openai/gpt-4.5", "gpt-4-5"},
+		{"deepseek/deepseek-r1", "deepseek-r1"},
+		{"claude-opus-4.6", "claude-opus-4-6"},
+		{"openai/gpt-4o:preview", "gpt-4o"},
+	}
+	for _, tt := range tests {
+		got := ollama.NormalizeCloudID(tt.input)
+		if got != tt.expected {
+			t.Errorf("NormalizeCloudID(%q) = %q, want %q", tt.input, got, tt.expected)
+		}
 	}
 }

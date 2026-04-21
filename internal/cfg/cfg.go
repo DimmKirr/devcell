@@ -15,14 +15,18 @@ const DefaultRegistry = "public.ecr.aws/w1l3v2k8/devcell"
 
 // CellSection holds [cell] config.
 type CellSection struct {
-	ImageTag    string   `toml:"image_tag"`
-	Registry    string   `toml:"registry"` // container registry; default: DefaultRegistry; env: DEVCELL_REGISTRY
-	GUI         *bool    `toml:"gui"`      // default: true (nil = not set → true)
-	Timezone    string   `toml:"timezone"` // IANA tz (e.g. "Europe/Prague"); default: host $TZ
-	Locale      string   `toml:"locale"`   // POSIX locale (e.g. "en_US.UTF-8"); default: "en_US.UTF-8"
-	Stack       string   `toml:"stack"`    // nix stack name (e.g. "go", "python"); default: "ultimate"
-	Modules     []string `toml:"modules"`  // extra nix modules to compose on top of stack
-	NixhomePath string   `toml:"nixhome"`  // local nixhome path; overridden by DEVCELL_NIXHOME_PATH env
+	ImageTag        string   `toml:"image_tag"`
+	Registry        string   `toml:"registry"`         // container registry; default: DefaultRegistry; env: DEVCELL_REGISTRY
+	GUI             *bool    `toml:"gui"`               // default: true (nil = not set → true)
+	Timezone        string   `toml:"timezone"`          // IANA tz (e.g. "Europe/Prague"); default: host $TZ
+	Locale          string   `toml:"locale"`            // POSIX locale (e.g. "en_US.UTF-8"); default: "en_US.UTF-8"
+	Stack           string   `toml:"stack"`             // nix stack name (e.g. "go", "python"); default: "ultimate"
+	Modules         []string `toml:"modules"`           // extra nix modules to compose on top of stack
+	NixhomePath     string   `toml:"nixhome"`           // local nixhome path; overridden by DEVCELL_NIXHOME_PATH env
+	Engine          string   `toml:"engine"`            // execution engine: "docker" (default) or "vagrant"
+	VagrantProvider string   `toml:"vagrant_provider"`  // vagrant provider: "utm" (default) or "libvirt"
+	VagrantBox      string   `toml:"vagrant_box"`       // vagrant box name override (default: "utm/bookworm")
+	DockerPrivileged bool     `toml:"docker_privileged"` // run container with --privileged; default: false
 }
 
 // ResolvedRegistry returns the effective registry: env > toml > default.
@@ -234,6 +238,9 @@ func Merge(global, project CellConfig) CellConfig {
 	// Modules: project replaces entirely when non-nil (explicit [] clears global)
 	if project.Cell.Modules != nil {
 		out.Cell.Modules = project.Cell.Modules
+	}
+	if project.Cell.DockerPrivileged {
+		out.Cell.DockerPrivileged = true
 	}
 
 	// LLM: project wins for scalars, providers accumulate

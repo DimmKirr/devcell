@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/DimmKirr/devcell/internal/cache"
 )
 
 // SWEBenchURL is the default URL for SWE-bench leaderboard data.
@@ -35,7 +37,15 @@ type lbEntry struct {
 //
 // All entries are included (not filtered by os_model) so that HF repo ID
 // matching can find scores for any model.
+// SWEBenchCacheTTL is the on-disk cache lifetime for SWE-bench leaderboard data.
+const SWEBenchCacheTTL = 6 * time.Hour
+
 func FetchSWEBenchScores(ctx context.Context, url string) (map[string]float64, error) {
+	const cacheKey = "swebench-scores.json"
+	if scores, ok := cache.Load[map[string]float64](cacheKey, SWEBenchCacheTTL); ok {
+		return scores, nil
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
@@ -99,6 +109,7 @@ func FetchSWEBenchScores(ctx context.Context, url string) (map[string]float64, e
 		}
 	}
 
+	cache.Save(cacheKey, scores)
 	return scores, nil
 }
 
@@ -188,6 +199,23 @@ func modelFamily(name string) string {
 		return name[:idx]
 	}
 	return name
+}
+
+// NormalizeCloudID converts an OpenRouter model ID to a SWE-bench-comparable key.
+// Strips provider prefix, converts dots to dashes, strips :variant suffixes.
+// "anthropic/claude-opus-4.6" → "claude-opus-4-6"
+func NormalizeCloudID(id string) string {
+	// Strip provider prefix (OpenRouter IDs have exactly one '/').
+	// e.g. "anthropic/claude-opus-4.6" → "claude-opus-4.6"
+	if idx := strings.LastIndex(id, "/"); idx >= 0 {
+		id = id[idx+1:]
+	}
+	// Strip :variant: "model:preview" → "model"
+	if idx := strings.Index(id, ":"); idx >= 0 {
+		id = id[:idx]
+	}
+	// Dots to dashes for SWE-bench key compatibility.
+	return strings.ReplaceAll(id, ".", "-")
 }
 
 // matchFallbackScore finds a fallback rating for a model by checking if any

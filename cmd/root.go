@@ -64,6 +64,7 @@ func init() {
 	rootCmd.PersistentFlags().Bool("dry-run", false, "print docker run argv and exit without running")
 	rootCmd.PersistentFlags().Bool("plain-text", false, "disable spinners, use plain log output (for CI/non-TTY)")
 	rootCmd.PersistentFlags().Bool("debug", false, "plain-text mode plus stream full build log to stdout")
+	rootCmd.PersistentFlags().String("format", "text", "output format: text, yaml, or json")
 	rootCmd.PersistentFlags().String("engine", "docker", "execution engine: docker or vagrant")
 	rootCmd.PersistentFlags().Bool("macos", false, "use macOS VM via Vagrant (alias for --engine=vagrant)")
 	rootCmd.PersistentFlags().String("vagrant-provider", "utm", "Vagrant provider (e.g. utm)")
@@ -103,6 +104,9 @@ func applyOutputFlags() {
 			ux.Verbose = true
 		}
 	}
+	if f := scanStringFlag("--format"); f != "" {
+		ux.OutputFormat = f
+	}
 }
 
 // cellBoolFlags are boolean flags consumed by devcell: strip the flag token only.
@@ -123,6 +127,7 @@ var cellStringFlags = map[string]bool{
 	"--vagrant-box":      true,
 	"--base-image":       true,
 	"--session-name":     true,
+	"--format":           true,
 }
 
 // stripCellFlags removes devcell-specific flags (and their values) from args
@@ -199,19 +204,41 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 		}
 	}
 
-	// Vagrant engine branch — stub, not yet implemented
+	// Vagrant engine branch
+	// Priority: CLI flag > [cell] config > default.
+	cellCfgForEngine := cfg.LoadFromOS(c.ConfigDir, c.BaseDir)
 	engine := scanStringFlag("--engine")
+	if engine == "" {
+		engine = cellCfgForEngine.Cell.Engine
+	}
 	if scanFlag("--macos") {
 		engine = "vagrant"
 	}
 	if engine == "vagrant" {
 		vagrantBox := scanStringFlag("--vagrant-box")
-		if err := scaffold.ScaffoldVagrantfile(c.ConfigDir, vagrantBox, ""); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: vagrantfile scaffold failed: %v\n", err)
+		if vagrantBox == "" {
+			vagrantBox = cellCfgForEngine.Cell.VagrantBox
 		}
-		fmt.Fprintln(os.Stderr, "Vagrant engine is not yet implemented.")
-		fmt.Fprintf(os.Stderr, "Vagrantfile scaffolded at: %s/Vagrantfile\n", c.ConfigDir)
-		return nil
+		if vagrantBox == "" {
+			vagrantBox = "utm/bookworm"
+		}
+		vagrantProvider := scanStringFlag("--vagrant-provider")
+		if vagrantProvider == "" {
+			vagrantProvider = cellCfgForEngine.Cell.VagrantProvider
+		}
+		if vagrantProvider == "" {
+			vagrantProvider = "utm"
+		}
+		cellCfgForVagrant := cellCfgForEngine
+		return runVagrantAgent(
+			binary, defaultFlags, userArgs,
+			c.BuildDir, c.BaseDir,
+			cellCfgForVagrant,
+			vagrantBox, vagrantProvider,
+			c.VNCPort, c.RDPPort,
+			c.HostHome,
+			scanFlag("--dry-run"),
+		)
 	}
 
 	cellCfg := cfg.LoadFromOS(c.ConfigDir, c.BaseDir)
@@ -477,8 +504,12 @@ func buildImageWithSpinner(configDir string, noCache bool, label string, silent 
 	sp := ux.NewProgressSpinner(label)
 	if err := runner.BuildImage(ctx, configDir, noCache, ux.Verbose, out); err != nil {
 		sp.Fail(label + " failed")
-		if !ux.Verbose && buf.Len() > 0 {
-			fmt.Fprint(os.Stderr, buf.String())
+		if !ux.Verbose {
+			if hint := ux.ClassifyBuildOutput(buf.String()); hint != nil {
+				ux.PrintBuildErrorHint(hint)
+			} else if buf.Len() > 0 {
+				fmt.Fprint(os.Stderr, buf.String())
+			}
 		}
 		return err
 	}

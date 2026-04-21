@@ -206,7 +206,7 @@ func autoDetectOllamaModels() cfg.LLMModelsSection {
 	if dbg {
 		fmt.Fprintf(os.Stderr, " opencode: found %d models from ollama\n", len(models))
 	}
-	ranked := ollama.RankModels(models, 0, nil, nil)
+	ranked := ollama.RankModels(models, 0, nil, nil, 0, "")
 	if len(ranked) == 0 {
 		return cfg.LLMModelsSection{}
 	}

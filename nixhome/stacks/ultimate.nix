@@ -1,6 +1,7 @@
 {
   imports = [
     ./fullstack.nix
+    ../modules/android.nix
     ../modules/desktop
     ../modules/electronics.nix
     ../modules/financial.nix

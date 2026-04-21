@@ -5,6 +5,8 @@ package main
 import (
 	"reflect"
 	"testing"
+
+	"github.com/DimmKirr/devcell/internal/ux"
 )
 
 func TestStripCellFlags_BoolFlagStripped(t *testing.T) {
@@ -106,6 +108,59 @@ func TestStripCellFlags_EmptyInput(t *testing.T) {
 	got := stripCellFlags([]string{})
 	if len(got) != 0 {
 		t.Errorf("empty input should return empty: got %v", got)
+	}
+}
+
+func TestStripCellFlags_FormatSpaceFormStripped(t *testing.T) {
+	got := stripCellFlags([]string{"--format", "json", "claude"})
+	want := []string{"claude"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("--format space form should be stripped: want %v, got %v", want, got)
+	}
+}
+
+func TestStripCellFlags_FormatEqualsFormStripped(t *testing.T) {
+	got := stripCellFlags([]string{"--format=yaml", "claude"})
+	want := []string{"claude"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("--format=value should be stripped: want %v, got %v", want, got)
+	}
+}
+
+func TestApplyOutputFlags_FormatJSON(t *testing.T) {
+	old := osArgs
+	osArgs = []string{"cell", "rdp", "--list", "--format", "json"}
+	defer func() { osArgs = old; ux.OutputFormat = "text" }()
+
+	applyOutputFlags()
+
+	if ux.OutputFormat != "json" {
+		t.Errorf("want OutputFormat=json, got %q", ux.OutputFormat)
+	}
+}
+
+func TestApplyOutputFlags_FormatEqualsForm(t *testing.T) {
+	old := osArgs
+	osArgs = []string{"cell", "--format=yaml", "rdp", "--list"}
+	defer func() { osArgs = old; ux.OutputFormat = "text" }()
+
+	applyOutputFlags()
+
+	if ux.OutputFormat != "yaml" {
+		t.Errorf("want OutputFormat=yaml, got %q", ux.OutputFormat)
+	}
+}
+
+func TestApplyOutputFlags_NoFormatLeavesDefault(t *testing.T) {
+	old := osArgs
+	osArgs = []string{"cell", "rdp", "--list"}
+	defer func() { osArgs = old; ux.OutputFormat = "text" }()
+
+	ux.OutputFormat = "text"
+	applyOutputFlags()
+
+	if ux.OutputFormat != "text" {
+		t.Errorf("want OutputFormat=text (unchanged), got %q", ux.OutputFormat)
 	}
 }
 

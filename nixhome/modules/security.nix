@@ -85,6 +85,10 @@ in {
     wafw00f           # WAF fingerprinting (use: wafw00f https://target.com)
     nmap              # port scanner + NSE vuln scripts (use: nmap -sV --script=vuln target.com)
 
+    # mobile app analysis
+    apkeep            # APK downloader from Google Play / APKPure (use: apkeep -a com.example.app .)
+    jadx              # APK/DEX decompiler → readable Java source (use: jadx app.apk -d out/)
+
     # parameter discovery
     arjun             # HTTP parameter discovery (use: arjun -u https://target.com/endpoint)
 

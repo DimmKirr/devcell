@@ -21,7 +21,7 @@ func TestRankModels_SortsBySWEScore(t *testing.T) {
 		{Name: "deepseek-r1:32b", ParameterSize: "32B"},
 	}
 
-	ranked := ollama.RankModels(models, 10, nil, nil)
+	ranked := ollama.RankModels(models, 10, nil, nil, 0, "")
 
 	if len(ranked) != 3 {
 		t.Fatalf("expected 3 models, got %d", len(ranked))
@@ -43,7 +43,7 @@ func TestRankModels_LimitsToTopN(t *testing.T) {
 		{Name: "qwen3:8b"},
 	}
 
-	ranked := ollama.RankModels(models, 2, nil, nil)
+	ranked := ollama.RankModels(models, 2, nil, nil, 0, "")
 
 	if len(ranked) != 2 {
 		t.Fatalf("expected 2 models, got %d", len(ranked))
@@ -56,7 +56,7 @@ func TestRankModels_UnknownModelsGetZeroScore(t *testing.T) {
 		{Name: "deepseek-r1:32b"},
 	}
 
-	ranked := ollama.RankModels(models, 10, nil, nil)
+	ranked := ollama.RankModels(models, 10, nil, nil, 0, "")
 
 	if len(ranked) != 2 {
 		t.Fatalf("expected 2 models, got %d", len(ranked))
@@ -72,7 +72,7 @@ func TestRankModels_UnknownModelsGetZeroScore(t *testing.T) {
 }
 
 func TestRankModels_Empty(t *testing.T) {
-	ranked := ollama.RankModels(nil, 10, nil, nil)
+	ranked := ollama.RankModels(nil, 10, nil, nil, 0, "")
 	if len(ranked) != 0 {
 		t.Errorf("expected empty result, got %d", len(ranked))
 	}
@@ -85,7 +85,7 @@ func TestRankModels_RankNumbersAreSequential(t *testing.T) {
 		{Name: "deepseek-r1:32b"},
 	}
 
-	ranked := ollama.RankModels(models, 10, nil, nil)
+	ranked := ollama.RankModels(models, 10, nil, nil, 0, "")
 
 	for i, r := range ranked {
 		if r.Rank != i+1 {
@@ -106,7 +106,7 @@ func TestRankModels_UsesLiveSWEScores(t *testing.T) {
 		"qwen3":       28.0,
 	}
 
-	ranked := ollama.RankModels(models, 10, liveScores, nil)
+	ranked := ollama.RankModels(models, 10, liveScores, nil, 0, "")
 
 	if ranked[0].Name != "deepseek-r1:32b" || ranked[0].SWEScore != 49.2 {
 		t.Errorf("expected deepseek-r1:32b with 49.2, got %s with %.1f", ranked[0].Name, ranked[0].SWEScore)
@@ -130,7 +130,7 @@ func TestRankModels_LiveScoresOverrideFallback(t *testing.T) {
 		"deepseek-r1": 99.9,
 	}
 
-	ranked := ollama.RankModels(models, 10, liveScores, nil)
+	ranked := ollama.RankModels(models, 10, liveScores, nil, 0, "")
 
 	if ranked[0].SWEScore != 99.9 {
 		t.Errorf("expected live score 99.9 to override fallback, got %.1f", ranked[0].SWEScore)
@@ -145,7 +145,7 @@ func TestRankModels_ScoreSourceSWE(t *testing.T) {
 		"deepseek-r1": 49.2,
 	}
 
-	ranked := ollama.RankModels(models, 10, liveScores, nil)
+	ranked := ollama.RankModels(models, 10, liveScores, nil, 0, "")
 
 	if ranked[0].ScoreSource != "SWE" {
 		t.Errorf("expected ScoreSource=SWE, got %q", ranked[0].ScoreSource)
@@ -157,7 +157,7 @@ func TestRankModels_ScoreSourceEst(t *testing.T) {
 		{Name: "deepseek-r1:32b"},
 	}
 
-	ranked := ollama.RankModels(models, 10, nil, nil)
+	ranked := ollama.RankModels(models, 10, nil, nil, 0, "")
 
 	if ranked[0].ScoreSource != "est" {
 		t.Errorf("expected ScoreSource=est, got %q", ranked[0].ScoreSource)
@@ -169,7 +169,7 @@ func TestRankModels_ScoreSourceEmpty_WhenNoScore(t *testing.T) {
 		{Name: "totally-unknown:latest"},
 	}
 
-	ranked := ollama.RankModels(models, 10, nil, nil)
+	ranked := ollama.RankModels(models, 10, nil, nil, 0, "")
 
 	if ranked[0].ScoreSource != "" {
 		t.Errorf("expected empty ScoreSource for unknown model, got %q", ranked[0].ScoreSource)
@@ -191,7 +191,7 @@ func TestRankModels_UsesHFRepoIDForSWEMatch(t *testing.T) {
 		"qwen2.5-coder": {ModelID: "Qwen/Qwen2.5-Coder-32B-Instruct"},
 	}
 
-	ranked := ollama.RankModels(models, 10, sweScores, hfInfoMap)
+	ranked := ollama.RankModels(models, 10, sweScores, hfInfoMap, 0, "")
 
 	if ranked[0].SWEScore != 35.0 {
 		t.Errorf("expected SWE score 35.0 via HF repo ID, got %.1f", ranked[0].SWEScore)
@@ -338,6 +338,58 @@ func TestFormatActiveTOMLSnippet_Empty(t *testing.T) {
 	snippet := ollama.FormatActiveTOMLSnippet(nil)
 	if snippet != "" {
 		t.Errorf("expected empty string for nil ranked, got: %q", snippet)
+	}
+}
+
+func TestComputeRecommendedScore_Basic(t *testing.T) {
+	// swe=50, speedTPM=9000, ramFit=1.0
+	// speedBonus = min(9000/6000, 5) = min(1.5, 5) = 1.5
+	// score = (50*0.90 + 1.5) * 1.0 = 46.5
+	got := ollama.ComputeRecommendedScore(50, 9000, 1.0)
+	if got != 46.5 {
+		t.Errorf("ComputeRecommendedScore(50, 9000, 1.0) = %v, want 46.5", got)
+	}
+}
+
+func TestComputeRecommendedScore_RAMPenalty(t *testing.T) {
+	without := ollama.ComputeRecommendedScore(50, 9000, 1.0)
+	with := ollama.ComputeRecommendedScore(50, 9000, 0.1)
+	if with >= without/2 {
+		t.Errorf("expected heavy de-rank with ramFit=0.1: %v vs %v", with, without)
+	}
+}
+
+func TestRankModels_NewFields(t *testing.T) {
+	models := []ollama.Model{
+		{Name: "deepseek-r1:32b", ParameterSize: "32B"},
+	}
+	ranked := ollama.RankModels(models, 10, nil, nil, 0, "")
+	if ranked[0].SpeedTPM <= 0 {
+		t.Errorf("expected SpeedTPM > 0, got %v", ranked[0].SpeedTPM)
+	}
+	if ranked[0].RecommendedScore <= 0 {
+		t.Errorf("expected RecommendedScore > 0 for a model with SWE score, got %v", ranked[0].RecommendedScore)
+	}
+}
+
+func TestRankModels_SortBySWE(t *testing.T) {
+	models := []ollama.Model{
+		{Name: "qwen3:8b", ParameterSize: "8B"},
+		{Name: "deepseek-r1:70b", ParameterSize: "70B"},
+	}
+	ranked := ollama.RankModels(models, 10, nil, nil, 0, "swe")
+	if ranked[0].Name != "deepseek-r1:70b" {
+		t.Errorf("expected deepseek-r1:70b first with sortBy=swe, got %s", ranked[0].Name)
+	}
+}
+
+func TestRankModels_CloudProviderNoRAMPenalty(t *testing.T) {
+	// Cloud model with no param size: should get ramFit=1.0, not penalized
+	// Local 70B model on 8GB RAM: should get ramFit=0.1
+	localScore := ollama.ComputeRecommendedScore(30, 720, 0.1)  // 70B on 8GB
+	cloudScore := ollama.ComputeRecommendedScore(30, 5400, 1.0) // cloud model same SWE score
+	if localScore >= cloudScore {
+		t.Errorf("expected cloud model to score higher than RAM-penalized local: cloud=%v local=%v", cloudScore, localScore)
 	}
 }
 

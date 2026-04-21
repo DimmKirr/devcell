@@ -64,6 +64,7 @@ in {
       ngspice # SPICE simulation (libngspice0 + ngspice CLI)
       libspnav # 3D mouse / space navigator support
       esphome # ESP32 framework for home automation
+      platformio # embedded development platform (Arduino, ESP32, etc.)
       wokwi-cli # Wokwi hardware simulator CLI (v0.26.0 static binary)
       kicadMcp # KiCad MCP server for Claude
     ]

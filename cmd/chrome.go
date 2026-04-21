@@ -4,8 +4,6 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,11 +18,10 @@ import (
 )
 
 var (
-	chromeSyncOnly bool
-	chromeNoSync   bool
+	chromeSyncOnly  bool
+	chromeNoSync    bool
+	chromeForce     bool
 )
-
-const chromeDebugPort = "19222"
 
 var chromeCmd = &cobra.Command{
 	Use:   "chrome [app-name] [-- urls...]",
@@ -69,6 +66,8 @@ Examples:
 func init() {
 	chromeCmd.Flags().BoolVar(&chromeSyncOnly, "sync", false, "sync cookies only (don't open browser)")
 	chromeCmd.Flags().BoolVar(&chromeNoSync, "no-sync", false, "open browser without syncing cookies on close")
+	chromeCmd.Flags().BoolVar(&chromeForce, "force", false, "wipe saved browser profile and force a fresh login")
+	loginCmd.Flags().BoolVar(&chromeForce, "force", false, "wipe saved browser profile and force a fresh login")
 }
 
 // chromeBinary returns the path to the best available Chromium/Chrome binary.
@@ -113,8 +112,16 @@ func runChrome(cmd *cobra.Command, args []string) error {
 	ux.Debugf("storage-state: %s", storageStatePath)
 
 	if chromeSyncOnly {
-		// --sync without browser: re-extract from a running Chrome or error.
 		return fmt.Errorf("--sync requires a running browser; use 'cell chrome' or 'cell login' instead")
+	}
+
+	if chromeForce {
+		if _, err := os.Stat(chromeProfile); err == nil {
+			ux.Info("Wiping saved browser profile for fresh login...")
+			if err := os.RemoveAll(chromeProfile); err != nil {
+				return fmt.Errorf("wipe profile: %w", err)
+			}
+		}
 	}
 
 	if !chromeSyncOnly {
@@ -144,14 +151,25 @@ type storageStateCookie struct {
 	SameSite string  `json:"sameSite"`
 }
 
-type storageState struct {
-	Cookies []storageStateCookie `json:"cookies"`
-	Origins []struct{}           `json:"origins"`
+type storageStateOrigin struct {
+	Origin       string              `json:"origin"`
+	LocalStorage []localStorageEntry `json:"localStorage"`
 }
 
-// openExtractAndClose launches Chromium with CDP, waits for user to press
-// Enter, extracts cookies via DevTools Protocol (decrypted values), writes
-// storage-state.json, then closes Chrome.
+type localStorageEntry struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+type storageState struct {
+	Cookies []storageStateCookie  `json:"cookies"`
+	Origins []storageStateOrigin  `json:"origins"`
+}
+
+// openExtractAndClose opens Chrome for the user to log in (no CDP, no special
+// flags — clean session that won't trigger bot detection), waits for Enter,
+// closes the login browser, then launches a headless CDP-only instance against
+// the same profile to extract cookies via Network.getAllCookies, and closes it.
 func openExtractAndClose(profile, storageStatePath string, urls []string, noSync bool) error {
 	bin, err := chromeBinary()
 	if err != nil {
@@ -159,38 +177,35 @@ func openExtractAndClose(profile, storageStatePath string, urls []string, noSync
 	}
 	ux.Debugf("browser: %s", bin)
 
-	// Read Playwright's fingerprint to spoof host Chrome, so session-bound
-	// sites (BA, banks) bind cookies to Playwright's fingerprint, not the host's.
-	playwrightUA := readPlaywrightFingerprint(filepath.Dir(filepath.Dir(profile)))
-	if playwrightUA == "" {
-		// Bootstrap: query a running container for the UA, or use known default.
-		playwrightUA = getPlaywrightUA(storageStatePath)
+	// Save Chrome's real fingerprint for Patchright so both use the same identity.
+	if readPlaywrightFingerprint(filepath.Dir(filepath.Dir(profile))) == nil {
+		ensureFingerprint(bin, storageStatePath)
 	}
 
-	argv := []string{
+	// Phase 1: login browser — no CDP, no special flags.
+	loginArgv := []string{
 		"--user-data-dir=" + profile,
-		"--remote-debugging-port=" + chromeDebugPort,
+		"--no-first-run",
+		"--no-default-browser-check",
 	}
-	if playwrightUA != "" {
-		argv = append(argv, "--user-agent="+playwrightUA)
-		ux.Debugf("spoofing UA: %s", playwrightUA)
-	}
-	argv = append(argv, urls...)
+	loginArgv = append(loginArgv, urls...)
 
 	browserName := filepath.Base(filepath.Dir(filepath.Dir(filepath.Dir(bin))))
 	if browserName == "" || browserName == "." {
 		browserName = filepath.Base(bin)
 	}
 	ux.Info(fmt.Sprintf("Opening %s", browserName))
+	ux.Debugf("binary: %s", bin)
+	ux.Debugf("args: %s", strings.Join(loginArgv, " "))
 	ux.Debugf("profile: %s", profile)
 
-	proc := exec.Command(bin, argv...)
+	proc := exec.Command(bin, loginArgv...)
 	proc.Stdout = os.Stdout
 	if ux.Verbose {
 		proc.Stderr = os.Stderr
 	}
 	if err := proc.Start(); err != nil {
-		return fmt.Errorf("start chromium: %w", err)
+		return fmt.Errorf("start browser: %w", err)
 	}
 	ux.Debugf("PID: %d", proc.Process.Pid)
 
@@ -209,22 +224,6 @@ func openExtractAndClose(profile, storageStatePath string, urls []string, noSync
 	select {
 	case <-enterCh:
 		fmt.Println()
-
-		if !noSync {
-			// Extract cookies via CDP before closing Chrome.
-			sp := ux.NewProgressSpinner("Extracting cookies via DevTools")
-
-			// Navigate to about:blank first so no site JS is running.
-			cdpNavigateBlank()
-
-			count, sites, err := extractCookiesViaCDP(storageStatePath)
-			if err != nil {
-				sp.Fail(fmt.Sprintf("cookie extraction failed: %v", err))
-			} else {
-				sp.Success(fmt.Sprintf("Exported %d cookies for %s", count, sites))
-			}
-		}
-
 		ux.Info("Closing browser...")
 		if err := proc.Process.Signal(syscall.SIGTERM); err != nil {
 			ux.Debugf("SIGTERM failed: %v, sending SIGKILL", err)
@@ -232,196 +231,278 @@ func openExtractAndClose(profile, storageStatePath string, urls []string, noSync
 		}
 		select {
 		case <-done:
-			ux.Debugf("Chromium exited gracefully")
+			ux.Debugf("browser exited gracefully")
 		case <-time.After(5 * time.Second):
 			ux.Debugf("graceful shutdown timed out, killing")
 			proc.Process.Kill()
 			<-done
 		}
 
+		if !noSync {
+			spMsg := "Extracting cookies"
+			if len(urls) > 0 {
+				spMsg = "Refreshing session and extracting cookies"
+			}
+			sp := ux.NewProgressSpinner(spMsg)
+			count, sites, err := extractCookiesViaCDP(bin, profile, storageStatePath, urls)
+			if err != nil {
+				sp.Fail(fmt.Sprintf("cookie extraction failed: %v", err))
+			} else {
+				sp.Success(fmt.Sprintf("Exported %d cookies for %s", count, sites))
+			}
+		}
+
 	case err := <-done:
 		if err != nil {
-			ux.Debugf("Chromium exited: %v", err)
+			ux.Debugf("browser exited: %v", err)
 		}
 		ux.Info("Browser closed.")
 		if !noSync {
 			ux.Warn("Browser closed before cookie extraction — no cookies synced.")
 		}
+
 	}
 
 	return nil
 }
 
-// cdpCall makes a CDP HTTP request to the browser's debugging endpoint.
-func cdpCall(method, path string, body io.Reader) ([]byte, error) {
-	url := "http://127.0.0.1:" + chromeDebugPort + path
-	req, err := http.NewRequest(method, url, body)
-	if err != nil {
-		return nil, err
+// extractCookiesViaCDP launches a headless Chrome against the same profile with
+// --remote-debugging-port, calls Network.getAllCookies via a Node.js WebSocket
+// script, writes storage-state.json, then kills the headless instance.
+// CDP is safe here: it runs after the login session ends, so bot detection
+// (Kasada/Cloudflare) never sees the debugging port.
+// If urls is non-empty, the headless browser navigates to urls[0] first so the
+// server can re-issue short-lived auth tokens (e.g. Hyatt's 5-min oscar JWT)
+// before cookies are extracted.
+func extractCookiesViaCDP(bin, profile, storageStatePath string, urls []string) (int, string, error) {
+	const cdpPort = "9222"
+
+	// Phase 2: headless CDP browser — same profile, no visible window.
+	cdpArgv := []string{
+		"--user-data-dir=" + profile,
+		"--no-first-run",
+		"--no-default-browser-check",
+		"--headless=new",
+		"--remote-debugging-port=" + cdpPort,
+		"about:blank",
 	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
+	ux.Debugf("CDP browser args: %s", strings.Join(cdpArgv, " "))
+
+	cdpProc := exec.Command(bin, cdpArgv...)
+	if ux.Verbose {
+		cdpProc.Stderr = os.Stderr
 	}
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
+	if err := cdpProc.Start(); err != nil {
+		return 0, "", fmt.Errorf("start CDP browser: %w", err)
 	}
-	defer resp.Body.Close()
-	return io.ReadAll(resp.Body)
-}
+	defer func() {
+		cdpProc.Process.Kill()
+		cdpProc.Wait()
+	}()
 
-// cdpNavigateBlank navigates the first tab to about:blank via CDP so no
-// site JavaScript is running during cookie extraction.
-func cdpNavigateBlank() {
-	// Get first tab's webSocket debugger URL.
-	data, err := cdpCall("GET", "/json", nil)
-	if err != nil {
-		ux.Debugf("CDP /json failed: %v", err)
-		return
-	}
-
-	var tabs []struct {
-		ID string `json:"id"`
-	}
-	if err := json.Unmarshal(data, &tabs); err != nil || len(tabs) == 0 {
-		ux.Debugf("CDP no tabs found")
-		return
-	}
-
-	// Navigate first tab to about:blank via HTTP endpoint.
-	_, err = cdpCall("GET", "/json/navigate/"+tabs[0].ID+"?url=about:blank", nil)
-	if err != nil {
-		ux.Debugf("CDP navigate failed: %v", err)
-	}
-	// Small delay for navigation to complete.
-	time.Sleep(200 * time.Millisecond)
-}
-
-// extractCookiesViaCDP connects to Chrome's DevTools Protocol HTTP endpoint
-// and retrieves all cookies with decrypted values. Writes storage-state.json.
-func extractCookiesViaCDP(dstPath string) (int, string, error) {
-	// CDP HTTP API: /json/protocol doesn't expose Network.getAllCookies directly.
-	// But we can use the /json/new endpoint to get a debugging target, then use
-	// the HTTP-based CDP commands. Actually, the simplest approach is to use
-	// the /json endpoint to list pages, then use fetch to call CDP via
-	// the page's DevTools URL.
-
-	// Simpler: use Chrome's built-in /json endpoints and a JavaScript evaluation
-	// approach. But the cleanest is: Chrome exposes cookies at a hidden endpoint.
-
-	// Actually the simplest reliable approach: use the CDP WebSocket.
-	// But for simplicity, let's use the chrome.debugger HTTP API.
-
-	// The most practical approach: use /json to get a target, then use
-	// the CDP REST-like endpoint: POST to send CDP command.
-
-	// Let's use the approach of evaluating JS via CDP to get cookies.
-	// This works because we navigated to about:blank.
-
-	// Get targets.
-	data, err := cdpCall("GET", "/json", nil)
-	if err != nil {
-		return 0, "", fmt.Errorf("CDP connection failed (is Chrome running?): %w", err)
-	}
-
-	var targets []struct {
-		WebSocketDebuggerURL string `json:"webSocketDebuggerUrl"`
-		ID                   string `json:"id"`
-		Type                 string `json:"type"`
-	}
-	if err := json.Unmarshal(data, &targets); err != nil {
-		return 0, "", fmt.Errorf("parse CDP targets: %w", err)
-	}
-
-	// Find a page target.
-	var targetID string
-	for _, t := range targets {
-		if t.Type == "page" {
-			targetID = t.ID
+	// Wait for CDP to be ready (poll /json/version).
+	cdpBase := "http://localhost:" + cdpPort
+	var wsURL string
+	for i := 0; i < 20; i++ {
+		time.Sleep(300 * time.Millisecond)
+		data, err := cdpGet(cdpBase + "/json")
+		if err != nil {
+			ux.Debugf("CDP not ready yet: %v", err)
+			continue
+		}
+		var targets []struct {
+			WebSocketDebuggerURL string `json:"webSocketDebuggerUrl"`
+			Type                 string `json:"type"`
+		}
+		if err := json.Unmarshal(data, &targets); err != nil {
+			continue
+		}
+		for _, t := range targets {
+			if t.Type == "page" && t.WebSocketDebuggerURL != "" {
+				wsURL = t.WebSocketDebuggerURL
+				break
+			}
+		}
+		if wsURL != "" {
 			break
 		}
 	}
-	if targetID == "" {
-		return 0, "", fmt.Errorf("no page target found in CDP")
+	if wsURL == "" {
+		return 0, "", fmt.Errorf("CDP not ready after timeout")
 	}
+	ux.Debugf("CDP WebSocket: %s", wsURL)
 
-	// Use the CDP HTTP protocol command endpoint.
-	// Chrome DevTools Protocol over HTTP: we need WebSocket for commands.
-	// The simpler alternative: use an external tool like `chrome-remote-interface`
-	// or just shell out to a small script.
+	return extractCookiesViaScript(wsURL, storageStatePath, urls)
+}
 
-	// Simplest reliable approach: use Node.js (available on macOS) to connect
-	// via WebSocket and call Network.getAllCookies.
-	return extractCookiesViaScript(targets[0].WebSocketDebuggerURL, dstPath)
+// cdpGet performs an HTTP GET to the CDP endpoint.
+func cdpGet(url string) ([]byte, error) {
+	out, err := exec.Command("curl", "-sf", "--max-time", "2", url).Output()
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // extractCookiesViaScript uses a Node.js one-liner to connect to Chrome CDP
 // WebSocket and extract all cookies via Network.getAllCookies.
-func extractCookiesViaScript(wsURL, dstPath string) (int, string, error) {
-	// Check if Node.js is available (it is on macOS).
+// If urls is non-empty, it navigates to urls[0] first so the server can
+// re-issue short-lived auth tokens before the cookie snapshot is taken.
+func extractCookiesViaScript(wsURL, dstPath string, urls []string) (int, string, error) {
 	nodePath, err := exec.LookPath("node")
 	if err != nil {
 		return 0, "", fmt.Errorf("node not found (required for CDP cookie extraction): %w", err)
 	}
 	ux.Debugf("using node: %s", nodePath)
-	ux.Debugf("CDP WebSocket: %s", wsURL)
 
-	// Node.js 22+ has built-in WebSocket (no npm packages needed).
+	navigateTo := ""
+	if len(urls) > 0 {
+		navigateTo = urls[0]
+	}
+
+	// Node.js 22+ has built-in WebSocket — no npm packages needed.
+	// Extracts cookies + localStorage from the active Chrome profile via CDP.
+	// If navigateTo is set: enables Page events, navigates to the URL, waits for
+	// loadEventFired so the server can refresh short-lived tokens (e.g. Hyatt oscar),
+	// then extracts cookies AND localStorage for every frame origin on the page.
+	// Output is Playwright storage-state JSON format (cookies + origins[].localStorage).
 	script := fmt.Sprintf(`
 const ws = new WebSocket(%q);
+const navigateTo = %q;
+
+let cookies = null;
+let origins = null;   // set after Page.getFrameTree response
+let lsData = {};      // origin -> [{name,value}]
+let lsPending = 0;    // outstanding DOMStorage requests
+
+function tryDone() {
+  if (cookies === null || origins === null || lsPending > 0) return;
+  const state = {
+    cookies,
+    origins: origins
+      .filter(o => lsData[o] && lsData[o].length > 0)
+      .map(o => ({origin: o, localStorage: lsData[o]}))
+  };
+  process.stdout.write(JSON.stringify(state));
+  ws.close();
+}
+
+function fetchAll() {
+  ws.send(JSON.stringify({id:20, method:'Network.getAllCookies'}));
+  if (navigateTo) {
+    ws.send(JSON.stringify({id:15, method:'DOMStorage.enable'}));
+    ws.send(JSON.stringify({id:30, method:'Page.getFrameTree'}));
+  } else {
+    origins = [];
+    tryDone();
+  }
+}
+
 ws.onopen = () => {
-  ws.send(JSON.stringify({id: 1, method: 'Network.getAllCookies'}));
+  if (navigateTo) {
+    ws.send(JSON.stringify({id:1, method:'Page.enable'}));
+  } else {
+    fetchAll();
+  }
 };
+
 ws.onmessage = (event) => {
-  const msg = JSON.parse(event.data);
-  if (msg.id === 1) {
-    const cookies = (msg.result && msg.result.cookies) || [];
-    const state = {
-      cookies: cookies.map(c => ({
-        name: c.name,
-        value: c.value,
+  const m = JSON.parse(event.data);
+
+  if (m.id === 1) {
+    // Page.enable done — navigate; 20s safety fallback if load event never fires.
+    ws.send(JSON.stringify({id:2, method:'Page.navigate', params:{url:navigateTo}}));
+    setTimeout(() => { if (cookies === null) fetchAll(); }, 20000);
+    return;
+  }
+
+  if (m.method === 'Page.loadEventFired') {
+    fetchAll();
+    return;
+  }
+
+  if (m.id === 20) {
+    // Network.getAllCookies response
+    const raw = (m.result && m.result.cookies) || [];
+    cookies = raw.map(c => {
+      const ss = c.sameSite || 'Lax';
+      const secure = (ss === 'None') ? true : !!c.secure;
+      return {
+        name: c.name, value: c.value,
         domain: c.domain,
         path: c.path,
         expires: c.expires === -1 ? -1 : c.expires,
-        httpOnly: c.httpOnly,
-        secure: c.secure,
-        sameSite: (!c.secure && (!c.sameSite || c.sameSite === "None")) ? "Lax" : (c.sameSite || "Lax")
-      })),
-      origins: []
-    };
-    process.stdout.write(JSON.stringify(state));
-    ws.close();
+        httpOnly: !!c.httpOnly, secure,
+        sameSite: (!secure && ss === 'None') ? 'Lax' : ss
+      };
+    });
+    tryDone();
+    return;
+  }
+
+  if (m.id === 30 && m.result) {
+    // Page.getFrameTree — collect unique https/http origins from all frames.
+    const seen = new Set();
+    function collect(node) {
+      if (node && node.frame && node.frame.url) {
+        try {
+          const u = new URL(node.frame.url);
+          if ((u.protocol === 'https:' || u.protocol === 'http:') && !seen.has(u.origin)) {
+            seen.add(u.origin);
+          }
+        } catch(e) {}
+      }
+      (node.childFrames || []).forEach(collect);
+    }
+    collect(m.result.frameTree);
+    origins = [...seen];
+    lsPending = origins.length;
+    if (lsPending === 0) { tryDone(); return; }
+    origins.forEach((o, i) => {
+      ws.send(JSON.stringify({id: 100+i, method:'DOMStorage.getDOMStorageItems',
+        params:{storageId:{securityOrigin:o, isLocalStorage:true}}}));
+    });
+    return;
+  }
+
+  if (m.id >= 100 && origins && m.id < 100 + origins.length) {
+    // DOMStorage.getDOMStorageItems response for origins[id-100].
+    const i = m.id - 100;
+    const entries = (m.result && m.result.entries) || [];
+    lsData[origins[i]] = entries.map(([name, value]) => ({name, value}));
+    lsPending--;
+    tryDone();
+    return;
   }
 };
-ws.onerror = (e) => { process.stderr.write(String(e.message || e)); process.exit(1); };
-`, wsURL)
+
+ws.onerror = (e) => { process.stderr.write(String(e.message||e)); process.exit(1); };
+`, wsURL, navigateTo)
 
 	cmd := exec.Command(nodePath, "-e", script)
-	cmd.Stderr = os.Stderr
+	if ux.Verbose {
+		cmd.Stderr = os.Stderr
+	}
 	out, err := cmd.Output()
 	if err != nil {
 		return 0, "", fmt.Errorf("CDP script failed: %w", err)
 	}
 
-	// Validate the output is valid JSON.
 	var state storageState
 	if err := json.Unmarshal(out, &state); err != nil {
 		return 0, "", fmt.Errorf("invalid CDP output: %w", err)
 	}
 
-	// Atomic write.
 	tmpFile := dstPath + ".tmp"
 	formatted, _ := json.MarshalIndent(state, "", "  ")
 	if err := os.WriteFile(tmpFile, formatted, 0600); err != nil {
-		return 0, "", fmt.Errorf("write temp file: %w", err)
+		return 0, "", fmt.Errorf("write: %w", err)
 	}
 	if err := os.Rename(tmpFile, dstPath); err != nil {
 		os.Remove(tmpFile)
 		return 0, "", fmt.Errorf("rename: %w", err)
 	}
 
-	// Build domain list.
 	domainSet := make(map[string]bool)
 	for _, c := range state.Cookies {
 		domainSet[c.Domain] = true
@@ -430,7 +511,6 @@ ws.onerror = (e) => { process.stderr.write(String(e.message || e)); process.exit
 	for d := range domainSet {
 		domains = append(domains, d)
 	}
-
 	return len(state.Cookies), strings.Join(domains, ", "), nil
 }
 
@@ -456,44 +536,91 @@ func isURL(s string) bool {
 
 const fingerprintFile = "playwright-fingerprint.json"
 
-// Default Playwright UA — matches patchright's bundled Chromium 141 with
-// the stealth init script's Windows spoofing. Updated when queried from
-// a running container.
-const defaultPlaywrightUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
-
-// getPlaywrightUA tries to get the UA from a running container via docker exec,
-// falls back to the known default. Saves to fingerprint file for future use.
-func getPlaywrightUA(storageStatePath string) string {
-	cellHome := filepath.Dir(storageStatePath)
-	ua := defaultPlaywrightUA
-	ux.Debugf("using Playwright UA: %s", ua)
-	savePlaywrightFingerprint(cellHome, ua)
-	return ua
+// playwrightFingerprint holds the full browser fingerprint saved for Patchright.
+type playwrightFingerprint struct {
+	UserAgent  string    `json:"userAgent"`
+	Platform   string    `json:"platform"`   // "MacIntel"
+	UAPlatform string    `json:"uaPlatform"` // "macOS"
+	Version    string    `json:"version"`    // e.g. "147.0.7453.0"
+	Brands     []fpBrand `json:"brands"`
 }
 
-// readPlaywrightFingerprint reads the cached Playwright UA string from
-// $CELL_HOME/playwright-fingerprint.json. Returns empty string if not found.
-func readPlaywrightFingerprint(cellHome string) string {
+type fpBrand struct {
+	Brand   string `json:"brand"`
+	Version string `json:"version"`
+}
+
+// chromeFingerprint runs `<bin> --version` to get the real version (e.g. "Google Chrome 147.0.7453.0")
+// and builds a full macOS fingerprint. Chrome always reports 10_15_7 regardless of actual macOS
+// version — that's Chrome's own fingerprinting behaviour, not a spoof.
+// Returns nil on error.
+func chromeFingerprint(bin string) *playwrightFingerprint {
+	out, err := exec.Command(bin, "--version").Output()
+	if err != nil {
+		return nil
+	}
+	// Output: "Google Chrome 147.0.7453.0\n" or "Chromium 147.0.7453.0\n"
+	parts := strings.Fields(strings.TrimSpace(string(out)))
+	if len(parts) == 0 {
+		return nil
+	}
+	version := parts[len(parts)-1]
+	major := version
+	if idx := strings.Index(version, "."); idx >= 0 {
+		major = version[:idx]
+	}
+	ua := "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/" + version + " Safari/537.36"
+	return &playwrightFingerprint{
+		UserAgent:  ua,
+		Platform:   "MacIntel",
+		UAPlatform: "macOS",
+		Version:    version,
+		Brands: []fpBrand{
+			{Brand: "Google Chrome", Version: major},
+			{Brand: "Chromium", Version: major},
+			{Brand: "Not/A)Brand", Version: "8"},
+		},
+	}
+}
+
+func ensureFingerprint(bin, storageStatePath string) *playwrightFingerprint {
+	cellHome := filepath.Dir(storageStatePath)
+	fp := chromeFingerprint(bin)
+	if fp == nil {
+		// Fallback: generic recent macOS Chrome fingerprint — matches Client Hints platform.
+		fp = &playwrightFingerprint{
+			UserAgent:  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+			Platform:   "MacIntel",
+			UAPlatform: "macOS",
+			Version:    "147.0.0.0",
+			Brands: []fpBrand{
+				{Brand: "Google Chrome", Version: "147"},
+				{Brand: "Chromium", Version: "147"},
+				{Brand: "Not/A)Brand", Version: "8"},
+			},
+		}
+	}
+	ux.Debugf("fingerprint UA: %s", fp.UserAgent)
+	savePlaywrightFingerprint(cellHome, fp)
+	return fp
+}
+
+func readPlaywrightFingerprint(cellHome string) *playwrightFingerprint {
 	data, err := os.ReadFile(filepath.Join(cellHome, fingerprintFile))
 	if err != nil {
-		return ""
+		return nil
 	}
-	var fp struct {
-		UserAgent string `json:"userAgent"`
-	}
+	var fp playwrightFingerprint
 	if err := json.Unmarshal(data, &fp); err != nil {
-		return ""
+		return nil
 	}
-	return fp.UserAgent
+	if fp.UserAgent == "" {
+		return nil
+	}
+	return &fp
 }
 
-// savePlaywrightFingerprint writes Playwright's fingerprint to
-// $CELL_HOME/playwright-fingerprint.json. Called on first run when no
-// fingerprint exists yet — queries a running Playwright via httpbin.
-func savePlaywrightFingerprint(cellHome, ua string) {
-	fp := struct {
-		UserAgent string `json:"userAgent"`
-	}{UserAgent: ua}
+func savePlaywrightFingerprint(cellHome string, fp *playwrightFingerprint) {
 	data, _ := json.MarshalIndent(fp, "", "  ")
 	path := filepath.Join(cellHome, fingerprintFile)
 	tmpFile := path + ".tmp"

@@ -72,8 +72,8 @@ func TestScaffold_DefaultBaseImageIsRemote(t *testing.T) {
 	if strings.Contains(tag, "-local") {
 		t.Errorf("default base image must not be a local tag: %s", tag)
 	}
-	if !strings.HasPrefix(tag, "ghcr.io/dimmkirr/devcell:") {
-		t.Errorf("default base image must be from ghcr.io registry: %s", tag)
+	if !strings.HasPrefix(tag, "public.ecr.aws/w1l3v2k8/devcell:") {
+		t.Errorf("default base image must be from ECR registry: %s", tag)
 	}
 }
 
@@ -874,7 +874,7 @@ func TestRegenerateBuildContext_BaseStackUsesCore(t *testing.T) {
 	}
 
 	df, _ := os.ReadFile(filepath.Join(dir, "Dockerfile"))
-	if !strings.HasPrefix(string(df), "FROM ghcr.io/dimmkirr/devcell:v0.0.0-core") {
+	if !strings.HasPrefix(string(df), "FROM public.ecr.aws/w1l3v2k8/devcell:v0.0.0-core") {
 		t.Errorf("base stack should use core image, got:\n%s", strings.SplitN(string(df), "\n", 2)[0])
 	}
 }
@@ -920,7 +920,7 @@ func TestRegenerateBuildContext_NonBaseStackFallsBackToCore(t *testing.T) {
 	// In test env, docker images aren't available — should fall back to core.
 	df, _ := os.ReadFile(filepath.Join(dir, "Dockerfile"))
 	fromLine := strings.SplitN(string(df), "\n", 2)[0]
-	if !strings.HasPrefix(fromLine, "FROM ghcr.io/dimmkirr/devcell:v0.0.0-core") {
+	if !strings.HasPrefix(fromLine, "FROM public.ecr.aws/w1l3v2k8/devcell:v0.0.0-core") {
 		t.Errorf("should fall back to core when pre-built not available, got:\n%s", fromLine)
 	}
 }

@@ -1,6 +1,13 @@
 package main
 
-import "github.com/spf13/cobra"
+import (
+	"fmt"
+	"os"
+
+	"github.com/DimmKirr/devcell/internal/cfg"
+	"github.com/DimmKirr/devcell/internal/config"
+	"github.com/spf13/cobra"
+)
 
 var codexCmd = &cobra.Command{
 	Use:   "codex [args...]",
@@ -10,15 +17,25 @@ var codexCmd = &cobra.Command{
 The current working directory is mounted as /workspace. All additional
 args are forwarded to the codex binary unchanged.
 
+When use_ollama = true in the [llm] section of devcell.toml (or --ollama
+is passed), Codex is started with --oss --local-provider ollama and
+CODEX_OSS_BASE_URL pointing at the host ollama instance. The model from
+llm.models.default is also passed when set.
+
+Without ollama configured, Codex runs normally against the cloud provider
+(requires OPENAI_API_KEY or equivalent).
+
 Examples:
 
     cell codex
-    cell codex --model o4-mini`,
+    cell codex --ollama
+    cell codex --model o3`,
 	DisableFlagParsing: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		extraFlags, extraEnv := codexOllamaConfig()
 		return runAgent("codex",
-			[]string{"--dangerously-bypass-approvals-and-sandbox", "--oss", "-p", "lms"},
-			args, nil)
+			append([]string{"--dangerously-bypass-approvals-and-sandbox"}, extraFlags...),
+			args, extraEnv)
 	},
 }
 
@@ -40,4 +57,39 @@ Examples:
 
 func init() {
 	codexCmd.AddCommand(codexResumeCmd)
+}
+
+// codexOllamaConfig returns extra CLI flags and env vars when ollama mode is
+// active (use_ollama=true in devcell.toml, or --ollama flag).
+// Returns nil, nil when ollama is not configured — Codex runs normally.
+func codexOllamaConfig() (flags []string, env map[string]string) {
+	dbg := scanFlag("--debug")
+	useOllama := scanFlag("--ollama")
+
+	var model string
+	if !useOllama {
+		c, err := config.LoadFromOS()
+		if err == nil {
+			cellCfg := cfg.LoadFromOS(c.ConfigDir, c.BaseDir)
+			useOllama = cellCfg.LLM.UseOllama
+			model = cellCfg.LLM.Models.Default
+		}
+	}
+
+	if !useOllama {
+		return nil, nil
+	}
+
+	if dbg {
+		fmt.Fprintf(os.Stderr, " codex: ollama mode enabled\n")
+	}
+
+	flags = []string{"--oss", "--local-provider", "ollama"}
+	if model != "" {
+		flags = append(flags, "--model", model)
+	}
+
+	return flags, map[string]string{
+		"CODEX_OSS_BASE_URL": "http://host.docker.internal:11434/v1",
+	}
 }

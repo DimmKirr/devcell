@@ -338,7 +338,8 @@ func detectOllamaModels() string {
 	if err != nil || len(models) == 0 {
 		return ""
 	}
-	ranked := ollama.RankModels(models, 10, nil, nil)
+	systemRAM := ollama.GetSystemRAMGB()
+	ranked := ollama.RankModels(models, 10, nil, nil, systemRAM, "")
 	snippet := ollama.FormatActiveTOMLSnippet(ranked)
 	if snippet != "" {
 		fmt.Printf(" Detected ollama with %d models\n", len(ranked))

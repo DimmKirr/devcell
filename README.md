@@ -21,15 +21,16 @@ On first run, `cell` creates `.devcell.toml` and `.devcell/` in your project dir
 - **Isolated sandbox** - agents edit freely inside your project; your host system is untouched
 - **12+ MCP servers** - Yahoo Finance, Google Maps, Linear, KiCad, Inkscape, and more. Backing tools ship in the image alongside their servers
 - **Claude Max/Pro support** - runs Claude Code directly, no API key or proxy needed
-- **Stealth Chromium** - anti-fingerprint browser with Playwright, passes bot detection out of the box
+- **Stealth Chromium + zero-password login** - `cell login <url>` opens a clean browser on your host, you log in, press Enter; cookies and localStorage sync to the container. The agent never sees your password. Anti-fingerprint Playwright replays sessions that pass Cloudflare and Kasada
 - **Remote desktop** - VNC and RDP into the container to watch or interact with GUI apps
-- **1Password secrets** - API keys resolved at runtime, never written to disk
+- **1Password secrets** - list document names in `.devcell.toml`; fields are injected as env vars into the container at runtime, written to a RAM-only tmpfs, gone when the container stops
+- **Docker or VM engine** - default: Docker container. Add `--macos` to provision a Debian ARM64 VM via Vagrant + UTM instead — same nixhome toolchain, same commands, no Docker Desktop required
 - **7 image stacks** - from minimal (`base`) to everything-included (`ultimate`)
-- **Local ollama models** - route Claude through local models, ranked by SWE-Bench scores
+- **Model ranking** - `cell models` shows cloud models (Anthropic, OpenAI, Google via OpenRouter) and local ollama models ranked by SWE-Bench score and speed, side by side
 
 ## Stacks
 
-Seven stacks, published to `ghcr.io/dimmkirr/devcell`. Multi-arch: linux/amd64, linux/arm64.
+Seven stacks, published to `public.ecr.aws/w1l3v2k8/devcell`. Multi-arch: linux/amd64, linux/arm64.
 
 | Stack | What's inside |
 |---|---|
@@ -38,8 +39,39 @@ Seven stacks, published to `ghcr.io/dimmkirr/devcell`. Multi-arch: linux/amd64, 
 | **node** | base + Node.js 22, npm, stealth Chromium |
 | **python** | base + Python 3.13, uv, stealth Chromium |
 | **fullstack** | go + node + python |
-| **electronics** | base + GUI desktop + KiCad, ngspice, ESPHome, wokwi-cli |
+| **electronics** | base + GUI desktop + KiCad, ngspice, ESPHome, PlatformIO, wokwi-cli |
 | **ultimate** | fullstack + GUI desktop, all MCP servers, Inkscape, KiCad *(default)* |
+
+Add-on modules (set `modules = ["android"]` in `.devcell.toml`):
+
+| Module | What's inside |
+|---|---|
+| **android** | ADB + fastboot (all platforms), Android SDK + build-tools + emulator + apktool + jadx (x86_64 only) |
+| **desktop** | GUI desktop: VNC, RDP, Fluxbox, PulseAudio |
+| **scraping** | Playwright stealth scripts, anti-fingerprint Chromium config |
+| **infra** | Cloud CLI tools: AWS, GCP, Azure |
+
+## Vagrant engine (no Docker required)
+
+Run cells as native VMs instead of Docker containers — useful for Apple Silicon without Docker Desktop, or when you need full Linux kernel features (KVM, `/dev/kvm`).
+
+```bash
+cell claude --macos          # provision Debian ARM64 VM via UTM, then open Claude Code
+cell build --macos           # re-apply nixhome flake inside the VM
+cell build --update --macos  # nix flake update inside VM, then re-provision
+cell rdp --list              # shows docker + vagrant cells side by side
+```
+
+Set permanently in `.devcell.toml`:
+
+```toml
+[cell]
+engine = "vagrant"
+vagrant_provider = "utm"   # utm (macOS) or libvirt (Linux)
+vagrant_box = "utm/bookworm"
+```
+
+On first run the CLI scaffolds a `Vagrantfile`, starts the VM, installs Nix single-user, and applies the same home-manager configuration used by Docker images. Subsequent runs detect whether provisioning is needed and skip it if the binary is already present.
 
 ## MCP servers
 
@@ -59,6 +91,21 @@ Baked into the image and auto-merged into each agent's config at container start
 | Linear | Project and issue management | OAuth 2.1 |
 | Notion | Database and page management | OAuth 2.1 |
 | MCP-NixOS | Nix package search and docs | None |
+
+## Browser login & anti-bot protection
+
+`cell login` lets the agent use authenticated sessions without ever seeing passwords:
+
+```bash
+cell login https://example.com   # opens a real browser on your host
+                                  # you log in normally, press Enter
+                                  # cookies + localStorage sync to the container
+cell login --force https://...   # wipe saved session and start fresh
+```
+
+**How it avoids bot detection:** the login browser opens with no CDP debugging port — no `--remote-debugging-port`, no special flags. Cloudflare, Kasada, and similar systems cannot detect it as automated. After you close the browser, a separate headless CDP instance reads the cookies from the same profile and writes `storage-state.json` for Playwright. The agent replays the session; your password is never exposed.
+
+The fingerprint (`User-Agent`, platform, browser brands) is read from your real installed Chrome binary and saved alongside the session so Patchright uses an identical identity.
 
 ## Security
 

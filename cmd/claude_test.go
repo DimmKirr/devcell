@@ -110,6 +110,119 @@ use_ollama = true
 	}
 }
 
+// TestClaude_OllamaConfigModel_WithPrefix verifies that [llm.models] default = "ollama/model"
+// injects ANTHROPIC_MODEL with the prefix stripped.
+func TestClaude_OllamaConfigModel_WithPrefix(t *testing.T) {
+	home := scaffoldedHome(t)
+
+	cfgDir := filepath.Join(home, ".config", "devcell")
+	tomlContent := `[cell]
+[llm]
+use_ollama = true
+
+[llm.models]
+default = "ollama/qwen3:30b"
+`
+	if err := os.WriteFile(filepath.Join(cfgDir, "devcell.toml"), []byte(tomlContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(binaryPath, "claude", "--dry-run")
+	cmd.Dir = home
+	cmd.Env = append(os.Environ(), "CELL_ID=1", "HOME="+home)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("claude --dry-run failed: %v\noutput: %s", err, out)
+	}
+
+	argv := string(out)
+	if !strings.Contains(argv, "ANTHROPIC_MODEL=qwen3:30b") {
+		t.Errorf("expected ANTHROPIC_MODEL=qwen3:30b (prefix stripped), got:\n%s", argv)
+	}
+	if strings.Contains(argv, "ANTHROPIC_MODEL=ollama/") {
+		t.Errorf("ollama/ prefix should be stripped from ANTHROPIC_MODEL:\n%s", argv)
+	}
+}
+
+// TestClaude_OllamaConfigModel_NoPrefix verifies that a model without "ollama/" prefix
+// is passed through as-is.
+func TestClaude_OllamaConfigModel_NoPrefix(t *testing.T) {
+	home := scaffoldedHome(t)
+
+	cfgDir := filepath.Join(home, ".config", "devcell")
+	tomlContent := `[cell]
+[llm]
+use_ollama = true
+
+[llm.models]
+default = "qwen3:30b"
+`
+	if err := os.WriteFile(filepath.Join(cfgDir, "devcell.toml"), []byte(tomlContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(binaryPath, "claude", "--dry-run")
+	cmd.Dir = home
+	cmd.Env = append(os.Environ(), "CELL_ID=1", "HOME="+home)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("claude --dry-run failed: %v\noutput: %s", err, out)
+	}
+
+	argv := string(out)
+	if !strings.Contains(argv, "ANTHROPIC_MODEL=qwen3:30b") {
+		t.Errorf("expected ANTHROPIC_MODEL=qwen3:30b, got:\n%s", argv)
+	}
+}
+
+// TestClaude_OllamaFlag_ConfigModel verifies that --ollama flag also picks up
+// [llm.models] default from config (flag + config model should both work).
+func TestClaude_OllamaFlag_ConfigModel(t *testing.T) {
+	home := scaffoldedHome(t)
+
+	cfgDir := filepath.Join(home, ".config", "devcell")
+	tomlContent := `[cell]
+[llm.models]
+default = "ollama/deepseek-r1:32b"
+`
+	if err := os.WriteFile(filepath.Join(cfgDir, "devcell.toml"), []byte(tomlContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(binaryPath, "claude", "--ollama", "--dry-run")
+	cmd.Dir = home
+	cmd.Env = append(os.Environ(), "CELL_ID=1", "HOME="+home)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("claude --ollama --dry-run failed: %v\noutput: %s", err, out)
+	}
+
+	argv := string(out)
+	if !strings.Contains(argv, "ANTHROPIC_MODEL=deepseek-r1:32b") {
+		t.Errorf("expected ANTHROPIC_MODEL=deepseek-r1:32b when --ollama + config model:\n%s", argv)
+	}
+}
+
+// TestClaude_OllamaNoModel_NoAnthropicModel verifies that without a configured model
+// and no reachable ollama, ANTHROPIC_MODEL is not injected.
+func TestClaude_OllamaNoModel_NoAnthropicModel(t *testing.T) {
+	home := scaffoldedHome(t)
+
+	// ollama not running in test env → auto-detect silently returns ""
+	cmd := exec.Command(binaryPath, "claude", "--ollama", "--dry-run")
+	cmd.Dir = home
+	cmd.Env = append(os.Environ(), "CELL_ID=1", "HOME="+home)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("claude --ollama --dry-run failed: %v\noutput: %s", err, out)
+	}
+
+	argv := string(out)
+	if strings.Contains(argv, "ANTHROPIC_MODEL=") {
+		t.Errorf("ANTHROPIC_MODEL should not be set when no model configured and ollama unreachable:\n%s", argv)
+	}
+}
+
 // TestClaude_OllamaWithUserArgs verifies that --ollama + user args work together.
 func TestClaude_OllamaWithUserArgs(t *testing.T) {
 	home := scaffoldedHome(t)

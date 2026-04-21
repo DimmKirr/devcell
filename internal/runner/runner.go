@@ -101,7 +101,12 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 		argv = append(argv, "op", "run", "--")
 	}
 
-	argv = append(argv, "docker", "run", "--rm", "-it", "--shm-size=1g")
+	dockerRunFlags := []string{"--rm", "-it", "--shm-size=1g"}
+	if spec.CellCfg.Cell.DockerPrivileged {
+		dockerRunFlags = append(dockerRunFlags, "--privileged")
+	}
+	argv = append(argv, "docker", "run")
+	argv = append(argv, dockerRunFlags...)
 
 	// Identity
 	argv = append(argv, "--name", c.ContainerName)
@@ -322,10 +327,10 @@ func EnsureNetwork(ctx context.Context) error {
 // --pull is always passed so Docker checks for a newer base image digest and
 // busts the layer cache when the upstream image has been updated.
 func BuildImage(ctx context.Context, configDir string, noCache bool, verbose bool, out io.Writer) error {
-	progress := "--progress=quiet"
-	if verbose {
-		progress = "--progress=plain"
-	}
+	// Always use plain progress so the full build log (including nix errors)
+	// is captured. In non-verbose mode the output goes to a buffer and is
+	// only displayed on failure.
+	progress := "--progress=plain"
 	args := []string{"build", "-t", UserImageTag(), progress,
 		"--build-arg", "GIT_COMMIT=" + version.GitCommit,
 	}
@@ -345,16 +350,8 @@ func BuildImage(ctx context.Context, configDir string, noCache bool, verbose boo
 		}
 		return nil
 	}
-	if verbose {
-		cmd.Stdout = out
-		cmd.Stderr = out
-	} else {
-		// Suppress progress output; capture stderr so we can replay it on failure.
-		cmd.Stdout = io.Discard
-		cmd.Stderr = out
-		// Belt-and-suspenders: also tell BuildKit via env to use quiet mode.
-		cmd.Env = append(os.Environ(), "BUILDKIT_PROGRESS=quiet")
-	}
+	cmd.Stdout = out
+	cmd.Stderr = out
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() != nil {
 			return fmt.Errorf("docker build: interrupted")

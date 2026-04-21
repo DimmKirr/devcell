@@ -5,12 +5,14 @@
 # Base stack (one of: base, go, node, python, fullstack, electronics, ultimate)
 stack = "ultimate"
 #
-# Addon modules (from nixhome/modules/): desktop, electronics, financial,
+# Addon modules (from nixhome/modules/): android, desktop, electronics, financial,
 # graphics, infra, news, nixos, qa-tools, scraping, travel, go, node, python
 # modules = ["electronics", "desktop"]
 #
 # Disable GUI (Xvfb + VNC + browser). GUI is enabled by default.
 # gui = false
+# Run container with Docker --privileged flag. Default: false.
+# docker_privileged = true
 # Timezone (IANA format). If omitted, inherits host $TZ.
 # timezone = "Europe/Prague"
 
@@ -38,8 +40,8 @@ stack = "ultimate"
 # 1Password documents whose fields are passed into the container as env vars.
 # Requires `op` CLI on the host. Each field in the document becomes an env var:
 # e.g. a field labeled "API_KEY" with value "sk-123" → env var API_KEY=sk-123.
-# [op]
-# documents = ["prod-api-keys", "dev-secrets"]
+[op]
+documents = ["prod-devcell-common"]
 
 # AWS credential scoping. When true, credentials are scoped to read-only
 # via IAM session policy. All AWS tools (cli, terraform, SDKs, MCP servers)

@@ -77,15 +77,17 @@ func TestClaude_WithUserArgs(t *testing.T) {
 // --- codex ---
 
 func TestCodex_DefaultFlags(t *testing.T) {
-	argv := buildTestArgv("codex", []string{"--dangerously-bypass-approvals-and-sandbox", "--oss", "-p", "lms"}, nil)
+	// No ollama: only --dangerously-bypass-approvals-and-sandbox; no --oss.
+	argv := buildTestArgv("codex", []string{"--dangerously-bypass-approvals-and-sandbox"}, nil)
 	tail := trailingAfterImage(argv)
 	if tail[0] != "codex" {
 		t.Errorf("expected codex binary, got: %v", tail)
 	}
-	for _, flag := range []string{"--dangerously-bypass-approvals-and-sandbox", "--oss", "-p", "lms"} {
-		if !hasArg(tail, flag) {
-			t.Errorf("missing flag %q in tail: %v", flag, tail)
-		}
+	if !hasArg(tail, "--dangerously-bypass-approvals-and-sandbox") {
+		t.Errorf("missing --dangerously-bypass-approvals-and-sandbox in tail: %v", tail)
+	}
+	if hasArg(tail, "--oss") {
+		t.Errorf("unexpected --oss without ollama in tail: %v", tail)
 	}
 }
 
