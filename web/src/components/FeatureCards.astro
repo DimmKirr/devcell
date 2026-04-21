@@ -36,8 +36,13 @@
     </div>
     <div class="does-card">
       <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-      <h3>Stealth Chromium built in</h3>
-      <p>Anti-fingerprint Chromium with Playwright, ready for scraping and browser automation. Passes bot detection out of the box. Connect via VNC or RDP to watch it work.</p>
+      <h3>Stealth Chromium, zero passwords</h3>
+      <p>Run <code>cell login</code> on your host to log into any site — a clean browser opens (no CDP, no bot-detection triggers), you log in, press Enter. Cookies and localStorage sync to the container automatically. The agent never sees your password. Anti-fingerprint Playwright replays sessions that pass Cloudflare and Kasada.</p>
+    </div>
+    <div class="does-card">
+      <svg class="card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/><path d="M7 7h10M7 11h6"/></svg>
+      <h3>Docker or VM — your choice</h3>
+      <p>Default: Docker container, zero setup. Add <code>--macos</code> and devcell provisions a Debian ARM64 VM via Vagrant + UTM instead — same nixhome toolchain, same commands. Works for teams that can't use Docker Desktop or need native Linux on Apple Silicon.</p>
     </div>
   </div>
 </section>
