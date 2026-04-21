@@ -87,3 +87,61 @@ func TestRenderVNCList_URLIncludedInJSON(t *testing.T) {
 		t.Errorf("url should contain port 5900, got %q", url)
 	}
 }
+
+// L0: vagrant-named entries render correctly — renderVNCList is pure (no I/O).
+
+func TestRenderVNCList_VagrantEntryText(t *testing.T) {
+	ux.OutputFormat = "text"
+
+	m := map[string]string{"vagrant-myproject": "40550"}
+
+	out := captureStdoutMain(func() { renderVNCList(m) })
+
+	if !strings.Contains(out, "vagrant-myproject") {
+		t.Errorf("text output must contain vagrant app name, got: %q", out)
+	}
+	if !strings.Contains(out, "40550") {
+		t.Errorf("text output must contain vagrant VNC port, got: %q", out)
+	}
+}
+
+func TestRenderVNCList_VagrantEntryJSON(t *testing.T) {
+	ux.OutputFormat = "json"
+	defer func() { ux.OutputFormat = "text" }()
+
+	m := map[string]string{"vagrant-myproject": "40550"}
+
+	out := captureStdoutMain(func() { renderVNCList(m) })
+
+	var result []map[string]string
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("not valid JSON: %v\noutput: %q", err, out)
+	}
+	if len(result) != 1 {
+		t.Fatalf("want 1 entry, got %d", len(result))
+	}
+	if result[0]["app_name"] != "vagrant-myproject" {
+		t.Errorf("want app_name=vagrant-myproject, got %q", result[0]["app_name"])
+	}
+	if result[0]["port"] != "40550" {
+		t.Errorf("want port=40550, got %q", result[0]["port"])
+	}
+}
+
+func TestRenderVNCList_MixedDockerAndVagrant(t *testing.T) {
+	ux.OutputFormat = "text"
+
+	m := map[string]string{
+		"cell-myproject-3-run": "350",
+		"vagrant-myproject":    "40550",
+	}
+
+	out := captureStdoutMain(func() { renderVNCList(m) })
+
+	if !strings.Contains(out, "cell-myproject-3-run") {
+		t.Errorf("text output must contain docker app name, got: %q", out)
+	}
+	if !strings.Contains(out, "vagrant-myproject") {
+		t.Errorf("text output must contain vagrant app name, got: %q", out)
+	}
+}

@@ -15,13 +15,13 @@ func TestRenderModels_JSONOutputIsValidJSON(t *testing.T) {
 	ux.OutputFormat = "json"
 	defer func() { ux.OutputFormat = "text" }()
 
-	ranked := []ollama.RankedModel{
+	local := []ollama.RankedModel{
 		{Model: ollama.Model{Name: "deepseek-r1:32b", ParameterSize: "32B"}, SWEScore: 49.2, Rank: 1, ScoreSource: "SWE"},
 		{Model: ollama.Model{Name: "qwen3:8b", ParameterSize: "8B"}, SWEScore: 28.0, Rank: 2, ScoreSource: "est"},
 	}
 
 	out := captureStdoutMain(func() {
-		renderModels(ranked, map[string]ollama.HFModelInfo{}, 32.0)
+		renderModels(nil, local, nil, nil, nil, map[string]ollama.HFModelInfo{}, 32.0)
 	})
 
 	var result []map[string]any
@@ -37,12 +37,12 @@ func TestRenderModels_JSONContainsNameAndRank(t *testing.T) {
 	ux.OutputFormat = "json"
 	defer func() { ux.OutputFormat = "text" }()
 
-	ranked := []ollama.RankedModel{
+	local := []ollama.RankedModel{
 		{Model: ollama.Model{Name: "deepseek-r1:32b", ParameterSize: "32B"}, SWEScore: 49.2, Rank: 1, ScoreSource: "SWE"},
 	}
 
 	out := captureStdoutMain(func() {
-		renderModels(ranked, map[string]ollama.HFModelInfo{}, 0)
+		renderModels(nil, local, nil, nil, nil, map[string]ollama.HFModelInfo{}, 0)
 	})
 
 	var result []map[string]any
@@ -63,16 +63,16 @@ func TestRenderModels_JSONSuppressesProseOutput(t *testing.T) {
 	ux.OutputFormat = "json"
 	defer func() { ux.OutputFormat = "text" }()
 
-	ranked := []ollama.RankedModel{
+	local := []ollama.RankedModel{
 		{Model: ollama.Model{Name: "qwen3:8b", ParameterSize: "8B"}, SWEScore: 28.0, Rank: 1},
 	}
 
 	out := captureStdoutMain(func() {
-		renderModels(ranked, map[string]ollama.HFModelInfo{}, 0)
+		renderModels(nil, local, nil, nil, nil, map[string]ollama.HFModelInfo{}, 0)
 	})
 
-	// Prose like "Local Models", TOML snippet markers, "ollama" footer should NOT appear
-	if strings.Contains(out, "Local Models") {
+	// Prose like "Available Models", TOML snippet markers should NOT appear in JSON mode
+	if strings.Contains(out, "Available Models") {
 		t.Errorf("json mode should suppress prose header, got: %q", out)
 	}
 	if strings.Contains(out, "[ollama]") {
@@ -83,12 +83,12 @@ func TestRenderModels_JSONSuppressesProseOutput(t *testing.T) {
 func TestRenderModels_TextContainsModelName(t *testing.T) {
 	ux.OutputFormat = "text"
 
-	ranked := []ollama.RankedModel{
+	local := []ollama.RankedModel{
 		{Model: ollama.Model{Name: "deepseek-r1:32b", ParameterSize: "32B"}, SWEScore: 49.2, Rank: 1, ScoreSource: "SWE"},
 	}
 
 	out := captureStdoutMain(func() {
-		renderModels(ranked, map[string]ollama.HFModelInfo{}, 0)
+		renderModels(nil, local, nil, nil, nil, map[string]ollama.HFModelInfo{}, 0)
 	})
 
 	if !strings.Contains(out, "deepseek-r1:32b") {
@@ -99,15 +99,15 @@ func TestRenderModels_TextContainsModelName(t *testing.T) {
 func TestRenderModels_TextIncludesProseHeader(t *testing.T) {
 	ux.OutputFormat = "text"
 
-	ranked := []ollama.RankedModel{
+	local := []ollama.RankedModel{
 		{Model: ollama.Model{Name: "qwen3:8b", ParameterSize: "8B"}, Rank: 1},
 	}
 
 	out := captureStdoutMain(func() {
-		renderModels(ranked, map[string]ollama.HFModelInfo{}, 0)
+		renderModels(nil, local, nil, nil, nil, map[string]ollama.HFModelInfo{}, 0)
 	})
 
-	if !strings.Contains(out, "Local Models") {
+	if !strings.Contains(out, "Available Models") {
 		t.Errorf("text mode should include prose header, got: %q", out)
 	}
 }

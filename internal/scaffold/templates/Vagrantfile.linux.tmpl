@@ -1,0 +1,287 @@
+# -*- mode: ruby -*-
+# frozen_string_literal: true
+#
+# devcell Linux VM — Debian ARM64 + Nix home-manager
+# Provider: utm (Apple Silicon Mac) or libvirt/KVM (Linux host)
+#
+# Provisioning (runs once on first `vagrant up`):
+#   1. Install Nix (no-daemon mode)
+#   2. Apply home-manager flake: vagrant-linux (or vagrant-linux-aarch64 on ARM)
+#
+# Usage:
+#   vagrant up --provider={{VAGRANT_PROVIDER}}
+#   vagrant ssh -- -t claude
+#
+# Disk resize (UTM):
+#   The trigger below resizes the QEMU disk to DISK_GB before each `vagrant up`.
+#   On first run the disk image does not exist yet, so resize is skipped.
+#   After the VM is first created, run `vagrant halt && vagrant up` once so the
+#   trigger can resize the disk before the in-VM provisioner grows the filesystem.
+#   Requires qemu-img on the host: brew install qemu
+
+DISK_GB = 30
+
+Vagrant.configure("2") do |config|
+  config.vm.box      = ENV["VAGRANT_BOX"] || "{{VAGRANT_BOX}}"
+  config.vm.hostname = "{{VM_NAME}}"
+
+  # Disable ALL Vagrant synced folders — vagrant-utm scans every synced_folder
+  # entry (regardless of type or placement) and shows a "MANUAL STEP REQUIRED:
+  # VirtioFS" prompt for each one. Syncing is handled by the post-up trigger below.
+  config.vm.synced_folder ".", "/vagrant", disabled: true
+
+  # GUI ports (VNC + RDP) — forwarded to host for cell vnc / cell rdp
+  config.vm.network "forwarded_port", guest: 5900, host: {{VNC_PORT}}, id: "vnc"
+  config.vm.network "forwarded_port", guest: 3389, host: {{RDP_PORT}}, id: "rdp"
+
+  # ── UTM disk resize trigger (host-side, runs before every `vagrant up`) ────
+  # Resizes the QEMU image to DISK_GB. No-op if disk is already >= DISK_GB.
+  # Skipped silently if the .qcow2 file does not exist yet (first boot).
+  config.trigger.before :up do |trigger|
+    trigger.name = "Resize UTM disk to #{DISK_GB}G"
+    trigger.ruby do |env, machine|
+      next unless machine.provider_name.to_s == "utm"
+      vm_name  = "{{VM_NAME}}"
+      utm_data = File.expand_path(
+        "~/Library/Containers/com.utmapp.UTM/Data/Documents/#{vm_name}.utm/Data"
+      )
+      qcow2 = Dir.glob("#{utm_data}/*.qcow2").first
+      unless qcow2
+        machine.ui.info("disk resize: no .qcow2 found yet — skipping (run `vagrant halt && vagrant up` after first boot)")
+        next
+      end
+      qemu_img = %w[
+        /opt/homebrew/bin/qemu-img
+        /usr/local/bin/qemu-img
+        /Applications/UTM.app/Contents/MacOS/qemu-img
+      ].find { |p| File.executable?(p) }
+      unless qemu_img
+        machine.ui.warn("disk resize: qemu-img not found — install with: brew install qemu")
+        next
+      end
+      machine.ui.info("disk resize: resizing #{File.basename(qcow2)} to #{DISK_GB}G")
+      system(qemu_img, "resize", qcow2, "#{DISK_GB}G")
+    end
+  end
+
+  # ── Post-up rsync trigger — mirrors Docker volume mounts via SSH ─────────
+  # Syncs host directories into the VM after every `vagrant up`, replacing
+  # the synced_folder mechanism (which triggers VirtioFS prompts in vagrant-utm).
+  # Mirrors the volume set that Docker's BuildArgv mounts:
+  #   PROJECT_DIR → /home/vagrant/<project-basename>
+  #   HOST_HOME/.claude/commands → /home/vagrant/.claude/commands
+  #   HOST_HOME/.claude/agents  → /home/vagrant/.claude/agents
+  #   HOST_HOME/.claude/skills  → /home/vagrant/.claude/skills
+  #   CONFIG_DIR                → /home/vagrant/.config/devcell
+  config.trigger.after :up do |trigger|
+    trigger.name = "Sync host directories to VM (rsync over SSH)"
+    trigger.ruby do |env, machine|
+      ssh = machine.ssh_info
+      next unless ssh
+
+      ssh_flags = [
+        "-p", ssh[:port].to_s,
+        "-i", ssh[:private_key_path].first,
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=/dev/null",
+        "-o", "LogLevel=ERROR"
+      ]
+      ssh_cmd   = "ssh #{ssh_flags.join(' ')}"
+      user_host = "#{ssh[:username]}@#{ssh[:host]}"
+
+      project_dir  = "{{PROJECT_DIR}}"
+      project_dest = "/home/vagrant/" + File.basename(project_dir)
+
+      syncs = [
+        { src: project_dir + "/",                 dest: project_dest + "/",                args: ["--exclude=.devcell/nixhome/"] },
+        { src: "{{HOST_HOME}}/.claude/commands/", dest: "/home/vagrant/.claude/commands/", args: ["--delete"] },
+        { src: "{{HOST_HOME}}/.claude/agents/",   dest: "/home/vagrant/.claude/agents/",   args: ["--delete"] },
+        { src: "{{HOST_HOME}}/.claude/skills/",   dest: "/home/vagrant/.claude/skills/",   args: ["--delete"] },
+        { src: "{{CONFIG_DIR}}/",                 dest: "/home/vagrant/.config/devcell/",  args: ["--delete"] },
+      ]
+
+      syncs.each do |s|
+        next unless File.exist?(s[:src].chomp("/"))
+        machine.ui.info("sync: #{s[:src]} → #{user_host}:#{s[:dest]}")
+        system("ssh", *ssh_flags, user_host, "mkdir -p #{s[:dest]}")
+        system("rsync", "-az", "-e", ssh_cmd, *s[:args], s[:src], "#{user_host}:#{s[:dest]}")
+      end
+    end
+  end
+
+  # ── UTM provider (Apple Silicon Mac — vagrant-utm plugin required) ────────
+  config.vm.provider "utm" do |utm|
+    utm.name   = "{{VM_NAME}}"
+    utm.memory = 8192
+    utm.cpus   = 4
+  end
+
+  # ── libvirt provider (Linux host with KVM — vagrant-libvirt plugin required)
+  config.vm.provider "libvirt" do |libvirt|
+    libvirt.driver               = "kvm"
+    libvirt.memory               = 8192
+    libvirt.cpus                 = 4
+    libvirt.machine_virtual_size = DISK_GB
+  end
+
+  # ── Disk expand provisioner (runs every `vagrant up`) ────────────────────
+  # Grows the root partition and ext4 filesystem to fill any newly available
+  # disk space after the host-side qemu-img resize. Both growpart and resize2fs
+  # are idempotent — they exit cleanly when there is nothing to do.
+  config.vm.provision "disk-expand", type: "shell", run: "always", privileged: true, inline: <<~SHELL
+    set -euo pipefail
+    if ! command -v growpart >/dev/null 2>&1; then
+      apt-get install -y -q cloud-guest-utils 2>/dev/null || true
+    fi
+    ROOT_DEV=$(findmnt -n -o SOURCE / 2>/dev/null || echo "")
+    if [ -z "$ROOT_DEV" ]; then exit 0; fi
+    # e.g. /dev/vda1 → disk=vda, part=1
+    DISK=$(lsblk -no PKNAME "$ROOT_DEV" 2>/dev/null || true)
+    PART=$(echo "$ROOT_DEV" | grep -o '[0-9]*$' || true)
+    if [ -n "$DISK" ] && [ -n "$PART" ]; then
+      growpart "/dev/$DISK" "$PART" 2>/dev/null || true
+      resize2fs "$ROOT_DEV" 2>/dev/null || true
+    fi
+  SHELL
+
+  # ── /etc/devcell/config symlink (mirrors the Docker /etc/devcell/config mount)
+  # The post-up rsync trigger writes to /home/vagrant/.config/devcell.
+  # Create /etc/devcell/config as a symlink so tools that read /etc/devcell/config work.
+  config.vm.provision "devcell-config", type: "shell", run: "always", privileged: true, inline: <<~SHELL
+    mkdir -p /etc/devcell
+    if [ ! -L /etc/devcell/config ]; then
+      ln -sfT /home/vagrant/.config/devcell /etc/devcell/config
+    fi
+    # Generate en_US.UTF-8 locale if missing (suppresses bash setlocale warnings)
+    if ! locale -a 2>/dev/null | grep -q "en_US.utf8"; then
+      apt-get install -y -q locales 2>/dev/null || true
+      locale-gen en_US.UTF-8 2>/dev/null || true
+    fi
+  SHELL
+
+  # ── devcell-init service — mirrors Docker's entrypoint fragment mechanism ──
+  # Creates /usr/local/bin/devcell-init and a systemd unit that runs it at boot.
+  # The script sources all fragments from /etc/devcell/entrypoint.d/ (installed
+  # by home-manager's stageEntrypoints activation script) with vagrant-appropriate
+  # env vars: DEVCELL_HOME=/home/vagrant, HOST_USER=vagrant, etc.
+  #
+  # Vagrant env → Docker env mapping:
+  #   DEVCELL_HOME=/home/vagrant   ← /opt/devcell  (home-manager files land in $HOME)
+  #   HOST_USER=vagrant            ← $HOST_USER
+  #   DEVCELL_GUI_ENABLED          ← set from stack ({{GUI_ENABLED}})
+  #   gosu() shim via runuser      ← /usr/sbin/gosu binary
+  config.vm.provision "devcell-init", type: "shell", run: "always", privileged: true, inline: <<~SHELL
+    set -euo pipefail
+
+    cat > /usr/local/bin/devcell-init << 'INITSCRIPT'
+#!/bin/bash
+# DevCell init — sources entrypoint fragments at VM boot.
+# Mirrors images/entrypoint.sh with vagrant-appropriate env vars.
+export HOST_USER=vagrant
+export HOME=/home/vagrant
+export USER=vagrant
+export DEVCELL_HOME=/home/vagrant
+export APP_NAME={{VM_NAME}}
+export DEVCELL_GUI_ENABLED={{GUI_ENABLED}}
+
+_T0=$(($(date +%s%N) / 1000000))
+log() {
+  local _ms=$(( $(date +%s%N) / 1000000 - _T0 ))
+  printf '[devcell-init %d.%03ds] %s\n' $((_ms/1000)) $((_ms%1000)) "$*"
+}
+
+# gosu shim — vagrant uses runuser instead of the gosu binary
+gosu() { local _u="$1"; shift; runuser -u "$_u" -- "$@"; }
+
+log "start (app={{VM_NAME}} gui={{GUI_ENABLED}})"
+
+if [ -d /etc/devcell/entrypoint.d ]; then
+  for f in /etc/devcell/entrypoint.d/*.sh; do
+    [ -x "$f" ] || continue
+    log "sourcing $(basename $f)"
+    . "$f" || log "⚠ fragment failed: $(basename $f) (exit $?)"
+  done
+fi
+
+log "done"
+INITSCRIPT
+    chmod +x /usr/local/bin/devcell-init
+
+    cat > /etc/systemd/system/devcell-init.service << 'UNIT'
+[Unit]
+Description=DevCell initialization (entrypoint fragments)
+After=network.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/devcell-init
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+    systemctl daemon-reload
+    systemctl enable devcell-init
+    systemctl restart devcell-init || true
+  SHELL
+
+  # ── Nix + home-manager provisioner ───────────────────────────────────────
+  # Runs once on first `vagrant up` (run: "once").
+  # Use `vagrant up --provision` or `cell build --engine=vagrant` to re-run.
+  # Stack: {{STACK}} — reflected in nixhome/hosts/linux/stack.nix at provision time.
+  #
+  # nixhome source priority:
+  #   1. ~/nixhome     — uploaded by 'cell build --engine=vagrant'
+  #   2. /opt/nixhome  — rsync'd by libvirt (fast, uses local nixhome/)
+  #   3. GitHub        — fetched when nixhome not present locally
+  config.vm.provision "nix", type: "shell", run: "once", privileged: false, inline: <<~SHELL
+    set -euo pipefail
+
+    # Install Nix (no-daemon, single-user) if not already present.
+    # --no-channel-add skips `nix-channel --update` which can hang the SSH session.
+    # Channels are unused — we use flakes exclusively.
+    if ! command -v nix >/dev/null 2>&1; then
+      curl -sSfL https://nixos.org/nix/install | sh -s -- --no-daemon --no-channel-add
+    fi
+
+    # Source Nix environment
+    if [ -f "$HOME/.nix-profile/etc/profile.d/nix.sh" ]; then
+      . "$HOME/.nix-profile/etc/profile.d/nix.sh"
+    fi
+
+    # Enable flakes
+    mkdir -p "$HOME/.config/nix"
+    echo "experimental-features = nix-command flakes" > "$HOME/.config/nix/nix.conf"
+
+    # Resolve nixhome: uploaded by 'cell build' to ~/nixhome, or GitHub fallback.
+    if [ -d "$HOME/nixhome" ]; then
+      NIXHOME_FLAKE="$HOME/nixhome"
+    elif [ -d /opt/nixhome ]; then
+      NIXHOME_FLAKE="/opt/nixhome"
+    else
+      NIXHOME_FLAKE="github:DimmKirr/devcell?dir=nixhome"
+      echo "devcell: nixhome not found locally — fetching from GitHub"
+    fi
+
+    # Select flake target based on host architecture.
+    # aarch64-linux targets use the "-aarch64" suffix in the nixhome flake.
+    ARCH=$(uname -m)
+    if [ "$ARCH" = "aarch64" ]; then
+      ARCH_SUFFIX="-aarch64"
+    else
+      ARCH_SUFFIX=""
+    fi
+
+    # Apply home-manager configuration for the Linux vagrant VM.
+    # Uses vagrant-linux config (username=vagrant, homeDirectory=/home/vagrant).
+    # Customize .devcell/nixhome/hosts/linux/home.nix to add more modules.
+    nix run home-manager/release-25.11 -- switch \
+      --flake "${NIXHOME_FLAKE}#vagrant-linux${ARCH_SUFFIX}" \
+      --show-trace
+
+    echo "devcell: home-manager switch complete (config: vagrant-linux${ARCH_SUFFIX}, flake: ${NIXHOME_FLAKE})"
+  SHELL
+end

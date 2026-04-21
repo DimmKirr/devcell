@@ -105,3 +105,29 @@ func TestGetSystemRAMGB(t *testing.T) {
 		t.Errorf("expected positive system RAM, got %.1f", ram)
 	}
 }
+
+func TestCheckHardwareSafe_FitsWithin75Pct(t *testing.T) {
+	// 8B model needs ~6.4 GB, 75% of 16 GB = 12 GB → fits
+	ok, needed := ollama.CheckHardwareSafe("8B", 16.0)
+	if !ok {
+		t.Errorf("expected 8B to fit safely in 16GB (needed=%.1f)", needed)
+	}
+}
+
+func TestCheckHardwareSafe_DoesNotFitAt75Pct(t *testing.T) {
+	// 70B model needs ~40.5 GB, 75% of 48 GB = 36 GB → does NOT fit safely
+	ok, needed := ollama.CheckHardwareSafe("70B", 48.0)
+	if ok {
+		t.Errorf("expected 70B to not fit safely in 48GB (needed=%.1f)", needed)
+	}
+}
+
+func TestCheckHardwareSafe_UnknownSize(t *testing.T) {
+	ok, needed := ollama.CheckHardwareSafe("", 16.0)
+	if !ok {
+		t.Error("expected unknown size to return ok")
+	}
+	if needed != 0 {
+		t.Errorf("expected needed=0 for unknown, got %v", needed)
+	}
+}

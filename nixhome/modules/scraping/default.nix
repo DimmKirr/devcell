@@ -248,6 +248,52 @@ async function __hmMove(page, tx, ty) {\
         });
       }
 
+      // Spoof platform + userAgentData from cell login fingerprint.
+      // window.__cellFp is injected by the patchright-mcp-cell preamble init script
+      // when $HOME/playwright-fingerprint.json exists (written by `cell login` on macOS).
+      if (window.__cellFp) {
+        // navigator.platform → "MacIntel"
+        Object.defineProperty(Navigator.prototype, 'platform', {
+          get: () => window.__cellFp.platform || 'MacIntel',
+          configurable: true
+        });
+
+        if (typeof NavigatorUAData !== 'undefined') {
+          // navigator.userAgentData.platform → "macOS"
+          const _fpPlatformDesc = Object.getOwnPropertyDescriptor(NavigatorUAData.prototype, 'platform');
+          if (_fpPlatformDesc) {
+            Object.defineProperty(NavigatorUAData.prototype, 'platform', {
+              get: () => window.__cellFp.uaPlatform || 'macOS',
+              configurable: true
+            });
+          }
+
+          // navigator.userAgentData.brands → Chrome brands
+          const _fpBrandsDesc = Object.getOwnPropertyDescriptor(NavigatorUAData.prototype, 'brands');
+          if (_fpBrandsDesc && window.__cellFp.brands) {
+            Object.defineProperty(NavigatorUAData.prototype, 'brands', {
+              get: () => window.__cellFp.brands,
+              configurable: true
+            });
+          }
+
+          // Extend existing getHighEntropyValues to also return macOS platform + brands
+          const _fpOrigGetHigh = NavigatorUAData.prototype.getHighEntropyValues;
+          if (_fpOrigGetHigh) {
+            Object.defineProperty(NavigatorUAData.prototype, 'getHighEntropyValues', {
+              value: async function(hints) {
+                const values = await _fpOrigGetHigh.call(this, hints);
+                if (window.__cellFp.uaPlatform) values.platform = window.__cellFp.uaPlatform;
+                if (window.__cellFp.brands) values.brands = window.__cellFp.brands;
+                return values;
+              },
+              writable: true,
+              configurable: true
+            });
+          }
+        }
+      }
+
       // --- Web Share API stubs (noWebShare signal) ---
       if (!navigator.share) {
         navigator.share = function(data) {
@@ -669,13 +715,219 @@ async function __hmMove(page, tx, ty) {\
         _nativeFnNames.set(window.ContactsManager, 'ContactsManager');
       }
 
-      // --- Fix noDownlinkMax: mock NetworkInformation.downlinkMax ---
+      // --- NetworkInformation — realistic 4G WiFi connection profile ---
       if (navigator.connection) {
-        Object.defineProperty(navigator.connection, 'downlinkMax', {
-          get: () => Infinity,
-          configurable: true
-        });
+        var _connProps = {
+          effectiveType: '4g',
+          downlink: 10.5,
+          downlinkMax: Infinity,
+          rtt: 50,
+          saveData: false,
+          type: 'wifi',
+        };
+        for (var _cp in _connProps) {
+          (function(k, v) {
+            Object.defineProperty(navigator.connection, k, {
+              get: function() { return v; }, configurable: true
+            });
+          })(_cp, _connProps[_cp]);
+        }
       }
+
+      // --- hardwareConcurrency: container CPU count leaks as bot signal ---
+      // Spoof to 8 (common mid-range laptop value).
+      Object.defineProperty(navigator, 'hardwareConcurrency', {
+        get: () => 8, configurable: true
+      });
+
+      // --- speechSynthesis.getVoices() returns [] on headless — bot signal ---
+      if (window.speechSynthesis) {
+        var _fakeVoices = [
+          { voiceURI: 'Google US English', name: 'Google US English', lang: 'en-US', localService: false, default: true },
+          { voiceURI: 'Google UK English Female', name: 'Google UK English Female', lang: 'en-GB', localService: false, default: false },
+          { voiceURI: 'Google UK English Male', name: 'Google UK English Male', lang: 'en-GB', localService: false, default: false },
+          { voiceURI: 'Google Deutsch', name: 'Google Deutsch', lang: 'de-DE', localService: false, default: false },
+          { voiceURI: 'Google español', name: 'Google español', lang: 'es-ES', localService: false, default: false },
+          { voiceURI: 'Google français', name: 'Google français', lang: 'fr-FR', localService: false, default: false },
+        ].map(function(v) { return Object.assign(Object.create(SpeechSynthesisVoice.prototype), v); });
+        var _origGV = window.speechSynthesis.getVoices.bind(window.speechSynthesis);
+        window.speechSynthesis.getVoices = function() {
+          var real = _origGV();
+          return real.length > 0 ? real : _fakeVoices;
+        };
+        _nativeFnNames.set(window.speechSynthesis.getVoices, 'getVoices');
+      }
+
+      // --- Battery API spoof (charging:true + level:1.0 = classic VM signal) ---
+      // Real laptop: discharging, ~70% level, ~2h remaining.
+      // Use fixed-but-plausible values so repeated calls return the same object.
+      (function() {
+        var _level = 0.67 + (Math.floor(Date.now() / 86400000) % 20) / 100;
+        var _dtime = 6300 + (Math.floor(Date.now() / 3600000) % 60) * 60;
+        var _battery = {
+          charging: false,
+          chargingTime: Infinity,
+          dischargingTime: _dtime,
+          level: _level,
+          addEventListener: function() {},
+          removeEventListener: function() {},
+          dispatchEvent: function() { return false; },
+        };
+        Object.defineProperty(navigator, 'getBattery', {
+          value: function() { return Promise.resolve(_battery); },
+          configurable: true, writable: true
+        });
+        _nativeFnNames.set(navigator.getBattery, 'getBattery');
+      })();
+
+      // --- Canvas noise (identical hash across all 5 contexts = cluster signal) ---
+      // Inject subtle per-session noise into canvas readback. Noise is stable
+      // within a session (same seed) but unique per browser launch.
+      // Only touches the alpha-zero (transparent) pixels to avoid visible artifacts.
+      (function() {
+        var _ns = (Math.random() * 0x7FFFFFFF) | 0;
+        function _nb(i) {
+          var x = (_ns ^ (i * 1664525 + 1013904223)) & 0xFF;
+          return (x & 1);
+        }
+        var _origTDU = HTMLCanvasElement.prototype.toDataURL;
+        HTMLCanvasElement.prototype.toDataURL = function(type, q) {
+          var ctx = this.getContext && this.getContext('2d');
+          if (ctx && this.width > 0 && this.height > 0) {
+            var id = ctx.getImageData(0, 0, this.width, this.height);
+            var d = id.data;
+            for (var i = 0; i < d.length; i += 4) {
+              if (d[i+3] > 0) { d[i] = Math.max(0, d[i] - _nb(i)); }
+            }
+            ctx.putImageData(id, 0, 0);
+          }
+          return _origTDU.call(this, type, q);
+        };
+        _nativeFnNames.set(HTMLCanvasElement.prototype.toDataURL, 'toDataURL');
+
+        var _origGID = CanvasRenderingContext2D.prototype.getImageData;
+        CanvasRenderingContext2D.prototype.getImageData = function(sx, sy, sw, sh) {
+          var id = _origGID.call(this, sx, sy, sw, sh);
+          var d = id.data;
+          for (var i = 0; i < d.length; i += 4) {
+            if (d[i+3] > 0) { d[i] = Math.max(0, d[i] - _nb(i)); }
+          }
+          return id;
+        };
+        _nativeFnNames.set(CanvasRenderingContext2D.prototype.getImageData, 'getImageData');
+      })();
+
+      // --- Audio fingerprint noise (OfflineAudioContext oscillator hash) ---
+      // Fingerprinting reads AudioBuffer.getChannelData() after rendering an oscillator.
+      // Add tiny per-session float noise (< 1e-7) — inaudible, changes the hash.
+      // Patch both AudioBuffer (OfflineAudioContext result) and AnalyserNode readbacks.
+      (function() {
+        var _as = (Math.random() * 0x7FFFFFFF) | 0;
+        function _af(i) {
+          var x = (_as ^ (i * 22695477 + 1)) >>> 0;
+          return (x & 0xFF) * 1e-9 - 1.275e-7;
+        }
+
+        // AudioBuffer.getChannelData — main audio fingerprint vector
+        if (typeof AudioBuffer !== 'undefined') {
+          var _origGCD = AudioBuffer.prototype.getChannelData;
+          AudioBuffer.prototype.getChannelData = function(ch) {
+            var data = _origGCD.call(this, ch);
+            for (var i = 0; i < data.length; i++) {
+              data[i] = Math.max(-1, Math.min(1, data[i] + _af(i)));
+            }
+            return data;
+          };
+          _nativeFnNames.set(AudioBuffer.prototype.getChannelData, 'getChannelData');
+        }
+
+        // AnalyserNode.getFloatFrequencyData + getByteFrequencyData
+        if (typeof AnalyserNode !== 'undefined') {
+          var _origGFFD = AnalyserNode.prototype.getFloatFrequencyData;
+          AnalyserNode.prototype.getFloatFrequencyData = function(arr) {
+            _origGFFD.call(this, arr);
+            for (var i = 0; i < arr.length; i++) arr[i] += _af(i) * 1e4;
+          };
+          _nativeFnNames.set(AnalyserNode.prototype.getFloatFrequencyData, 'getFloatFrequencyData');
+
+          var _origGBFD = AnalyserNode.prototype.getByteFrequencyData;
+          AnalyserNode.prototype.getByteFrequencyData = function(arr) {
+            _origGBFD.call(this, arr);
+            for (var i = 0; i < arr.length; i++) {
+              arr[i] = Math.max(0, Math.min(255, arr[i] + (_af(i) > 0 ? 1 : 0)));
+            }
+          };
+          _nativeFnNames.set(AnalyserNode.prototype.getByteFrequencyData, 'getByteFrequencyData');
+        }
+      })();
+
+      // --- Font enumeration spoof (Windows/macOS fonts absent on Linux = fingerprint) ---
+      // Detection: measure text width with "Calibri,sans-serif" vs "sans-serif" baseline.
+      // If equal → font absent. We apply per-font width factors so probed fonts read
+      // as present. Factors are approximate ratio of real font width to sans-serif fallback.
+      // Also patched on OffscreenCanvas (used by CreepJS and similar scanners).
+      (function() {
+        var _fonts = {
+          'calibri':                0.880,
+          'calibri light':          0.835,
+          'cambria':                0.982,
+          'cambria math':           0.982,
+          'consolas':               0.930,
+          'constantia':             0.983,
+          'corbel':                 0.928,
+          'franklin gothic medium': 0.914,
+          'segoe ui':               0.938,
+          'segoe ui light':         0.894,
+          'segoe ui semibold':      0.948,
+          'palatino linotype':      1.025,
+          'book antiqua':           1.010,
+          'garamond':               0.856,
+          'ms sans serif':          0.946,
+          'ms serif':               1.015,
+          'helvetica neue':         0.938,
+          'lucida grande':          0.971,
+          'lucida console':         0.886,
+          'optima':                 0.942,
+          'gill sans':              0.918,
+          'apple sd gothic neo':    0.910,
+          'apple chancery':         1.030,
+          'monaco':                 0.893,
+          'menlo':                  0.901,
+          'andale mono':            0.878,
+        };
+
+        function _matchFont(fontStr) {
+          var lower = (fontStr || '''').toLowerCase();
+          for (var name in _fonts) {
+            if (lower.indexOf(name) !== -1) return _fonts[name];
+          }
+          return null;
+        }
+
+        function _patchMeasureText(Proto) {
+          if (!Proto || !Proto.prototype || !Proto.prototype.measureText) return;
+          var _orig = Proto.prototype.measureText;
+          Proto.prototype.measureText = function(text) {
+            var m = _orig.call(this, text);
+            var factor = _matchFont(this.font);
+            if (factor === null) return m;
+            var w = m.width * factor;
+            return new Proxy(m, {
+              get: function(t, p) {
+                if (p === 'width') return w;
+                var v = t[p];
+                return typeof v === 'function' ? v.bind(t) : v;
+              }
+            });
+          };
+          _nativeFnNames.set(Proto.prototype.measureText, 'measureText');
+        }
+
+        _patchMeasureText(CanvasRenderingContext2D);
+        if (typeof OffscreenCanvasRenderingContext2D !== 'undefined') {
+          _patchMeasureText(OffscreenCanvasRenderingContext2D);
+        }
+      })();
     '';
   };
 
@@ -686,14 +938,28 @@ async function __hmMove(page, tx, ty) {\
     name = "keep-alive-init.js";
     text = ''
       (function() {
-        let _kaTimer = null;
+        var _kaTimer = null;
+        var _KA_IDLE_MS = 240000; // 4 min — refresh before 5-min JWT TTLs expire
+        function _kaTick() {
+          // Silent favicon fetch: sends cookies to the server so it can
+          // see authenticated activity without reloading the page.
+          // Uses GET (not HEAD) — many CDN/WAF configs (e.g. Akamai) return
+          // 503 for HEAD requests. Falls back to a GET on the current URL
+          // if the favicon CDN is cross-origin (won't carry auth cookies).
+          var _faviconEl = document.querySelector('link[rel~="icon"]');
+          var _faviconUrl = _faviconEl ? _faviconEl.href : null;
+          var _sameOrigin = _faviconUrl && _faviconUrl.startsWith(location.origin);
+          var _fetchUrl = _sameOrigin ? _faviconUrl : location.href;
+          fetch(_fetchUrl, { method: 'GET', credentials: 'include', cache: 'no-store' })
+            .catch(function() {});
+          // Subtle scroll jitter so the page registers user-like activity.
+          window.scrollBy(0, 10);
+          setTimeout(function() { window.scrollBy(0, -10); }, 500);
+          _kaTimer = setTimeout(_kaTick, _KA_IDLE_MS);
+        }
         function _kaReset() {
           if (_kaTimer) clearTimeout(_kaTimer);
-          _kaTimer = setTimeout(function _kaTick() {
-            window.scrollBy(0, 10);
-            setTimeout(function() { window.scrollBy(0, -10); }, 500);
-            _kaTimer = setTimeout(_kaTick, 60000);
-          }, 60000);
+          _kaTimer = setTimeout(_kaTick, _KA_IDLE_MS);
         }
         ['scroll', 'click', 'keydown', 'mousemove'].forEach(function(evt) {
           window.addEventListener(evt, _kaReset, { passive: true });
@@ -750,6 +1016,76 @@ async function __hmMove(page, tx, ty) {\
         _EXTRA_ARGS+=(--config "$_RUNTIME_CONFIG")
       elif [ -f "$_SHARE/config.json" ]; then
         _EXTRA_ARGS+=(--config "$_SHARE/config.json")
+      fi
+
+      # Inject macOS fingerprint from $HOME/playwright-fingerprint.json if present.
+      # Merges userAgent into the runtime config and prepends a preamble init script
+      # that sets window.__cellFp before stealth-init.js runs.
+      _FP_FILE="$HOME/playwright-fingerprint.json"
+      if [ -f "$_FP_FILE" ]; then
+        _UA=$(${pkgs.jq}/bin/jq -r '.userAgent // empty' "$_FP_FILE")
+        if [ -n "$_UA" ]; then
+          # Determine base config for merge: prefer already-generated _RUNTIME_CONFIG
+          # if it has content, otherwise fall back to the static share config.
+          _FP_CONFIG=$(mktemp /tmp/pw-fp-config-XXXXXX.json)
+          # Build userAgentMetadata from fingerprint fields so CDP overrides the actual
+          # sec-ch-ua-* HTTP request headers (not just JS-visible navigator.userAgentData).
+          # uaPlatform ("macOS") maps to the Client Hints platform string.
+          # version is the full browser version for sec-ch-ua-full-version.
+          # brands are used for sec-ch-ua header value.
+          _BASE_CONFIG="$_SHARE/config.json"
+          [ -s "$_RUNTIME_CONFIG" ] && _BASE_CONFIG="$_RUNTIME_CONFIG"
+          ${pkgs.jq}/bin/jq -n \
+            --arg ua "$_UA" \
+            --slurpfile fp "$_FP_FILE" \
+            --slurpfile cfg "$_BASE_CONFIG" \
+            '($cfg[0]) as $cfg | ($fp[0]) as $fp |
+             ($fp.uaPlatform // "macOS") as $platform |
+             ($fp.version // "") as $ver |
+             ($fp.brands // []) as $brands |
+             $cfg
+             | .browser.contextOptions.userAgent = $ua
+             | .browser.contextOptions.userAgentMetadata = {
+                 "platform": $platform,
+                 "platformVersion": "",
+                 "architecture": "x86_64",
+                 "model": "",
+                 "mobile": false,
+                 "brands": (if ($brands | length) > 0 then $brands else [
+                   {"brand": "Google Chrome", "version": "146"},
+                   {"brand": "Chromium", "version": "146"},
+                   {"brand": "Not/A)Brand", "version": "8"}
+                 ] end),
+                 "fullVersionList": (if ($brands | length) > 0 then $brands else [
+                   {"brand": "Google Chrome", "version": ($ver // "146.0.0.0")},
+                   {"brand": "Chromium", "version": ($ver // "146.0.0.0")},
+                   {"brand": "Not/A)Brand", "version": "8.0.0.0"}
+                 ] end)
+               }
+             | .browser.launchOptions.args = ((.browser.launchOptions.args // []) + ["--user-agent=" + $ua])
+            ' > "$_FP_CONFIG"
+
+          # Replace any existing --config in _EXTRA_ARGS with the merged config.
+          _NEW_EXTRA_ARGS=()
+          _skip_next=false
+          for _arg in "''${_EXTRA_ARGS[@]}"; do
+            if $_skip_next; then _skip_next=false; continue; fi
+            if [ "$_arg" = "--config" ]; then _skip_next=true; continue; fi
+            _NEW_EXTRA_ARGS+=("$_arg")
+          done
+          _EXTRA_ARGS=("''${_NEW_EXTRA_ARGS[@]}")
+          _EXTRA_ARGS+=(--config "$_FP_CONFIG")
+
+          # Write preamble init script: window.__cellFp = <full fingerprint JSON>;
+          _FP_PREAMBLE=$(mktemp /tmp/pw-fp-preamble-XXXXXX.js)
+          printf 'window.__cellFp = ' > "$_FP_PREAMBLE"
+          ${pkgs.jq}/bin/jq '.' "$_FP_FILE" >> "$_FP_PREAMBLE"
+          printf ';\n' >> "$_FP_PREAMBLE"
+
+          # Prepend preamble BEFORE stealth-init.js so it is available to all init scripts.
+          _EXTRA_ARGS+=(--init-script "$_FP_PREAMBLE")
+          trap 'rm -f "$_RUNTIME_CONFIG" "$SECRETS_FILE" "$_FP_CONFIG" "$_FP_PREAMBLE"' EXIT
+        fi
       fi
 
       [ -f "$_SHARE/stealth-init.js" ] && _EXTRA_ARGS+=(--init-script "$_SHARE/stealth-init.js")

@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 
 	"github.com/DimmKirr/devcell/internal/config"
 	internalrdp "github.com/DimmKirr/devcell/internal/rdp"
+	"github.com/DimmKirr/devcell/internal/runner"
 	"github.com/DimmKirr/devcell/internal/ux"
 	internalvnc "github.com/DimmKirr/devcell/internal/vnc"
 	"github.com/spf13/cobra"
@@ -32,18 +34,14 @@ just the numeric suffix:
 
 func init() {
 	vncCmd.Flags().Bool("list", false, "list all running cell containers and their VNC ports")
-	vncCmd.Flags().Bool("verbose", false, "show debug info for VNC port lookup")
+	vncCmd.Flags().Bool("global", false, "include all projects (docker + vagrant), not just the current one")
 	vncCmd.Flags().String("viewer", "", "VNC viewer: royaltsx, tigervnc, screensharing (macOS)")
 }
 
 func runVNC(cmd *cobra.Command, args []string) error {
 	applyOutputFlags()
-	verbose, _ := cmd.Flags().GetBool("verbose")
-	if verbose {
-		ux.Verbose = true
-		ux.LogPlainText = true
-	}
 	list, _ := cmd.Flags().GetBool("list")
+	vncGlobal, _ = cmd.Flags().GetBool("global")
 	vncViewer, _ = cmd.Flags().GetString("viewer")
 
 	if list {
@@ -54,6 +52,8 @@ func runVNC(cmd *cobra.Command, args []string) error {
 	}
 	return vncDefault()
 }
+
+var vncGlobal bool // set by --global flag
 
 // vncViewer is set by the --viewer flag.
 var vncViewer string
@@ -117,10 +117,86 @@ func openVNCScreenSharing(port string) error {
 	return openURL(internalvnc.VNCUrl(port))
 }
 
+// collectVNCCells returns a unified map of appName→vncPort for all running cells:
+// Docker containers (all cell- containers) and the project's vagrant VM (if running).
+// collectVNCCells returns a map of appName→vncPort for running cells.
+// When global is false (default) only the current project's cell is returned.
+// When global is true all docker cells and all vagrant VMs are included.
+func collectVNCCells(c config.Config, global bool) map[string]string {
+	result := make(map[string]string)
+	vncDebug("collectVNCCells: global=%v baseDir=%s buildDir=%s", global, c.BaseDir, c.BuildDir)
+
+	if global {
+		// All docker cell containers
+		vncDebug("docker: scanning all cell- containers")
+		out, err := exec.Command("docker", "ps",
+			"--filter", "name=cell-",
+			"--format", "{{.Names}}\t{{.Ports}}").Output()
+		if err != nil {
+			vncDebug("docker ps error: %v", err)
+		} else {
+			vncDebug("docker ps output (%d bytes): %s", len(out), bytes.TrimSpace(out))
+			if dm, _ := internalvnc.ParseDockerPS(string(bytes.TrimSpace(out))); len(dm) > 0 {
+				for k, v := range dm {
+					vncDebug("docker cell found: %s → %s", k, v)
+					result[k] = v
+				}
+			}
+		}
+		// All vagrant VMs via global-status + vagrant port (no file-system access)
+		vncDebug("vagrant: running global-status")
+		vagrantCells := runner.VagrantRunningCells()
+		vncDebug("vagrant global-status parsed: %d running .devcell VMs: %v", len(vagrantCells), vagrantCells)
+		for project, machineID := range vagrantCells {
+			vncDebug("vagrant: querying port for machine %s (project %s)", machineID, project)
+			if port, ok := runner.VagrantMachinePort(machineID, "5900"); ok {
+				appName := "vagrant-" + project
+				vncDebug("vagrant cell found: %s → %s", appName, port)
+				result[appName] = port
+			} else {
+				vncDebug("vagrant: no VNC port for machine %s", machineID)
+			}
+		}
+	} else {
+		// Current project docker cells only — filter by project prefix (all cell IDs)
+		projectPrefix := "cell-" + filepath.Base(c.BaseDir) + "-"
+		vncDebug("docker: scanning with filter name=%s", projectPrefix)
+		out, err := exec.Command("docker", "ps",
+			"--filter", "name="+projectPrefix,
+			"--format", "{{.Names}}\t{{.Ports}}").Output()
+		if err != nil {
+			vncDebug("docker ps error: %v", err)
+		} else {
+			vncDebug("docker ps output (%d bytes): %s", len(out), bytes.TrimSpace(out))
+			if dm, _ := internalvnc.ParseDockerPS(string(bytes.TrimSpace(out))); len(dm) > 0 {
+				for k, v := range dm {
+					vncDebug("docker cell found: %s → %s", k, v)
+					result[k] = v
+				}
+			}
+		}
+		// Current project vagrant VM only
+		vncDebug("vagrant: checking buildDir=%s", c.BuildDir)
+		running := runner.VagrantIsRunning(c.BuildDir)
+		vncDebug("vagrant: VagrantIsRunning=%v", running)
+		if running {
+			if port, ok := runner.VagrantReadForwardedPort(c.BuildDir, "vnc"); ok {
+				appName := "vagrant-" + filepath.Base(c.BaseDir)
+				vncDebug("vagrant cell found: %s → %s", appName, port)
+				result[appName] = port
+			} else {
+				vncDebug("vagrant: no VNC port found in Vagrantfile")
+			}
+		}
+	}
+
+	vncDebug("collectVNCCells result: %v", result)
+	return result
+}
+
 func vncDefault() error {
 	// Fast path: EXT_VNC_PORT is injected at container start with the correct
-	// published host port. When set, we're inside a devcell container and can
-	// use it directly without any docker lookup.
+	// published host port. When set, we're inside a devcell container.
 	if port := os.Getenv("EXT_VNC_PORT"); port != "" {
 		vncDebug("EXT_VNC_PORT=%s (fast path)", port)
 		return openVNC(port)
@@ -130,79 +206,37 @@ func vncDefault() error {
 	if err != nil {
 		return err
 	}
-	vncDebug("basedir: %s", c.BaseDir)
-	vncDebug("cellID:  %s  (computed port: %s)", c.CellID, c.VNCPort)
+	vncDebug("basedir: %s  cellID: %s  vncPort: %s", c.BaseDir, c.CellID, c.VNCPort)
 
-	// --- Strategy 1: exact label match (containers started with current code) ---
-	// Filter by both basedir AND cellid for an exact session match.
-	out, err := exec.Command("docker", "ps",
-		"--filter", "label=devcell.basedir="+c.BaseDir,
-		"--filter", "label=devcell.cellid="+c.CellID,
-		"--format", "{{.Names}}\t{{.Ports}}").Output()
-	if err == nil {
-		vncDebug("label-exact docker ps output: %q", strings.TrimSpace(string(out)))
-		if m, _ := internalvnc.ParseDockerPS(string(bytes.TrimSpace(out))); len(m) > 0 {
-			for appName, port := range m {
-				vncDebug("label-exact match: %s → %s", appName, port)
-				return openVNC(port)
-			}
+	cells := collectVNCCells(c, vncGlobal)
+	var dockerCount, vagrantCount int
+	for name := range cells {
+		if strings.HasPrefix(name, "vagrant-") {
+			vagrantCount++
+		} else {
+			dockerCount++
 		}
 	}
+	vncDebug("found %d cells: %d docker, %d vagrant — %v", len(cells), dockerCount, vagrantCount, cells)
 
-	// --- Strategy 2: basedir-only label match (different session, same dir) ---
-	out, err = exec.Command("docker", "ps",
-		"--filter", "label=devcell.basedir="+c.BaseDir,
-		"--format", "{{.Names}}\t{{.Ports}}").Output()
-	if err == nil {
-		vncDebug("label-dir docker ps output: %q", strings.TrimSpace(string(out)))
-		if m, _ := internalvnc.ParseDockerPS(string(bytes.TrimSpace(out))); len(m) > 0 {
-			if len(m) == 1 {
-				for appName, port := range m {
-					vncDebug("label-dir single match: %s → %s", appName, port)
-					return openVNC(port)
-				}
-			}
-			selected, err := selectCell(m)
-			if err != nil {
-				return err
-			}
-			return openVNC(m[selected])
-		}
-	}
-
-	// --- Strategy 3: bind-mount fallback (containers started before labels were added) ---
-	vncDebug("no label match; falling back to bind-mount inspect")
-	allOut, err := exec.Command("docker", "ps", "-q", "--filter", "name=cell-").Output()
-	if err != nil || len(bytes.TrimSpace(allOut)) == 0 {
-		return fmt.Errorf("no running cell found for %q — run 'cell vnc --list' to see all", c.BaseDir)
-	}
-	ids := strings.Fields(string(bytes.TrimSpace(allOut)))
-	vncDebug("inspecting %d containers: %v", len(ids), ids)
-	inspectOut, err := exec.Command("docker", append([]string{"inspect"}, ids...)...).Output()
-	if err != nil {
-		return fmt.Errorf("docker inspect: %w", err)
-	}
-	matches, err := internalvnc.FindContainersByBind(string(inspectOut), c.BaseDir)
-	if err != nil {
-		return fmt.Errorf("parse inspect: %w", err)
-	}
-	vncDebug("bind-mount matches: %+v", matches)
-	switch len(matches) {
+	switch len(cells) {
 	case 0:
 		return fmt.Errorf("no running cell found for %q — run 'cell vnc --list' to see all", c.BaseDir)
 	case 1:
-		return openVNC(matches[0].Port)
-	default:
-		bindM := make(map[string]string, len(matches))
-		for _, m := range matches {
-			bindM[m.AppName] = m.Port
+		for name, port := range cells {
+			vncDebug("auto-selecting only cell: %s (port %s)", name, port)
+			return openVNC(port)
 		}
-		selected, err := selectCell(bindM)
+	default:
+		vncDebug("multiple cells — showing picker")
+		selected, err := selectCell(cells)
 		if err != nil {
 			return err
 		}
-		return openVNC(bindM[selected])
+		vncDebug("selected: %s (port %s)", selected, cells[selected])
+		return openVNC(cells[selected])
 	}
+	return nil
 }
 
 // vncDebug prints a debug line when --verbose is active.
@@ -213,17 +247,11 @@ func vncDebug(format string, args ...any) {
 }
 
 func vncList() error {
-	out, err := exec.Command("docker", "ps",
-		"--filter", "name=cell-",
-		"--format", "{{.Names}}\t{{.Ports}}").Output()
-	if err != nil {
-		return fmt.Errorf("docker ps: %w", err)
-	}
-	m, err := internalvnc.ParseDockerPS(string(bytes.TrimSpace(out)))
+	c, err := config.LoadFromOS()
 	if err != nil {
 		return err
 	}
-	return renderVNCList(m)
+	return renderVNCList(collectVNCCells(c, vncGlobal))
 }
 
 // renderVNCList renders the VNC container map in the current OutputFormat.
@@ -247,6 +275,18 @@ func renderVNCList(m map[string]string) error {
 }
 
 func vncApp(appName string) error {
+	// Vagrant cell: name has "vagrant-" prefix
+	if strings.HasPrefix(appName, "vagrant-") {
+		c, err := config.LoadFromOS()
+		if err != nil {
+			return err
+		}
+		if !runner.VagrantIsRunning(c.BuildDir) {
+			return fmt.Errorf("vagrant VM %q is not running", appName)
+		}
+		return openVNC(c.VNCPort)
+	}
+	// Docker cell
 	containerName := "cell-" + appName + "-run"
 	out, err := exec.Command("docker", "inspect", containerName).Output()
 	if err != nil {

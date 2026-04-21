@@ -10,3 +10,6 @@ func GetSystemRAMGB() float64 {
 	}
 	return float64(info.Totalram) * float64(info.Unit) / (1024 * 1024 * 1024)
 }
+
+// DetectAppleSiliconBandwidthGBs returns 0 on Linux (not Apple Silicon).
+func DetectAppleSiliconBandwidthGBs() float64 { return 0 }

@@ -25,27 +25,33 @@ func vagrantHome(t *testing.T) string {
 	return home
 }
 
-// TestEngineVagrant_PrintsStubWarning checks that --engine=vagrant prints a
-// "not yet implemented" warning and exits 0 without printing docker argv.
-func TestEngineVagrant_PrintsStubWarning(t *testing.T) {
+// TestEngineVagrant_DryRunPrintsArgv checks that --engine=vagrant --dry-run
+// prints a vagrant ssh argv and exits 0 (no "not yet implemented").
+func TestEngineVagrant_DryRunPrintsArgv(t *testing.T) {
 	home := vagrantHome(t)
 	cmd := exec.Command(binaryPath, "--engine=vagrant", "shell", "--dry-run")
 	cmd.Dir = home
 	cmd.Env = append(os.Environ(), "CELL_ID=1", "HOME="+home)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("expected exit 0 for vagrant stub, got: %v\noutput: %s", err, out)
+		t.Fatalf("expected exit 0, got: %v\noutput: %s", err, out)
 	}
 	s := string(out)
-	if !strings.Contains(strings.ToLower(s), "not yet implemented") {
-		t.Errorf("expected 'not yet implemented' in output, got:\n%s", s)
+	if !strings.Contains(s, "vagrant") {
+		t.Errorf("expected 'vagrant' in dry-run argv output, got:\n%s", s)
+	}
+	if !strings.Contains(s, "ssh") {
+		t.Errorf("expected 'ssh' in dry-run argv output, got:\n%s", s)
+	}
+	if strings.Contains(strings.ToLower(s), "not yet implemented") {
+		t.Errorf("dry-run should not print 'not yet implemented', got:\n%s", s)
 	}
 	if strings.Contains(s, "docker run") {
-		t.Errorf("vagrant stub should not print docker run argv, got:\n%s", s)
+		t.Errorf("vagrant engine should not print docker run argv, got:\n%s", s)
 	}
 }
 
-// TestEngineMacos_AliasForVagrant checks that --macos produces the same stub.
+// TestEngineMacos_AliasForVagrant checks that --macos produces the same vagrant argv.
 func TestEngineMacos_AliasForVagrant(t *testing.T) {
 	home := vagrantHome(t)
 	cmd := exec.Command(binaryPath, "--macos", "shell", "--dry-run")
@@ -53,29 +59,53 @@ func TestEngineMacos_AliasForVagrant(t *testing.T) {
 	cmd.Env = append(os.Environ(), "CELL_ID=1", "HOME="+home)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("expected exit 0 for --macos stub, got: %v\noutput: %s", err, out)
+		t.Fatalf("expected exit 0 for --macos, got: %v\noutput: %s", err, out)
 	}
 	s := string(out)
-	if !strings.Contains(strings.ToLower(s), "not yet implemented") {
-		t.Errorf("expected 'not yet implemented' in output, got:\n%s", s)
+	if !strings.Contains(s, "vagrant") {
+		t.Errorf("expected 'vagrant' in --macos dry-run output, got:\n%s", s)
 	}
 }
 
-// TestEngineVagrant_ScaffoldsVagrantfile checks that running --engine=vagrant
-// creates a Vagrantfile in the config directory.
-func TestEngineVagrant_ScaffoldsVagrantfile(t *testing.T) {
+// TestEngineVagrant_ScaffoldsLinuxVagrantfile checks that running --engine=vagrant
+// creates a Vagrantfile in the project's .devcell/ directory (not global config).
+func TestEngineVagrant_ScaffoldsLinuxVagrantfile(t *testing.T) {
 	home := vagrantHome(t)
-	cfgDir := filepath.Join(home, ".config", "devcell")
 
 	cmd := exec.Command(binaryPath, "--engine=vagrant", "shell", "--dry-run")
 	cmd.Dir = home
 	cmd.Env = append(os.Environ(), "CELL_ID=1", "HOME="+home)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("expected exit 0 for vagrant stub, got: %v\noutput: %s", err, out)
+		t.Fatalf("expected exit 0, got: %v\noutput: %s", err, out)
 	}
 
-	if _, err := os.Stat(filepath.Join(cfgDir, "Vagrantfile")); err != nil {
-		t.Errorf("Vagrantfile not created in config dir: %v", err)
+	if _, err := os.Stat(filepath.Join(home, ".devcell", "Vagrantfile")); err != nil {
+		t.Errorf("Vagrantfile not created in .devcell/: %v", err)
+	}
+}
+
+// TestEngineVagrant_VagrantfileContainsLinuxProvisioner checks the Vagrantfile
+// includes the Nix provisioner (linux template, not macOS one).
+func TestEngineVagrant_VagrantfileContainsLinuxProvisioner(t *testing.T) {
+	home := vagrantHome(t)
+
+	cmd := exec.Command(binaryPath, "--engine=vagrant", "shell", "--dry-run")
+	cmd.Dir = home
+	cmd.Env = append(os.Environ(), "CELL_ID=1", "HOME="+home)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("expected exit 0, got: %v\noutput: %s", err, out)
+	}
+
+	data, err := os.ReadFile(filepath.Join(home, ".devcell", "Vagrantfile"))
+	if err != nil {
+		t.Fatalf("Vagrantfile not found: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "nix") {
+		t.Errorf("expected Nix provisioner in Vagrantfile, got:\n%s", content)
+	}
+	if !strings.Contains(content, "home-manager") {
+		t.Errorf("expected home-manager in Vagrantfile, got:\n%s", content)
 	}
 }
 
@@ -83,20 +113,37 @@ func TestEngineVagrant_ScaffoldsVagrantfile(t *testing.T) {
 // into the Vagrantfile.
 func TestEngineVagrant_BoxNameSubstituted(t *testing.T) {
 	home := vagrantHome(t)
-	cfgDir := filepath.Join(home, ".config", "devcell")
 
 	cmd := exec.Command(binaryPath, "--engine=vagrant", "--vagrant-box=my-test-box", "shell", "--dry-run")
 	cmd.Dir = home
 	cmd.Env = append(os.Environ(), "CELL_ID=1", "HOME="+home)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("expected exit 0 for vagrant stub, got: %v\noutput: %s", err, out)
+		t.Fatalf("expected exit 0, got: %v\noutput: %s", err, out)
 	}
 
-	data, err := os.ReadFile(filepath.Join(cfgDir, "Vagrantfile"))
+	data, err := os.ReadFile(filepath.Join(home, ".devcell", "Vagrantfile"))
 	if err != nil {
 		t.Fatalf("Vagrantfile not found: %v", err)
 	}
 	if !strings.Contains(string(data), "my-test-box") {
 		t.Errorf("box name not substituted in Vagrantfile:\n%s", string(data))
+	}
+}
+
+// TestEngineVagrant_DryRunContainsVagrantDir checks that the dry-run argv
+// includes the .devcell/ path (so vagrant knows where to find the Vagrantfile).
+func TestEngineVagrant_DryRunContainsVagrantDir(t *testing.T) {
+	home := vagrantHome(t)
+	buildDir := filepath.Join(home, ".devcell")
+
+	cmd := exec.Command(binaryPath, "--engine=vagrant", "shell", "--dry-run")
+	cmd.Dir = home
+	cmd.Env = append(os.Environ(), "CELL_ID=1", "HOME="+home)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("expected exit 0, got: %v\noutput: %s", err, out)
+	}
+	if !strings.Contains(string(out), buildDir) {
+		t.Errorf("expected .devcell dir %q in dry-run argv, got:\n%s", buildDir, string(out))
 	}
 }

@@ -1,5 +1,7 @@
 package ollama
 
+import "strings"
+
 // sweBenchRatings maps ollama model names to estimated coding capability scores.
 //
 // These are NOT direct SWE-bench Verified scores for the quantized variants.
@@ -102,4 +104,124 @@ var sweBenchRatings = map[string]float64{
 	// Llama 4 (Meta)
 	"llama4:maverick": 12.0,
 	"llama4:scout":    6.0,
+}
+
+// cloudModelRatings maps normalized cloud model IDs (output of NormalizeCloudID)
+// to SWE-bench Verified percentage scores.
+//
+// Keys are matched with prefix logic so "claude-haiku-4-5-20251001" matches
+// "claude-haiku-4-5". Use the shortest unambiguous prefix as the key.
+//
+// Sources:
+//   - SWE-bench Verified leaderboard: https://www.swebench.com/
+//   - Anthropic model cards and benchmark announcements
+//   - OpenAI o-series and GPT benchmark disclosures
+//   - Google Gemini technical reports
+var cloudModelRatings = map[string]float64{
+	// Anthropic — SWE-bench Verified scores
+	"claude-opus-4-5":   76.8, // Claude Opus 4.5 — confirmed leaderboard entry
+	"claude-opus-4-6":   76.8, // Claude Opus 4.6 — same family, conservative estimate
+	"claude-opus-4":     72.0, // Claude Opus 4
+	"claude-sonnet-4-5": 72.7, // Claude Sonnet 4.5
+	"claude-sonnet-4":   49.0, // Claude Sonnet 4
+	"claude-haiku-4-5":  43.0, // Claude Haiku 4.5
+	"claude-3-7-sonnet": 62.3, // Claude 3.7 Sonnet
+	"claude-3-5-sonnet": 49.0, // Claude 3.5 Sonnet (2024-10)
+	"claude-3-5-haiku":  40.6, // Claude 3.5 Haiku
+	"claude-3-opus":     11.1, // Claude 3 Opus (older baseline)
+
+	// OpenAI — SWE-bench Verified scores
+	"o3":       71.7, // o3 (high-compute)
+	"o4-mini":  68.1, // o4-mini
+	"o3-mini":  49.3, // o3-mini
+	"gpt-4-1":  54.6, // GPT-4.1
+	"o1":       48.9, // o1
+	"gpt-4o":   33.2, // GPT-4o
+	"gpt-4-1-mini": 34.6, // GPT-4.1 mini
+	"o1-mini":  16.7, // o1-mini
+	"gpt-4o-mini": 23.7, // GPT-4o mini
+
+	// Google — SWE-bench Verified scores
+	"gemini-2-5-pro":   63.8, // Gemini 2.5 Pro
+	"gemini-2-0-flash": 41.3, // Gemini 2.0 Flash
+	"gemini-1-5-pro":   26.7, // Gemini 1.5 Pro
+	"gemini-1-5-flash": 18.6, // Gemini 1.5 Flash
+}
+
+// lookupCloudRating finds a score for a normalized cloud model ID.
+// Tries exact match first, then prefix match (longest wins).
+func lookupCloudRating(normalized string) (float64, bool) {
+	if s, ok := cloudModelRatings[normalized]; ok {
+		return s, true
+	}
+	var bestScore float64
+	var bestLen int
+	for key, score := range cloudModelRatings {
+		if strings.HasPrefix(normalized, key) && len(key) > bestLen {
+			bestScore = score
+			bestLen = len(key)
+		}
+	}
+	if bestLen > 0 {
+		return bestScore, true
+	}
+	return 0, false
+}
+
+// EstimateCloudSpeedTPM estimates cloud model speed (tokens/min) from
+// completion price per token (USD). Cheaper models are typically faster.
+func EstimateCloudSpeedTPM(pricePerToken float64) float64 {
+	switch {
+	case pricePerToken < 0.000001: // < $1/1M tokens
+		return 18000
+	case pricePerToken < 0.000005: // < $5/1M
+		return 9000
+	case pricePerToken < 0.000015: // < $15/1M
+		return 5400
+	case pricePerToken < 0.000050: // < $50/1M
+		return 2400
+	default:
+		return 1200
+	}
+}
+
+// EstimateLocalSpeedTPM estimates local model speed (tokens/min).
+//
+// When bandwidthGBs > 0 (Apple Silicon detected), uses the physics formula:
+//
+//	speed = bandwidth / model_weight_bytes_per_token
+//
+// Q4_K_M quantization ≈ 0.5625 bytes/param (4.5 bits/param).
+// Capped at 9000 T/min (150 tok/s) — the compute-bound ceiling for tiny models.
+//
+// When bandwidthGBs == 0, falls back to generic tier estimates for
+// average consumer GPU hardware.
+func EstimateLocalSpeedTPM(paramsB, bandwidthGBs float64) float64 {
+	if bandwidthGBs > 0 && paramsB > 0 {
+		const (
+			q4BytesPerParam  = 0.5625 // Q4_K_M ≈ 4.5 bits/param = 0.5625 bytes/param
+			bandwidthEff     = 0.78   // llama.cpp Metal achieves ~75-80% of theoretical bandwidth
+			maxTokPerSec     = 200    // compute-bound ceiling for sub-3B models on Apple Silicon
+		)
+		tokPerSec := (bandwidthGBs * bandwidthEff) / (paramsB * q4BytesPerParam)
+		if tokPerSec > maxTokPerSec {
+			tokPerSec = maxTokPerSec
+		}
+		return tokPerSec * 60
+	}
+	// Generic tier fallback (average consumer GPU).
+	switch {
+	case paramsB <= 3:
+		return 9000
+	case paramsB <= 8:
+		return 4800
+	case paramsB <= 14:
+		return 2700
+	case paramsB <= 32:
+		return 1500
+	case paramsB <= 70:
+		return 720
+	default:
+		return 180
+	}
 }

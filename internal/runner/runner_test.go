@@ -624,15 +624,15 @@ func TestParseImageMetadata_InvalidJSON(t *testing.T) {
 func TestStackImageTag_GoStack(t *testing.T) {
 	got := runner.StackImageTag("go")
 	// version.Version is v0.0.0 in tests → v0.0.0-go
-	if got != "ghcr.io/dimmkirr/devcell:v0.0.0-go" {
-		t.Errorf("want ghcr.io/dimmkirr/devcell:v0.0.0-go, got %q", got)
+	if got != "public.ecr.aws/w1l3v2k8/devcell:v0.0.0-go" {
+		t.Errorf("want public.ecr.aws/w1l3v2k8/devcell:v0.0.0-go, got %q", got)
 	}
 }
 
 func TestStackImageTag_UltimateStack(t *testing.T) {
 	got := runner.StackImageTag("ultimate")
-	if got != "ghcr.io/dimmkirr/devcell:v0.0.0-ultimate" {
-		t.Errorf("want ghcr.io/dimmkirr/devcell:v0.0.0-ultimate, got %q", got)
+	if got != "public.ecr.aws/w1l3v2k8/devcell:v0.0.0-ultimate" {
+		t.Errorf("want public.ecr.aws/w1l3v2k8/devcell:v0.0.0-ultimate, got %q", got)
 	}
 }
 
@@ -684,7 +684,7 @@ func TestArgv_AwsReadOnlyFalse(t *testing.T) {
 func TestBaseImageTag_DefaultIsVersioned(t *testing.T) {
 	t.Setenv("DEVCELL_BASE_IMAGE", "")
 	got := runner.BaseImageTag()
-	if got != "ghcr.io/dimmkirr/devcell:v0.0.0-core" {
-		t.Errorf("want ghcr.io/dimmkirr/devcell:v0.0.0-core, got %q", got)
+	if got != "public.ecr.aws/w1l3v2k8/devcell:v0.0.0-core" {
+		t.Errorf("want public.ecr.aws/w1l3v2k8/devcell:v0.0.0-core, got %q", got)
 	}
 }

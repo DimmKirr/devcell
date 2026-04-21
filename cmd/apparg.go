@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"os/exec"
 	"sort"
 	"strings"
@@ -57,14 +58,29 @@ func parseContainerNames(output string) []string {
 }
 
 // selectCell shows an interactive picker when multiple cells are running.
-// Returns the selected AppName.
+// Labels show "<name>  docker" or "<name>  vagrant". Returns the selected key.
 func selectCell(apps map[string]string) (string, error) {
-	var names []string
-	for name := range apps {
-		names = append(names, name)
+	var keys []string
+	for key := range apps {
+		keys = append(keys, key)
 	}
-	sort.Strings(names)
-	return ux.GetSelection("Multiple cells found — select one", names)
+	sort.Strings(keys)
+	opts := make([]ux.SelectOption, len(keys))
+	for i, key := range keys {
+		var displayName, cellType string
+		if strings.HasPrefix(key, "vagrant-") {
+			displayName = strings.TrimPrefix(key, "vagrant-")
+			cellType = "vagrant"
+		} else {
+			displayName = key
+			cellType = "docker"
+		}
+		opts[i] = ux.SelectOption{
+			Label: fmt.Sprintf("%-28s %s", displayName, cellType),
+			Value: key,
+		}
+	}
+	return ux.GetSelectionKV("Multiple cells found — select one", opts)
 }
 
 // completeRunningApps provides shell completion for running cell container names.

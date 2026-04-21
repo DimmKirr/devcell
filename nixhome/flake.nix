@@ -35,8 +35,11 @@
     mkHome = system: modules: let
       nixCfg = {
         inherit system;
-        config.allowUnfreePredicate = pkg:
-          builtins.elem (lib.getName pkg) ["claude-code" "corefonts" "drawio" "packer" "terraform"];
+        # allowUnfree covers: claude-code, corefonts, drawio, packer, terraform,
+        # and Android SDK bundles (platform-tools, build-tools, emulator, etc. —
+        # too many sub-derivation names to enumerate in a predicate).
+        config.allowUnfree = true;
+        config.android_sdk.accept_license = true;
       };
       pkgsUnstable = import nixpkgs-unstable nixCfg;
       pkgsEdge = import nixpkgs-edge nixCfg;
@@ -81,6 +84,45 @@
       )
       {}
       stacks;
+
+    # Vagrant VM configs — same stacks but for the 'vagrant' user at /home/vagrant.
+    # Applied by the Vagrantfile provisioner:
+    #   home-manager switch --flake .#vagrant-ultimate-aarch64
+    vagrantUser = {username = "vagrant"; homeDirectory = "/home/vagrant";};
+    mkVagrantHome = system: modules: let
+      nixCfg = {
+        inherit system;
+        config.allowUnfree = true;
+        config.android_sdk.accept_license = true;
+      };
+      pkgsUnstable = import nixpkgs-unstable nixCfg;
+      pkgsEdge = import nixpkgs-edge nixCfg;
+    in
+      home-manager.lib.homeManagerConfiguration {
+        pkgs = import nixpkgs nixCfg;
+        extraSpecialArgs = {inherit mcp-nixos pkgsUnstable pkgsEdge;};
+        modules =
+          [
+            {
+              home.stateVersion = "25.11";
+              home.username = vagrantUser.username;
+              home.homeDirectory = vagrantUser.homeDirectory;
+            }
+          ]
+          ++ modules;
+      };
+    mkAllVagrantConfigs =
+      lib.foldlAttrs
+      (
+        acc: name: mods: let
+          shortName = lib.removePrefix "devcell-" name;
+        in
+          acc
+          // {"vagrant-${shortName}" = mkVagrantHome "x86_64-linux" mods;}
+          // {"vagrant-${shortName}-aarch64" = mkVagrantHome "aarch64-linux" mods;}
+      )
+      {}
+      stacks;
   in {
     # Expose building blocks so user wrapper flakes can compose custom stacks:
     #   devcell.lib.mkHome "x86_64-linux" [ devcell.stacks.go ]
@@ -92,6 +134,7 @@
     # Individual modules for composing custom stacks in user wrapper flakes:
     #   devcell.lib.mkHome "x86_64-linux" (devcell.stacks.go ++ devcell.modules.electronics)
     modules = {
+      android = [./modules/android.nix];
       apple = [./modules/apple.nix];
       base = [./modules/base.nix];
       build = [./modules/build.nix];
@@ -106,15 +149,17 @@
       news = [./modules/news.nix];
       nixos = [./modules/nixos.nix];
       node = [./modules/node.nix];
+      postgresql = [./modules/postgresql.nix];
       project-management = [./modules/project-management.nix];
       python = [./modules/python.nix];
       qa-tools = [./modules/qa-tools.nix];
       scraping = [./modules/scraping];
+      security = [./modules/security.nix];
       shell = [./modules/shell.nix];
       travel = [./modules/travel.nix];
     };
 
-    homeConfigurations = mkAllConfigs;
+    homeConfigurations = mkAllConfigs // mkAllVagrantConfigs;
 
     # macOS VM (Vagrant/UTM) — applied via: darwin-rebuild switch --flake .#macOS
     darwinConfigurations.macOS = nix-darwin.lib.darwinSystem {

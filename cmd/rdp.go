@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 
 	"github.com/DimmKirr/devcell/internal/config"
 	internalrdp "github.com/DimmKirr/devcell/internal/rdp"
+	"github.com/DimmKirr/devcell/internal/runner"
 	"github.com/DimmKirr/devcell/internal/ux"
 	"github.com/spf13/cobra"
 )
@@ -31,19 +33,15 @@ just the numeric suffix:
 
 func init() {
 	rdpCmd.Flags().Bool("list", false, "list all running cell containers and their RDP ports")
-	rdpCmd.Flags().Bool("verbose", false, "show debug info for RDP port lookup")
+	rdpCmd.Flags().Bool("global", false, "include all projects (docker + vagrant), not just the current one")
 	rdpCmd.Flags().Bool("fullscreen", false, "open RDP session in fullscreen mode")
 	rdpCmd.Flags().String("viewer", "", "RDP viewer: freerdp (default), macrdp, royaltsx")
 }
 
 func runRDP(cmd *cobra.Command, args []string) error {
 	applyOutputFlags()
-	verbose, _ := cmd.Flags().GetBool("verbose")
-	if verbose {
-		ux.Verbose = true
-		ux.LogPlainText = true
-	}
 	list, _ := cmd.Flags().GetBool("list")
+	rdpGlobal, _ = cmd.Flags().GetBool("global")
 	rdpFullscreen, _ = cmd.Flags().GetBool("fullscreen")
 	rdpViewer, _ = cmd.Flags().GetString("viewer")
 
@@ -57,6 +55,7 @@ func runRDP(cmd *cobra.Command, args []string) error {
 }
 
 var (
+	rdpGlobal     bool   // set by --global flag
 	rdpFullscreen bool   // set by --fullscreen flag
 	rdpViewer     string // set by --viewer flag
 )
@@ -142,6 +141,81 @@ func openRoyalTSX(c config.Config, port string) error {
 	return openURL(internalrdp.RoyalTSXUrl(port, c.HostUser, "rdp"))
 }
 
+// collectRDPCells returns a map of appName→rdpPort for running cells.
+// When global is false (default) only the current project's cell is returned.
+// When global is true all docker cells and all vagrant VMs are included.
+func collectRDPCells(c config.Config, global bool) map[string]string {
+	result := make(map[string]string)
+	rdpDebug("collectRDPCells: global=%v baseDir=%s buildDir=%s", global, c.BaseDir, c.BuildDir)
+
+	if global {
+		// All docker cell containers
+		rdpDebug("docker: scanning all cell- containers")
+		out, err := exec.Command("docker", "ps",
+			"--filter", "name=cell-",
+			"--format", "{{.Names}}\t{{.Ports}}").Output()
+		if err != nil {
+			rdpDebug("docker ps error: %v", err)
+		} else {
+			rdpDebug("docker ps output (%d bytes): %s", len(out), bytes.TrimSpace(out))
+			if dm, _ := internalrdp.ParseDockerPS(string(bytes.TrimSpace(out))); len(dm) > 0 {
+				for k, v := range dm {
+					rdpDebug("docker cell found: %s → %s", k, v)
+					result[k] = v
+				}
+			}
+		}
+		// All vagrant VMs via global-status + vagrant port (no file-system access)
+		rdpDebug("vagrant: running global-status")
+		vagrantCells := runner.VagrantRunningCells()
+		rdpDebug("vagrant global-status parsed: %d running .devcell VMs: %v", len(vagrantCells), vagrantCells)
+		for project, machineID := range vagrantCells {
+			rdpDebug("vagrant: querying port for machine %s (project %s)", machineID, project)
+			if port, ok := runner.VagrantMachinePort(machineID, "3389"); ok {
+				appName := "vagrant-" + project
+				rdpDebug("vagrant cell found: %s → %s", appName, port)
+				result[appName] = port
+			} else {
+				rdpDebug("vagrant: no RDP port for machine %s", machineID)
+			}
+		}
+	} else {
+		// Current project docker cells only — filter by project prefix (all cell IDs)
+		projectPrefix := "cell-" + filepath.Base(c.BaseDir) + "-"
+		rdpDebug("docker: scanning with filter name=%s", projectPrefix)
+		out, err := exec.Command("docker", "ps",
+			"--filter", "name="+projectPrefix,
+			"--format", "{{.Names}}\t{{.Ports}}").Output()
+		if err != nil {
+			rdpDebug("docker ps error: %v", err)
+		} else {
+			rdpDebug("docker ps output (%d bytes): %s", len(out), bytes.TrimSpace(out))
+			if dm, _ := internalrdp.ParseDockerPS(string(bytes.TrimSpace(out))); len(dm) > 0 {
+				for k, v := range dm {
+					rdpDebug("docker cell found: %s → %s", k, v)
+					result[k] = v
+				}
+			}
+		}
+		// Current project vagrant VM only
+		rdpDebug("vagrant: checking buildDir=%s", c.BuildDir)
+		running := runner.VagrantIsRunning(c.BuildDir)
+		rdpDebug("vagrant: VagrantIsRunning=%v", running)
+		if running {
+			if port, ok := runner.VagrantReadForwardedPort(c.BuildDir, "rdp"); ok {
+				appName := "vagrant-" + filepath.Base(c.BaseDir)
+				rdpDebug("vagrant cell found: %s → %s", appName, port)
+				result[appName] = port
+			} else {
+				rdpDebug("vagrant: no RDP port found in Vagrantfile")
+			}
+		}
+	}
+
+	rdpDebug("collectRDPCells result: %v", result)
+	return result
+}
+
 func rdpDefault() error {
 	c, err := config.LoadFromOS()
 	if err != nil {
@@ -153,78 +227,37 @@ func rdpDefault() error {
 		return openRDP(c, port)
 	}
 
-	rdpDebug("basedir: %s", c.BaseDir)
-	rdpDebug("cellID:  %s  (computed port: %s)", c.CellID, c.RDPPort)
+	rdpDebug("basedir: %s  cellID: %s  rdpPort: %s", c.BaseDir, c.CellID, c.RDPPort)
 
-	// Strategy 1: exact label match
-	out, err := exec.Command("docker", "ps",
-		"--filter", "label=devcell.basedir="+c.BaseDir,
-		"--filter", "label=devcell.cellid="+c.CellID,
-		"--format", "{{.Names}}\t{{.Ports}}").Output()
-	if err == nil {
-		rdpDebug("label-exact docker ps output: %q", strings.TrimSpace(string(out)))
-		if m, _ := internalrdp.ParseDockerPS(string(bytes.TrimSpace(out))); len(m) > 0 {
-			for appName, port := range m {
-				rdpDebug("label-exact match: %s → %s", appName, port)
-				return openRDP(c, port)
-			}
+	cells := collectRDPCells(c, rdpGlobal)
+	var dockerCount, vagrantCount int
+	for name := range cells {
+		if strings.HasPrefix(name, "vagrant-") {
+			vagrantCount++
+		} else {
+			dockerCount++
 		}
 	}
+	rdpDebug("found %d cells: %d docker, %d vagrant — %v", len(cells), dockerCount, vagrantCount, cells)
 
-	// Strategy 2: basedir-only label match
-	out, err = exec.Command("docker", "ps",
-		"--filter", "label=devcell.basedir="+c.BaseDir,
-		"--format", "{{.Names}}\t{{.Ports}}").Output()
-	if err == nil {
-		rdpDebug("label-dir docker ps output: %q", strings.TrimSpace(string(out)))
-		if m, _ := internalrdp.ParseDockerPS(string(bytes.TrimSpace(out))); len(m) > 0 {
-			if len(m) == 1 {
-				for appName, port := range m {
-					rdpDebug("label-dir single match: %s → %s", appName, port)
-					return openRDP(c, port)
-				}
-			}
-			selected, err := selectCell(m)
-			if err != nil {
-				return err
-			}
-			return openRDP(c, m[selected])
-		}
-	}
-
-	// Strategy 3: bind-mount fallback
-	rdpDebug("no label match; falling back to bind-mount inspect")
-	allOut, err := exec.Command("docker", "ps", "-q", "--filter", "name=cell-").Output()
-	if err != nil || len(bytes.TrimSpace(allOut)) == 0 {
-		return fmt.Errorf("no running cell found for %q — run 'cell rdp --list' to see all", c.BaseDir)
-	}
-	ids := strings.Fields(string(bytes.TrimSpace(allOut)))
-	rdpDebug("inspecting %d containers: %v", len(ids), ids)
-	inspectOut, err := exec.Command("docker", append([]string{"inspect"}, ids...)...).Output()
-	if err != nil {
-		return fmt.Errorf("docker inspect: %w", err)
-	}
-	matches, err := internalrdp.FindContainersByBind(string(inspectOut), c.BaseDir)
-	if err != nil {
-		return fmt.Errorf("parse inspect: %w", err)
-	}
-	rdpDebug("bind-mount matches: %+v", matches)
-	switch len(matches) {
+	switch len(cells) {
 	case 0:
 		return fmt.Errorf("no running cell found for %q — run 'cell rdp --list' to see all", c.BaseDir)
 	case 1:
-		return openRDP(c, matches[0].Port)
-	default:
-		bindM := make(map[string]string, len(matches))
-		for _, m := range matches {
-			bindM[m.AppName] = m.Port
+		for name, port := range cells {
+			rdpDebug("auto-selecting only cell: %s (port %s)", name, port)
+			return openRDP(c, port)
 		}
-		selected, err := selectCell(bindM)
+	default:
+		rdpDebug("multiple cells — showing picker")
+		selected, err := selectCell(cells)
 		if err != nil {
 			return err
 		}
-		return openRDP(c, bindM[selected])
+		rdpDebug("selected: %s (port %s)", selected, cells[selected])
+		return openRDP(c, cells[selected])
 	}
+	return nil
 }
 
 func rdpDebug(format string, args ...any) {
@@ -234,17 +267,11 @@ func rdpDebug(format string, args ...any) {
 }
 
 func rdpList() error {
-	out, err := exec.Command("docker", "ps",
-		"--filter", "name=cell-",
-		"--format", "{{.Names}}\t{{.Ports}}").Output()
-	if err != nil {
-		return fmt.Errorf("docker ps: %w", err)
-	}
-	m, err := internalrdp.ParseDockerPS(string(bytes.TrimSpace(out)))
+	c, err := config.LoadFromOS()
 	if err != nil {
 		return err
 	}
-	return renderRDPList(m)
+	return renderRDPList(collectRDPCells(c, rdpGlobal))
 }
 
 // renderRDPList renders the RDP container map in the current OutputFormat.
@@ -272,6 +299,14 @@ func rdpApp(appName string) error {
 	if err != nil {
 		return err
 	}
+	// Vagrant cell: name has "vagrant-" prefix
+	if strings.HasPrefix(appName, "vagrant-") {
+		if !runner.VagrantIsRunning(c.BuildDir) {
+			return fmt.Errorf("vagrant VM %q is not running", appName)
+		}
+		return openRDP(c, c.RDPPort)
+	}
+	// Docker cell
 	containerName := "cell-" + appName + "-run"
 	out, err := exec.Command("docker", "inspect", containerName).Output()
 	if err != nil {

@@ -107,3 +107,61 @@ func TestRenderRDPList_URLIncludedInJSON(t *testing.T) {
 		t.Errorf("url should contain port 3389, got %q", url)
 	}
 }
+
+// L0: vagrant-named entries render correctly — renderRDPList is pure (no I/O).
+
+func TestRenderRDPList_VagrantEntryText(t *testing.T) {
+	ux.OutputFormat = "text"
+
+	m := map[string]string{"vagrant-myproject": "40589"}
+
+	out := captureStdoutMain(func() { renderRDPList(m) })
+
+	if !strings.Contains(out, "vagrant-myproject") {
+		t.Errorf("text output must contain vagrant app name, got: %q", out)
+	}
+	if !strings.Contains(out, "40589") {
+		t.Errorf("text output must contain vagrant RDP port, got: %q", out)
+	}
+}
+
+func TestRenderRDPList_VagrantEntryJSON(t *testing.T) {
+	ux.OutputFormat = "json"
+	defer func() { ux.OutputFormat = "text" }()
+
+	m := map[string]string{"vagrant-myproject": "40589"}
+
+	out := captureStdoutMain(func() { renderRDPList(m) })
+
+	var result []map[string]string
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("not valid JSON: %v\noutput: %q", err, out)
+	}
+	if len(result) != 1 {
+		t.Fatalf("want 1 entry, got %d", len(result))
+	}
+	if result[0]["app_name"] != "vagrant-myproject" {
+		t.Errorf("want app_name=vagrant-myproject, got %q", result[0]["app_name"])
+	}
+	if result[0]["port"] != "40589" {
+		t.Errorf("want port=40589, got %q", result[0]["port"])
+	}
+}
+
+func TestRenderRDPList_MixedDockerAndVagrant(t *testing.T) {
+	ux.OutputFormat = "text"
+
+	m := map[string]string{
+		"cell-myproject-3-run": "389",
+		"vagrant-myproject":    "40589",
+	}
+
+	out := captureStdoutMain(func() { renderRDPList(m) })
+
+	if !strings.Contains(out, "cell-myproject-3-run") {
+		t.Errorf("text output must contain docker app name, got: %q", out)
+	}
+	if !strings.Contains(out, "vagrant-myproject") {
+		t.Errorf("text output must contain vagrant app name, got: %q", out)
+	}
+}
