@@ -14,7 +14,7 @@
     golangci-lint
     gopls
     gotools # goimports, godoc, etc.
-    swag    # swagger doc generator (use: swag init)
+    go-swag # swagger doc generator (use: swag init)
   ];
 
   home.sessionVariables = {
