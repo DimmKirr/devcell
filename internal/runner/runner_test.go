@@ -532,54 +532,111 @@ func min(a, b int) int {
 	return b
 }
 
-// --- UserImageTag per-session ---
+// --- UserImageTag stack-based (default) ---
 
-func TestUserImageTag_DefaultSession(t *testing.T) {
+func withCleanImageState(t *testing.T) {
+	t.Helper()
 	t.Setenv("DEVCELL_USER_IMAGE", "")
 	t.Setenv("DEVCELL_SESSION_NAME", "")
 	t.Setenv("TMUX_SESSION_NAME", "")
+	origStack := runner.Stack
+	origModules := runner.Modules
+	origPerSession := runner.PerSessionImage
+	t.Cleanup(func() {
+		runner.Stack = origStack
+		runner.Modules = origModules
+		runner.PerSessionImage = origPerSession
+	})
+	runner.Stack = "base"
+	runner.Modules = nil
+	runner.PerSessionImage = false
+}
+
+func TestUserImageTag_DefaultStack(t *testing.T) {
+	withCleanImageState(t)
 	got := runner.UserImageTag()
-	if got != "devcell-user:main" {
-		t.Errorf("default session: want devcell-user:main, got %q", got)
+	if got != "devcell-user:base" {
+		t.Errorf("default stack: want devcell-user:base, got %q", got)
 	}
 }
 
-func TestUserImageTag_SessionName(t *testing.T) {
-	t.Setenv("DEVCELL_USER_IMAGE", "")
-	t.Setenv("DEVCELL_SESSION_NAME", "webdev")
-	t.Setenv("TMUX_SESSION_NAME", "")
+func TestUserImageTag_UltimateStack(t *testing.T) {
+	withCleanImageState(t)
+	runner.Stack = "ultimate"
 	got := runner.UserImageTag()
-	if got != "devcell-user:webdev" {
-		t.Errorf("session name: want devcell-user:webdev, got %q", got)
+	if got != "devcell-user:ultimate" {
+		t.Errorf("ultimate stack: want devcell-user:ultimate, got %q", got)
 	}
 }
 
-func TestUserImageTag_TmuxSessionFallback(t *testing.T) {
-	t.Setenv("DEVCELL_USER_IMAGE", "")
-	t.Setenv("DEVCELL_SESSION_NAME", "")
-	t.Setenv("TMUX_SESSION_NAME", "tmux-dev")
+func TestUserImageTag_StackWithModules(t *testing.T) {
+	withCleanImageState(t)
+	runner.Stack = "ultimate"
+	runner.Modules = []string{"nixos", "electronics"}
 	got := runner.UserImageTag()
-	if got != "devcell-user:tmux-dev" {
-		t.Errorf("tmux fallback: want devcell-user:tmux-dev, got %q", got)
+	// Modules sorted: electronics, nixos
+	if !strings.HasPrefix(got, "devcell-user:ultimate-electronics-nixos-") {
+		t.Errorf("stack+modules: want prefix devcell-user:ultimate-electronics-nixos-, got %q", got)
+	}
+	// sha8 suffix
+	parts := strings.Split(got, "-")
+	sha := parts[len(parts)-1]
+	if len(sha) != 8 {
+		t.Errorf("sha suffix: want 8 chars, got %d in %q", len(sha), got)
 	}
 }
 
-func TestUserImageTag_SessionNameBeatssTmux(t *testing.T) {
-	t.Setenv("DEVCELL_USER_IMAGE", "")
-	t.Setenv("DEVCELL_SESSION_NAME", "explicit")
-	t.Setenv("TMUX_SESSION_NAME", "tmux-session")
-	got := runner.UserImageTag()
-	if got != "devcell-user:explicit" {
-		t.Errorf("precedence: want devcell-user:explicit, got %q", got)
+func TestUserImageTag_ModuleOrderDoesNotMatter(t *testing.T) {
+	withCleanImageState(t)
+	runner.Stack = "go"
+	runner.Modules = []string{"b", "a", "c"}
+	tag1 := runner.UserImageTag()
+	runner.Modules = []string{"c", "a", "b"}
+	tag2 := runner.UserImageTag()
+	if tag1 != tag2 {
+		t.Errorf("module order should not matter: %q != %q", tag1, tag2)
 	}
 }
 
 func TestUserImageTag_EnvOverrideWins(t *testing.T) {
+	withCleanImageState(t)
 	t.Setenv("DEVCELL_USER_IMAGE", "custom:override")
-	t.Setenv("DEVCELL_SESSION_NAME", "ignored")
+	runner.Stack = "ultimate"
 	got := runner.UserImageTag()
 	if got != "custom:override" {
 		t.Errorf("override: want custom:override, got %q", got)
+	}
+}
+
+// --- UserImageTag per-session (legacy) ---
+
+func TestUserImageTag_PerSession_Default(t *testing.T) {
+	withCleanImageState(t)
+	runner.PerSessionImage = true
+	got := runner.UserImageTag()
+	if got != "devcell-user:main" {
+		t.Errorf("per-session default: want devcell-user:main, got %q", got)
+	}
+}
+
+func TestUserImageTag_PerSession_TmuxFallback(t *testing.T) {
+	withCleanImageState(t)
+	runner.PerSessionImage = true
+	t.Setenv("TMUX_SESSION_NAME", "DIMM")
+	got := runner.UserImageTag()
+	if got != "devcell-user:DIMM" {
+		t.Errorf("per-session tmux: want devcell-user:DIMM, got %q", got)
+	}
+}
+
+func TestUserImageTag_PerSession_ExplicitBeatssTmux(t *testing.T) {
+	withCleanImageState(t)
+	runner.PerSessionImage = true
+	t.Setenv("DEVCELL_SESSION_NAME", "explicit")
+	t.Setenv("TMUX_SESSION_NAME", "tmux-session")
+	got := runner.UserImageTag()
+	if got != "devcell-user:explicit" {
+		t.Errorf("per-session precedence: want devcell-user:explicit, got %q", got)
 	}
 }
 

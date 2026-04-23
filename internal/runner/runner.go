@@ -3,12 +3,15 @@ package runner
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -27,6 +30,18 @@ const (
 // at startup; defaults to DefaultRegistry.
 var Registry = DefaultRegistry
 
+// Stack is the resolved nix stack name (e.g. "ultimate", "go").
+// Set from CellConfig at startup; defaults to "base".
+var Stack = "base"
+
+// Modules is the list of extra nix modules composed on top of the stack.
+// Set from CellConfig at startup.
+var Modules []string
+
+// PerSessionImage tags user images per tmux session instead of per stack.
+// Set from CellConfig at startup; defaults to false (stack-based).
+var PerSessionImage bool
+
 // BaseImageTag returns the base image tag used in scaffold FROM,
 // allowing override via DEVCELL_BASE_IMAGE env var (local dev, CI, tests).
 func BaseImageTag() string {
@@ -36,20 +51,41 @@ func BaseImageTag() string {
 	return fmt.Sprintf("%s:%s-core", Registry, version.Version)
 }
 
-// UserImageTag returns the per-session user image tag.
-// Format: devcell-user:<session> (e.g. devcell-user:main).
+// UserImageTag returns the user image tag.
+// Default (stack-based): devcell-user:<stack> or devcell-user:<stack>-<mod1>-<mod2>-<sha8>
+// Legacy (per_session_image=true): devcell-user:<session> (one image per tmux session)
 // Override with DEVCELL_USER_IMAGE env var (used by tests).
 func UserImageTag() string {
 	if tag := os.Getenv("DEVCELL_USER_IMAGE"); tag != "" {
 		return tag
 	}
-	session := "main"
-	if s := os.Getenv("DEVCELL_SESSION_NAME"); s != "" {
-		session = s
-	} else if s := os.Getenv("TMUX_SESSION_NAME"); s != "" {
-		session = s
+	if PerSessionImage {
+		return "devcell-user:" + resolveSession()
 	}
-	return "devcell-user:" + session
+	tag := Stack
+	if tag == "" {
+		tag = "base"
+	}
+	if len(Modules) > 0 {
+		sorted := make([]string, len(Modules))
+		copy(sorted, Modules)
+		sort.Strings(sorted)
+		tag += "-" + strings.Join(sorted, "-")
+		h := sha256.Sum256([]byte(strings.Join(sorted, ",")))
+		tag += "-" + hex.EncodeToString(h[:])[:8]
+	}
+	return "devcell-user:" + tag
+}
+
+// resolveSession returns the session name from env vars (legacy per-session mode).
+func resolveSession() string {
+	if s := os.Getenv("DEVCELL_SESSION_NAME"); s != "" {
+		return s
+	}
+	if s := os.Getenv("TMUX_SESSION_NAME"); s != "" {
+		return s
+	}
+	return "main"
 }
 
 // FS abstracts filesystem stat for testability.

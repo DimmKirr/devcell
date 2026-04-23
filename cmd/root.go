@@ -243,6 +243,11 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 
 	cellCfg := cfg.LoadFromOS(c.ConfigDir, c.BaseDir)
 
+	// Set stack/modules so UserImageTag() produces stack-based tags.
+	runner.Stack = cellCfg.Cell.ResolvedStack()
+	runner.Modules = cellCfg.Cell.Modules
+	runner.PerSessionImage = cellCfg.Cell.ResolvedPerSessionImage()
+
 	// Resolve available GUI ports — probe and bump if already bound
 	if cellCfg.Cell.ResolvedGUI() {
 		c.ResolveAvailablePorts()

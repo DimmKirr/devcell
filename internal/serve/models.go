@@ -10,16 +10,22 @@ import (
 
 // ModelInfo represents a single model in the OpenAI /v1/models response.
 type ModelInfo struct {
-	ID      string `json:"id"`
-	Object  string `json:"object"`
-	Created int64  `json:"created"`
-	OwnedBy string `json:"owned_by"`
+	// Model identifier — use this value in the chat completions "model" field.
+	ID string `json:"id" example:"anthropic/claude-sonnet-4-5-20250514"`
+	// Object type (always "model").
+	Object string `json:"object" example:"model"`
+	// Unix timestamp when the model was discovered.
+	Created int64 `json:"created" example:"1714000000"`
+	// Owner of the model: "anthropic" for API-discovered models, "devcell" for local agents.
+	OwnedBy string `json:"owned_by" example:"anthropic"`
 }
 
 // ModelsResponse is the OpenAI-compatible /v1/models response.
 type ModelsResponse struct {
-	Object string      `json:"object"`
-	Data   []ModelInfo `json:"data"`
+	// Object type (always "list").
+	Object string `json:"object" example:"list"`
+	// Available models discovered from installed agents and the Anthropic API.
+	Data []ModelInfo `json:"data"`
 }
 
 // LookPathFunc matches exec.LookPath signature.
@@ -108,6 +114,24 @@ func (c *RealAnthropicClient) FetchModels() ([]ModelInfo, error) {
 }
 
 // NewModelsHandler returns an http.Handler for GET /v1/models.
+//
+// @Summary List available models
+// @Description Returns all models that can be used in chat completion requests.
+// @Description
+// @Description Models are discovered dynamically at request time:
+// @Description 1. If the `claude` binary is found, the server tries the Anthropic API to list real model IDs
+// @Description    (e.g. `anthropic/claude-sonnet-4-5-20250514`). If the API is unreachable, it falls back to
+// @Description    aliases: `anthropic/opus`, `anthropic/sonnet`, `anthropic/haiku`.
+// @Description 2. If the `opencode` binary is found, `opencode` is added as an available model.
+// @Description
+// @Description Use any returned `id` value as the `model` field in `/v1/chat/completions`.
+// @Tags models
+// @Produce json
+// @Success 200 {object} ModelsResponse "List of available models"
+// @Failure 401 {string} string "Missing or invalid Bearer token"
+// @Failure 405 {string} string "Only GET is allowed"
+// @Security BearerAuth
+// @Router /v1/models [get]
 func NewModelsHandler(lookPath LookPathFunc, ac AnthropicClient) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {

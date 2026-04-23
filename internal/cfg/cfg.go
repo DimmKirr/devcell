@@ -26,7 +26,8 @@ type CellSection struct {
 	Engine          string   `toml:"engine"`            // execution engine: "docker" (default) or "vagrant"
 	VagrantProvider string   `toml:"vagrant_provider"`  // vagrant provider: "utm" (default) or "libvirt"
 	VagrantBox      string   `toml:"vagrant_box"`       // vagrant box name override (default: "utm/bookworm")
-	DockerPrivileged bool     `toml:"docker_privileged"` // run container with --privileged; default: false
+	DockerPrivileged  bool     `toml:"docker_privileged"`   // run container with --privileged; default: false
+	PerSessionImage   *bool    `toml:"per_session_image"`   // tag user image per tmux session instead of per stack; default: false
 }
 
 // ResolvedRegistry returns the effective registry: env > toml > default.
@@ -46,6 +47,14 @@ func (c CellSection) ResolvedGUI() bool {
 		return true
 	}
 	return *c.GUI
+}
+
+// ResolvedPerSessionImage returns true only when explicitly enabled.
+func (c CellSection) ResolvedPerSessionImage() bool {
+	if c.PerSessionImage == nil {
+		return false
+	}
+	return *c.PerSessionImage
 }
 
 // ResolvedStack returns Stack if set, else "base".
@@ -242,6 +251,9 @@ func Merge(global, project CellConfig) CellConfig {
 	if project.Cell.DockerPrivileged {
 		out.Cell.DockerPrivileged = true
 	}
+	if project.Cell.PerSessionImage != nil {
+		out.Cell.PerSessionImage = project.Cell.PerSessionImage
+	}
 
 	// LLM: project wins for scalars, providers accumulate
 	out.LLM = global.LLM
@@ -327,6 +339,10 @@ func ApplyEnv(c *CellConfig, getenv func(string) string) {
 	}
 	if p := getenv("DEVCELL_NIXHOME_PATH"); p != "" {
 		c.Cell.NixhomePath = p
+	}
+	if v := getenv("DEVCELL_PER_SESSION_IMAGE"); v == "true" || v == "1" {
+		b := true
+		c.Cell.PerSessionImage = &b
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	charmlog "github.com/charmbracelet/log"
+	"github.com/muesli/termenv"
 )
 
 var (
@@ -29,10 +30,17 @@ func Initialize(logLevel string, plain bool) {
 		level = charmlog.InfoLevel
 	}
 
-	logger := charmlog.NewWithOptions(os.Stderr, charmlog.Options{
+	opts := charmlog.Options{
 		Level:           level,
-		ReportTimestamp: false,
-	})
+		ReportTimestamp: plain,
+	}
+	logger := charmlog.NewWithOptions(os.Stderr, opts)
+	if plain {
+		logger.SetFormatter(charmlog.TextFormatter)
+		logger.SetStyles(charmlog.DefaultStyles()) // reset to avoid nil
+		// Force no-color output for plain/server mode
+		logger.SetColorProfile(termenv.Ascii)
+	}
 
 	defaultLogger = slog.New(logger)
 }

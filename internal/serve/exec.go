@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"os/exec"
 	"syscall"
+	"time"
+
+	"github.com/DimmKirr/devcell/internal/logger"
 )
 
 // ShellExecutor runs agent binaries as subprocesses.
@@ -27,12 +30,17 @@ func (e *ShellExecutor) Run(agent, prompt, model string) ExecResult {
 		}
 	}
 
+	logger.Debug("exec agent", "agent", agent, "model", model)
+
 	cmd := exec.Command(agent, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
+	start := time.Now()
 	err := cmd.Run()
+	duration := time.Since(start)
+
 	exitCode := 0
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
@@ -45,6 +53,12 @@ func (e *ShellExecutor) Run(agent, prompt, model string) ExecResult {
 			exitCode = 1
 			stderr.WriteString(err.Error())
 		}
+	}
+
+	if exitCode != 0 {
+		logger.Warn("agent failed", "agent", agent, "exit_code", exitCode, "duration", duration.String())
+	} else {
+		logger.Info("agent completed", "agent", agent, "duration", duration.String())
 	}
 
 	return ExecResult{

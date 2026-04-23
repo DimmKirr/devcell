@@ -13,9 +13,16 @@ env:
 
 tasks:
 
+  swag:generate:
+    desc: Regenerate Swagger docs from annotations
+    dir: "{{.TASKFILE_DIR}}"
+    cmds:
+      - go run github.com/swaggo/swag/cmd/swag@latest init -g cmd/serve.go -o docs --parseDependency --parseInternal
+
   cell:build:
     desc: Build cell CLI binary
     dir: "{{.TASKFILE_DIR}}"
+    deps: [swag:generate]
     cmds:
       - CGO_ENABLED=0 go build -ldflags "{{.CELL_LDFLAGS}}" -o ~/.local/bin/cell ./cmd/
 
