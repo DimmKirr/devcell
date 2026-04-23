@@ -14,6 +14,7 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
+RUN go run github.com/swaggo/swag/cmd/swag@latest init -g cmd/serve.go -o docs --parseDependency --parseInternal
 RUN CGO_ENABLED=0 go build -o /cell ./cmd
 
 ###############################################################################

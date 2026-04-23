@@ -2,6 +2,10 @@ version: 2
 
 project_name: cell
 
+before:
+  hooks:
+    - go run github.com/swaggo/swag/cmd/swag@latest init -g cmd/serve.go -o docs --parseDependency --parseInternal
+
 builds:
   - id: cell
     main: ./cmd

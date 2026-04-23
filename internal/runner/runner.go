@@ -373,6 +373,12 @@ func BuildImage(ctx context.Context, configDir string, noCache bool, verbose boo
 	if noCache {
 		args = append(args, "--no-cache", "--build-arg", "NIX_REFRESH=--refresh")
 	}
+	// DEVCELL_DOCKER_BUILD_ARGS: space-separated extra --build-arg pairs (e.g. "FOO=bar BAZ=qux").
+	if extra := os.Getenv("DEVCELL_DOCKER_BUILD_ARGS"); extra != "" {
+		for _, kv := range strings.Fields(extra) {
+			args = append(args, "--build-arg", kv)
+		}
+	}
 	args = append(args, configDir)
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	// Detach from the controlling TTY so Docker Desktop's BuildKit progress
