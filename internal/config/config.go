@@ -57,8 +57,8 @@ func Load(cwd string, getenv func(string) string) Config {
 		ContainerName: "cell-" + appName + "-run",
 		Hostname:      "cell-" + appName,
 		PortPrefix:    portPrefix,
-		VNCPort:       portPrefix + "50",
-		RDPPort:       portPrefix + "89",
+		VNCPort:       clampPort(portPrefix + "50"),
+		RDPPort:       clampPort(portPrefix + "89"),
 		BaseDir:       cwd,
 		HostUser:      getenv("USER"),
 		HostHome:      home,
@@ -148,6 +148,24 @@ func resolveAvailablePort(preferred string) string {
 		}
 	}
 	return preferred
+}
+
+// clampPort ensures a port string represents a valid TCP port (1024–65535).
+// If the value exceeds 65535, it subtracts 65535 repeatedly until it fits,
+// then floors at 1024 to stay out of the privileged range.
+// Pure arithmetic — no I/O. Port availability is handled by ResolveAvailablePorts.
+func clampPort(s string) string {
+	p, err := strconv.Atoi(s)
+	if err != nil || p <= 65535 {
+		return s
+	}
+	for p > 65535 {
+		p -= 65535
+	}
+	if p < 1024 {
+		p += 1024
+	}
+	return strconv.Itoa(p)
 }
 
 // isPortAvailable reports whether a TCP port can be bound on all interfaces.

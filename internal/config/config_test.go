@@ -228,6 +228,28 @@ func TestVNCPort_ParseableAsUint16(t *testing.T) {
 	}
 }
 
+func TestVNCPort_HighCellID_Clamped(t *testing.T) {
+	// CELL_ID=682 → portPrefix="682", VNCPort would be "68250" > 65535
+	c := config.Load("/cwd", env("CELL_ID", "682"))
+	n, err := strconv.ParseUint(c.VNCPort, 10, 16)
+	if err != nil || n == 0 || n > 65535 {
+		t.Errorf("CellID=682 VNCPort=%q should be clamped to valid range, got parsed=%d err=%v", c.VNCPort, n, err)
+	}
+}
+
+func TestVNCPort_PrefixPlusCellID_Clamped(t *testing.T) {
+	// SESSION_PORT_PREFIX="681" + CELL_ID="50" → portPrefix="68150", VNCPort would be "6815050"
+	c := config.Load("/cwd", env("SESSION_PORT_PREFIX", "681", "CELL_ID", "50"))
+	n, err := strconv.ParseUint(c.VNCPort, 10, 16)
+	if err != nil || n == 0 || n > 65535 {
+		t.Errorf("VNCPort=%q should be clamped to valid range", c.VNCPort)
+	}
+	n2, err := strconv.ParseUint(c.RDPPort, 10, 16)
+	if err != nil || n2 == 0 || n2 > 65535 {
+		t.Errorf("RDPPort=%q should be clamped to valid range", c.RDPPort)
+	}
+}
+
 // --- ContainerName ---
 
 func TestContainerName(t *testing.T) {

@@ -5,8 +5,12 @@
 #   docker buildx bake                    # builds default group (ci)
 #   docker buildx bake base               # single target
 #   docker buildx bake release            # all release variants
-#   docker buildx bake --push release     # build + push (gzip)
-#   docker buildx bake --set '*.output=type=image,push=true,compression=zstd,compression-level=3,force-compression=true' release  # push with zstd
+#   docker buildx bake --push release     # build + push (gzip, no provenance)
+#
+# Compression and provenance are pinned in `_base-args` (gzip + provenance=false)
+# to maximise pull compatibility with older Docker daemons and registries that
+# choke on zstd layers or OCI provenance attestations. Override per-invocation
+# with `--set '*.output=...'` and `--set '*.attest=...'` if needed.
 #
 # Variables can be overridden via env:
 #   VERSION=1.2.3 docker buildx bake release
@@ -66,6 +70,13 @@ target "_base-args" {
     USER_GID   = USER_GID
     GIT_COMMIT = GIT_COMMIT
   }
+  attest = [
+    "type=provenance,disabled=true",
+    "type=sbom,disabled=true",
+  ]
+  output = [
+    "type=image,compression=gzip,force-compression=true",
+  ]
 }
 
 # ── Stack image targets ──────────────────────────────────────────────────────

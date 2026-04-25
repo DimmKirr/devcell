@@ -73,7 +73,7 @@ tasks:
     desc: Build ci group and push to registry (multi-arch)
     silent: true
     cmds:
-      - GIT_COMMIT={{.GIT_COMMIT_HASH}} docker buildx bake --file {{.TASKFILE_DIR}}/docker-bake.hcl --set '*.output=type=image,push=true,compression=zstd,compression-level=3,force-compression=true' ci {{.CLI_ARGS}}
+      - GIT_COMMIT={{.GIT_COMMIT_HASH}} docker buildx bake --file {{.TASKFILE_DIR}}/docker-bake.hcl --push ci {{.CLI_ARGS}}
 
   nix:validate:
     desc: Validate all nixhome stacks — syntax check then attr check (no build, no activation)
