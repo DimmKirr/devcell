@@ -16,11 +16,17 @@ import (
 
 // @title DevCell Serve API
 // @version 1.0
-// @description DevCell Serve exposes an OpenAI-compatible HTTP API that proxies chat completion requests to LLM agent binaries running inside a DevCell container.
+// @description DevCell Serve exposes an OpenAI-compatible HTTP API that proxies LLM requests to agent binaries (Claude Code, OpenCode) running inside a DevCell container.
 // @description
 // @description ## Why use this?
 // @description
-// @description Any tool that speaks the OpenAI chat completions protocol (Cursor, Continue, custom scripts, CI pipelines) can target DevCell Serve as its backend. The server routes requests to the appropriate agent binary (Claude Code, OpenCode) based on the `model` field — no SDK or CLI wrapper needed.
+// @description Any tool that speaks the OpenAI protocol — Cursor, Continue, n8n, custom scripts, CI pipelines, the OpenAI Agents SDK — can target DevCell Serve as its backend. The server routes requests to the appropriate agent binary based on the `model` field — no SDK or CLI wrapper needed.
+// @description
+// @description ## Endpoints
+// @description
+// @description - **`POST /v1/chat/completions`** — Chat Completions API (the most widely supported OpenAI surface). Use this for traditional chat clients.
+// @description - **`POST /v1/responses`** — Responses API (newer, used by OpenAI Agents SDK and n8n's "Message a Model" node). Same model routing as chat completions; stateless (no `previous_response_id` chain).
+// @description - **`GET /v1/models`** — list available models discovered from installed agents.
 // @description
 // @description ## Quick start
 // @description
@@ -30,18 +36,34 @@ import (
 // @description
 // @description ## Model routing
 // @description
-// @description The `model` field in chat requests selects which agent handles the prompt:
+// @description The `model` field selects which agent handles the prompt (same for both `/v1/chat/completions` and `/v1/responses`):
 // @description - `"claude"` or `"anthropic"` → routes to the Claude Code CLI
 // @description - `"opencode"` → routes to the OpenCode CLI
-// @description - `"claude/claude-sonnet-4-5"` → routes to Claude Code with a specific sub-model
+// @description - `"anthropic/sonnet"`, `"claude/claude-sonnet-4-5"` → Claude Code with a specific sub-model
+// @description
+// @description ## Limitations
+// @description
+// @description - **Streaming is not supported.** Requests with `"stream": true` to `/v1/responses` return 400; `/v1/chat/completions` returns the full response synchronously regardless.
+// @description - **No tool calling.** The `tools` field is accepted for compatibility but never invokes a tool — the underlying CLI agents have their own internal tool loop.
+// @description - **Stateless.** `previous_response_id` is accepted and ignored; clients must re-send full conversation history each request.
+// @description - **Token usage is stubbed at zero** in responses.
 // @description
 // @description ## Example curl
 // @description
+// @description Chat Completions:
 // @description ```bash
 // @description curl http://localhost:8484/v1/chat/completions \
 // @description   -H "Authorization: Bearer $DEVCELL_API_KEY" \
 // @description   -H "Content-Type: application/json" \
-// @description   -d '{"model":"claude","messages":[{"role":"user","content":"explain this repo"}]}'
+// @description   -d '{"model":"anthropic/sonnet","messages":[{"role":"user","content":"explain this repo"}]}'
+// @description ```
+// @description
+// @description Responses API:
+// @description ```bash
+// @description curl http://localhost:8484/v1/responses \
+// @description   -H "Authorization: Bearer $DEVCELL_API_KEY" \
+// @description   -H "Content-Type: application/json" \
+// @description   -d '{"model":"anthropic/sonnet","input":"explain this repo"}'
 // @description ```
 // @host localhost:8484
 // @BasePath /
@@ -53,12 +75,13 @@ import (
 var serveCmd = &cobra.Command{
 	Use:   "serve",
 	Short: "Start HTTP API server for LLM commands",
-	Long: `Starts an OpenAI-compatible HTTP server that proxies chat completions
+	Long: `Starts an OpenAI-compatible HTTP server that proxies requests
 to LLM agent binaries (claude, opencode).
 
 Endpoints:
 
-    POST /v1/chat/completions  — OpenAI chat completions API
+    POST /v1/chat/completions  — OpenAI Chat Completions API
+    POST /v1/responses         — OpenAI Responses API (newer; n8n, Agents SDK)
     GET  /v1/models            — list available models
     GET  /healthz              — health check (k8s convention)
     GET  /api/v1/health        — health check (REST convention)
@@ -66,11 +89,19 @@ Endpoints:
     GET  /swagger/             — Swagger UI
 
 The model field selects the agent: "claude", "opencode", or
-"claude/claude-sonnet-4-5" (agent/submodel).
+"anthropic/sonnet", "claude/claude-sonnet-4-5" (agent/submodel).
 
-Request:
+Chat Completions request:
 
-    {"model": "claude", "messages": [{"role": "user", "content": "explain this"}]}
+    {"model": "anthropic/sonnet",
+     "messages": [{"role": "user", "content": "explain this"}]}
+
+Responses API request:
+
+    {"model": "anthropic/sonnet", "input": "explain this"}
+
+Streaming is not supported. previous_response_id and tools are accepted
+but ignored. Token usage is stubbed at zero.
 
 Examples:
 

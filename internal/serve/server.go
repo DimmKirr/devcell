@@ -65,6 +65,7 @@ func execLookPath(name string) (string, error) {
 func (s *Server) Start(ctx context.Context) (addr string, errCh chan error) {
 	mux := http.NewServeMux()
 	mux.Handle("/v1/chat/completions", AuthMiddleware(s.apiKey, NewChatHandler(s.exec)))
+	mux.Handle("/v1/responses", AuthMiddleware(s.apiKey, NewResponsesHandler(s.exec)))
 	mux.Handle("/v1/models", AuthMiddleware(s.apiKey, NewModelsHandler(s.lookPath, s.anthropic)))
 	mux.HandleFunc("/healthz", healthHandler)
 	mux.HandleFunc("/api/v1/health", healthHandler)
