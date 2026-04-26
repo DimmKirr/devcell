@@ -16,13 +16,15 @@ type fakeExecResponses struct {
 	gotAgent  string
 	gotPrompt string
 	gotModel  string
+	gotEffort string
 	stdout    string
 }
 
-func (f *fakeExecResponses) Run(agent, prompt, model string) serve.ExecResult {
-	f.gotAgent = agent
-	f.gotPrompt = prompt
-	f.gotModel = model
+func (f *fakeExecResponses) Run(opts serve.ExecOpts) serve.ExecResult {
+	f.gotAgent = opts.Agent
+	f.gotPrompt = opts.Prompt
+	f.gotModel = opts.Model
+	f.gotEffort = opts.Effort
 	return serve.ExecResult{Stdout: f.stdout}
 }
 

@@ -32,13 +32,17 @@ type ResponsesRequest struct {
 	// Stream, if true, returns 400 — streaming is not supported.
 	Stream bool `json:"stream,omitempty"`
 
+	// Reasoning carries reasoning-model controls. Only `reasoning.effort`
+	// (low|medium|high) is honored — it maps to `claude --effort`. Other
+	// fields (summary, generate_summary) are accepted and ignored.
+	Reasoning *ResponsesReasoningConfig `json:"reasoning,omitempty"`
+
 	// Accepted, ignored — kept for client compatibility.
 	PreviousResponseID string          `json:"previous_response_id,omitempty"`
 	Tools              json.RawMessage `json:"tools,omitempty" swaggerignore:"true"`
 	ToolChoice         json.RawMessage `json:"tool_choice,omitempty" swaggerignore:"true"`
 	ResponseFormat     json.RawMessage `json:"response_format,omitempty" swaggerignore:"true"`
 	Text               json.RawMessage `json:"text,omitempty" swaggerignore:"true"`
-	Reasoning          json.RawMessage `json:"reasoning,omitempty" swaggerignore:"true"`
 	Temperature        *float64        `json:"temperature,omitempty"`
 	TopP               *float64        `json:"top_p,omitempty"`
 	MaxOutputTokens    *int            `json:"max_output_tokens,omitempty"`
@@ -49,6 +53,20 @@ type ResponsesRequest struct {
 	User               string          `json:"user,omitempty"`
 	Background         *bool           `json:"background,omitempty"`
 	Include            []string        `json:"include,omitempty"`
+}
+
+// ResponsesReasoningConfig is the OpenAI-spec reasoning object.
+//
+// The Responses API allows clients to control thinking budget on reasoning
+// models. devcell honors `effort` (mapping it to `claude --effort`) and
+// ignores other fields.
+type ResponsesReasoningConfig struct {
+	// Effort: "low", "medium", or "high". Other values are silently dropped.
+	Effort string `json:"effort,omitempty" example:"high"`
+	// Summary controls reasoning summary verbosity. Accepted, ignored.
+	Summary string `json:"summary,omitempty"`
+	// GenerateSummary is a deprecated alias of Summary. Accepted, ignored.
+	GenerateSummary string `json:"generate_summary,omitempty"`
 }
 
 // ResponsesOutputContentPart is one part of an output message's content array.
@@ -132,8 +150,9 @@ type ResponsesObject struct {
 	ParallelToolCalls bool `json:"parallel_tool_calls" example:"true"`
 	// PreviousResponseID — always null (stateless).
 	PreviousResponseID *string `json:"previous_response_id"`
-	// Reasoning config — always null (no reasoning models bridged).
-	Reasoning map[string]any `json:"reasoning"`
+	// Reasoning config — echoes the input reasoning object (with normalized
+	// effort if it was applied), or null if no reasoning was sent.
+	Reasoning *ResponsesReasoningConfig `json:"reasoning"`
 	// Store flag — echo of input or default true.
 	Store bool `json:"store" example:"true"`
 	// Sampling temperature — echo of input or default 1.0 (devcell ignores it).
@@ -311,8 +330,12 @@ func buildPrompt(instructions string, input json.RawMessage) (string, error) {
 // @Description
 // @Description **Streaming is not supported.** Requests with `"stream": true` return 400.
 // @Description
-// @Description **Unsupported fields** (`tools`, `response_format`, `reasoning`, `temperature`,
-// @Description `top_p`, `max_output_tokens`, `metadata`, `store`, etc.) are accepted to keep
+// @Description **Honored fields beyond core:**
+// @Description - `reasoning.effort` (`low` / `medium` / `high`) → maps to the `claude --effort` CLI flag
+// @Description   to control thinking budget. Other values (including Claude's `xhigh`/`max`) are silently dropped.
+// @Description
+// @Description **Unsupported fields** (`tools`, `response_format`, `temperature`, `top_p`,
+// @Description `max_output_tokens`, `metadata`, `store`, `service_tier`, etc.) are accepted to keep
 // @Description SDK clients happy but have no effect — devcell shells out to a CLI agent and
 // @Description cannot honor them.
 // @Description
@@ -385,7 +408,21 @@ func NewResponsesHandler(exec Executor) http.Handler {
 			return
 		}
 
-		result := exec.Run(agent, prompt, submodel)
+		// reasoning.effort is OpenAI's per-request thinking-budget hint
+		// (low|medium|high). Maps to claude's --effort flag. Silently drop
+		// unknown values rather than 400 — matches our permissive parsing
+		// of other not-fully-supported fields.
+		var effort string
+		if req.Reasoning != nil && validEffort(req.Reasoning.Effort) {
+			effort = req.Reasoning.Effort
+		}
+
+		result := exec.Run(ExecOpts{
+			Agent:  agent,
+			Prompt: prompt,
+			Model:  submodel,
+			Effort: effort,
+		})
 
 		status := "completed"
 		text := result.Stdout
@@ -456,7 +493,7 @@ func NewResponsesHandler(exec Executor) http.Handler {
 			Metadata:           map[string]string{},
 			ParallelToolCalls:  parallel,
 			PreviousResponseID: nil,
-			Reasoning:          nil,
+			Reasoning:          req.Reasoning,
 			Store:              store,
 			Temperature:        temperature,
 			ToolChoice:         "auto",

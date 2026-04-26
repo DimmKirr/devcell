@@ -376,6 +376,120 @@ func TestResponses_IgnoredFieldsTolerated(t *testing.T) {
 	}
 }
 
+// --- reasoning.effort → claude --effort mapping ---
+//
+// OpenAI documents `low`, `medium`, `high` as the valid values for
+// `reasoning.effort`. Claude CLI accepts those plus `xhigh` and `max`.
+// We deliberately accept only the OpenAI-spec values and silently drop
+// non-spec values (including Claude's extensions) — same permissive
+// pattern we use for other partially-supported fields.
+
+func TestResponses_Effort_OpenAISpecValuesPassThrough(t *testing.T) {
+	for _, v := range []string{"low", "medium", "high"} {
+		t.Run(v, func(t *testing.T) {
+			fe := &fakeExec{stdout: "ok"}
+			h := NewResponsesHandler(fe)
+			body := `{"model":"anthropic/sonnet","input":"hi","reasoning":{"effort":"` + v + `"}}`
+			rec := postResponses(t, h, body)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+			}
+			if fe.effort != v {
+				t.Errorf("effort reaching executor = %q, want %q", fe.effort, v)
+			}
+		})
+	}
+}
+
+func TestResponses_Effort_ClaudeOnlyValuesDropped(t *testing.T) {
+	// "xhigh" and "max" are Claude CLI extensions, NOT in the OpenAI spec.
+	// Clients sending them are misusing the OpenAI surface — we drop the
+	// value rather than silently passing a non-spec string to the CLI.
+	for _, v := range []string{"xhigh", "max"} {
+		t.Run(v, func(t *testing.T) {
+			fe := &fakeExec{stdout: "ok"}
+			h := NewResponsesHandler(fe)
+			body := `{"model":"anthropic/sonnet","input":"hi","reasoning":{"effort":"` + v + `"}}`
+			rec := postResponses(t, h, body)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+			}
+			if fe.effort != "" {
+				t.Errorf("non-OpenAI-spec effort %q leaked to executor (got %q), should be dropped",
+					v, fe.effort)
+			}
+		})
+	}
+}
+
+func TestResponses_Effort_UnknownValuesDropped(t *testing.T) {
+	for _, v := range []string{"extreme", "minimal", "LOW", "High", "auto", "none"} {
+		t.Run(v, func(t *testing.T) {
+			fe := &fakeExec{stdout: "ok"}
+			h := NewResponsesHandler(fe)
+			body := `{"model":"anthropic/sonnet","input":"hi","reasoning":{"effort":"` + v + `"}}`
+			rec := postResponses(t, h, body)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d", rec.Code)
+			}
+			if fe.effort != "" {
+				t.Errorf("unknown effort %q leaked to executor (got %q)", v, fe.effort)
+			}
+		})
+	}
+}
+
+func TestResponses_Effort_AbsentNoFlag(t *testing.T) {
+	fe := &fakeExec{stdout: "ok"}
+	h := NewResponsesHandler(fe)
+	rec := postResponses(t, h, `{"model":"anthropic/sonnet","input":"hi"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if fe.effort != "" {
+		t.Errorf("absent reasoning.effort still produced executor effort=%q", fe.effort)
+	}
+}
+
+func TestResponses_Effort_OtherReasoningFieldsIgnored(t *testing.T) {
+	// `summary` and `generate_summary` decode but have no effect.
+	fe := &fakeExec{stdout: "ok"}
+	h := NewResponsesHandler(fe)
+	body := `{
+		"model":"anthropic/sonnet","input":"hi",
+		"reasoning":{"effort":"medium","summary":"detailed","generate_summary":"auto"}
+	}`
+	rec := postResponses(t, h, body)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if fe.effort != "medium" {
+		t.Errorf("effort = %q, want medium", fe.effort)
+	}
+}
+
+func TestResponses_Effort_EchoedInResponse(t *testing.T) {
+	// The reasoning object should be echoed back verbatim (with whatever
+	// fields the client sent) so SDK round-trips don't drop information.
+	fe := &fakeExec{stdout: "ok"}
+	h := NewResponsesHandler(fe)
+	rec := postResponses(t, h,
+		`{"model":"anthropic/sonnet","input":"hi","reasoning":{"effort":"high","summary":"auto"}}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	r := decodeResponse(t, rec)
+	if r.Reasoning == nil {
+		t.Fatalf("expected reasoning to be echoed, got nil")
+	}
+	if r.Reasoning.Effort != "high" {
+		t.Errorf("echo effort = %q, want high", r.Reasoning.Effort)
+	}
+	if r.Reasoning.Summary != "auto" {
+		t.Errorf("echo summary = %q, want auto", r.Reasoning.Summary)
+	}
+}
+
 func TestResponses_OpenCodeRouting(t *testing.T) {
 	fe := &fakeExec{stdout: "ok"}
 	h := NewResponsesHandler(fe)

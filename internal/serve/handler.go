@@ -19,7 +19,23 @@ var agentForPrefix = map[string]string{
 
 // Executor runs an agent command and returns the result.
 type Executor interface {
-	Run(agent, prompt, model string) ExecResult
+	Run(opts ExecOpts) ExecResult
+}
+
+// ExecOpts is the bundle of arguments passed to Executor.Run.
+//
+// Adding a new CLI-flag mapping (e.g. --max-budget-usd) means adding a field
+// here rather than widening Run's signature.
+type ExecOpts struct {
+	// Agent is the binary name ("claude" or "opencode").
+	Agent string
+	// Prompt is the assembled prompt string passed via -p / positional arg.
+	Prompt string
+	// Model is the optional sub-model (e.g. "sonnet" or "claude-sonnet-4-5"). Empty = agent default.
+	Model string
+	// Effort, when set, is passed as --effort to the claude CLI.
+	// Valid values: "low", "medium", "high". Empty = CLI default.
+	Effort string
 }
 
 // ExecResult holds the output of an agent execution.
@@ -27,6 +43,19 @@ type ExecResult struct {
 	Stdout   string
 	Stderr   string
 	ExitCode int
+}
+
+// validEffort reports whether v is one of the OpenAI-spec effort levels.
+//
+// We deliberately accept only "low", "medium", "high" — the values OpenAI
+// documents — and silently drop unknown values (including Claude's "xhigh"
+// and "max" extensions) to match permissive parsing of other fields.
+func validEffort(v string) bool {
+	switch v {
+	case "low", "medium", "high":
+		return true
+	}
+	return false
 }
 
 // ChatMessage is an OpenAI-compatible message.
@@ -44,6 +73,10 @@ type ChatRequest struct {
 	Model string `json:"model" example:"claude"`
 	// Messages is the conversation history. The last user message is used as the prompt.
 	Messages []ChatMessage `json:"messages"`
+	// ReasoningEffort, when set, controls Claude's thinking budget for this request.
+	// Valid values: "low", "medium", "high". Other values are silently dropped.
+	// Maps to the `claude --effort` CLI flag. Has no effect on the opencode agent.
+	ReasoningEffort string `json:"reasoning_effort,omitempty" example:"high"`
 }
 
 // ChatChoice is a single choice in the response.
@@ -108,6 +141,10 @@ func chatcmplID() string {
 // @Description Only the **last user message** in the `messages` array is sent as the prompt to the agent.
 // @Description The response is a single-choice completion with finish_reason "stop" on success or "error" on failure.
 // @Description
+// @Description **Honored fields:**
+// @Description - `reasoning_effort` (`low` / `medium` / `high`) → maps to the `claude --effort` CLI flag
+// @Description   to control thinking budget. Other values (including Claude's `xhigh`/`max`) are silently dropped.
+// @Description
 // @Description **Example request:**
 // @Description ```json
 // @Description {"model": "claude", "messages": [{"role": "user", "content": "explain this repo"}]}
@@ -155,7 +192,21 @@ func NewChatHandler(exec Executor) http.Handler {
 		// Use the last user message as the prompt.
 		prompt := req.Messages[len(req.Messages)-1].Content
 
-		result := exec.Run(agent, prompt, submodel)
+		// reasoning_effort is OpenAI's per-request thinking-budget hint
+		// (low|medium|high). Maps to claude's --effort flag. Silently drop
+		// unknown values rather than 400 — matches our permissive parsing
+		// of other not-fully-supported fields.
+		effort := req.ReasoningEffort
+		if effort != "" && !validEffort(effort) {
+			effort = ""
+		}
+
+		result := exec.Run(ExecOpts{
+			Agent:  agent,
+			Prompt: prompt,
+			Model:  submodel,
+			Effort: effort,
+		})
 
 		finishReason := "stop"
 		content := result.Stdout

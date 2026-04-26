@@ -15,7 +15,7 @@ type fakeExecCompat struct {
 	stdout string
 }
 
-func (f *fakeExecCompat) Run(agent, prompt, model string) serve.ExecResult {
+func (f *fakeExecCompat) Run(opts serve.ExecOpts) serve.ExecResult {
 	return serve.ExecResult{Stdout: f.stdout}
 }
 
@@ -142,9 +142,9 @@ type routingExec struct {
 	onRun func(agent, prompt, model string)
 }
 
-func (r *routingExec) Run(agent, prompt, model string) serve.ExecResult {
+func (r *routingExec) Run(opts serve.ExecOpts) serve.ExecResult {
 	if r.onRun != nil {
-		r.onRun(agent, prompt, model)
+		r.onRun(opts.Agent, opts.Prompt, opts.Model)
 	}
 	return serve.ExecResult{Stdout: "ok"}
 }

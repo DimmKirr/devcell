@@ -48,6 +48,10 @@ import (
 // @description - **Stateless.** `previous_response_id` is accepted and ignored; clients must re-send full conversation history each request.
 // @description - **Token usage is stubbed at zero** in responses.
 // @description
+// @description ## Reasoning effort
+// @description
+// @description Both endpoints honor the OpenAI `reasoning_effort` / `reasoning.effort` field (values: `low`, `medium`, `high`). It maps to the `claude --effort` CLI flag, controlling thinking budget on a per-request basis. Non-spec values (e.g. Claude's `xhigh`/`max`) are silently dropped.
+// @description
 // @description ## Example curl
 // @description
 // @description Chat Completions:

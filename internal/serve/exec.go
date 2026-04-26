@@ -12,27 +12,31 @@ import (
 // ShellExecutor runs agent binaries as subprocesses.
 type ShellExecutor struct{}
 
-// Run executes the agent binary with the given prompt and optional model.
-func (e *ShellExecutor) Run(agent, prompt, model string) ExecResult {
+// Run executes the agent binary with the given options.
+func (e *ShellExecutor) Run(opts ExecOpts) ExecResult {
 	var args []string
-	switch agent {
+	switch opts.Agent {
 	case "claude":
-		args = append(args, "-p", prompt)
-		if model != "" {
-			args = append(args, "--model", model)
+		args = append(args, "-p", opts.Prompt)
+		if opts.Model != "" {
+			args = append(args, "--model", opts.Model)
+		}
+		if opts.Effort != "" {
+			args = append(args, "--effort", opts.Effort)
 		}
 	case "opencode":
 		// opencode doesn't have a one-shot prompt mode yet;
 		// pass prompt as positional arg for now.
-		args = append(args, prompt)
-		if model != "" {
-			args = append(args, "--model", model)
+		args = append(args, opts.Prompt)
+		if opts.Model != "" {
+			args = append(args, "--model", opts.Model)
 		}
+		// opencode has no --effort equivalent; ignore.
 	}
 
-	logger.Debug("exec agent", "agent", agent, "model", model)
+	logger.Debug("exec agent", "agent", opts.Agent, "model", opts.Model, "effort", opts.Effort)
 
-	cmd := exec.Command(agent, args...)
+	cmd := exec.Command(opts.Agent, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -56,9 +60,9 @@ func (e *ShellExecutor) Run(agent, prompt, model string) ExecResult {
 	}
 
 	if exitCode != 0 {
-		logger.Warn("agent failed", "agent", agent, "exit_code", exitCode, "duration", duration.String())
+		logger.Warn("agent failed", "agent", opts.Agent, "exit_code", exitCode, "duration", duration.String())
 	} else {
-		logger.Info("agent completed", "agent", agent, "duration", duration.String())
+		logger.Info("agent completed", "agent", opts.Agent, "duration", duration.String())
 	}
 
 	return ExecResult{
