@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/DimmKirr/devcell/internal/logger"
 )
 
 // agentForPrefix maps model prefix to the binary name.
@@ -159,7 +161,7 @@ func chatcmplID() string {
 // @Failure 405 {string} string "Only POST is allowed"
 // @Security BearerAuth
 // @Router /v1/chat/completions [post]
-func NewChatHandler(exec Executor) http.Handler {
+func NewChatHandler(exec Executor, logPrompts bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -201,6 +203,14 @@ func NewChatHandler(exec Executor) http.Handler {
 			effort = ""
 		}
 
+		id := chatcmplID()
+
+		if logPrompts {
+			logger.Info("chat prompt",
+				"id", id, "model", req.Model, "agent", agent,
+				"effort", effort, "prompt", prompt)
+		}
+
 		result := exec.Run(ExecOpts{
 			Agent:  agent,
 			Prompt: prompt,
@@ -217,8 +227,13 @@ func NewChatHandler(exec Executor) http.Handler {
 			}
 		}
 
+		if logPrompts {
+			logger.Info("chat response",
+				"id", id, "finish_reason", finishReason, "content", content)
+		}
+
 		resp := ChatResponse{
-			ID:      chatcmplID(),
+			ID:      id,
 			Object:  "chat.completion",
 			Created: time.Now().Unix(),
 			Model:   req.Model,

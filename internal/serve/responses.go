@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/DimmKirr/devcell/internal/logger"
 )
 
 // ResponsesRequest is the OpenAI Responses-API request body.
@@ -356,7 +358,7 @@ func buildPrompt(instructions string, input json.RawMessage) (string, error) {
 // @Failure 405 {object} APIError "Only POST is allowed"
 // @Security BearerAuth
 // @Router /v1/responses [post]
-func NewResponsesHandler(exec Executor) http.Handler {
+func NewResponsesHandler(exec Executor, logPrompts bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeAPIError(w, http.StatusMethodNotAllowed,
@@ -415,6 +417,14 @@ func NewResponsesHandler(exec Executor) http.Handler {
 		var effort string
 		if req.Reasoning != nil && validEffort(req.Reasoning.Effort) {
 			effort = req.Reasoning.Effort
+		}
+
+		id := responseID()
+
+		if logPrompts {
+			logger.Info("responses prompt",
+				"id", id, "model", req.Model, "agent", agent,
+				"effort", effort, "prompt", prompt)
 		}
 
 		result := exec.Run(ExecOpts{
@@ -478,8 +488,13 @@ func NewResponsesHandler(exec Executor) http.Handler {
 			truncation = req.Truncation
 		}
 
+		if logPrompts {
+			logger.Info("responses response",
+				"id", id, "status", status, "output_text", text)
+		}
+
 		resp := ResponsesObject{
-			ID:                 responseID(),
+			ID:                 id,
 			Object:             "response",
 			CreatedAt:          time.Now().Unix(),
 			Status:             status,

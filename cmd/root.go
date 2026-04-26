@@ -397,18 +397,17 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 		}
 		ux.Debugf("1Password: resolving %d document(s): %v", len(opDocs), opDocs)
 		if _, err := exec.LookPath("op"); err == nil {
-			resolved, err := op.ResolveItems(opDocs)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "warning: 1Password: %v\n", err)
-			} else {
-				keys := make([]string, 0, len(resolved))
-				for k, v := range resolved {
-					os.Setenv(k, v)
-					inheritEnv = append(inheritEnv, k)
-					keys = append(keys, k)
-				}
-				ux.Debugf("1Password: resolved %d secret(s): %v", len(keys), keys)
+			resolved, errs := op.ResolveItems(opDocs)
+			for _, e := range errs {
+				fmt.Fprintf(os.Stderr, "warning: 1Password: %v\n", e)
 			}
+			keys := make([]string, 0, len(resolved))
+			for k, v := range resolved {
+				os.Setenv(k, v)
+				inheritEnv = append(inheritEnv, k)
+				keys = append(keys, k)
+			}
+			ux.Debugf("1Password: resolved %d secret(s) from %d document(s) (%d failed): %v", len(keys), len(opDocs)-len(errs), len(errs), keys)
 		} else {
 			ux.Debugf("1Password: op CLI not found, skipping secret resolution")
 		}

@@ -52,6 +52,12 @@ import (
 // @description
 // @description Both endpoints honor the OpenAI `reasoning_effort` / `reasoning.effort` field (values: `low`, `medium`, `high`). It maps to the `claude --effort` CLI flag, controlling thinking budget on a per-request basis. Non-spec values (e.g. Claude's `xhigh`/`max`) are silently dropped.
 // @description
+// @description ## Debug logging
+// @description
+// @description By default the server logs only request metadata (method, path, status, duration) plus agent metadata at DEBUG level. Prompt and response bodies are **never** logged — they often contain secrets, PII, or large pasted content from upstream tools.
+// @description
+// @description Set `DEVCELL_LOG_PROMPTS=1` (combined with `LOG_LEVEL=info` or lower) to log the full assembled prompt and the model's reply for every `/v1/chat/completions` and `/v1/responses` request. Use only for debugging client integrations; do not leave on in production.
+// @description
 // @description ## Example curl
 // @description
 // @description Chat Completions:
@@ -107,10 +113,19 @@ Responses API request:
 Streaming is not supported. previous_response_id and tools are accepted
 but ignored. Token usage is stubbed at zero.
 
+Environment:
+
+    DEVCELL_API_KEY        Bearer token (auto-generated if empty)
+    PORT                   Listen port (overridden by --port)
+    LOG_LEVEL              debug|info|warn|error (default: warn)
+    DEVCELL_LOG_PROMPTS=1  Log full prompt + response bodies at INFO level
+                           (off by default; prompts may contain secrets)
+
 Examples:
 
     cell serve
-    cell serve --port 9090`,
+    cell serve --port 9090
+    DEVCELL_LOG_PROMPTS=1 LOG_LEVEL=info cell serve  # debug a client integration`,
 	RunE: runServe,
 }
 
@@ -153,6 +168,13 @@ func runServe(cmd *cobra.Command, args []string) error {
 	exec := &serve.ShellExecutor{}
 	srv := serve.NewServer(exec, servePort)
 	srv.SetAPIKey(apiKey)
+	// Off by default. Setting DEVCELL_LOG_PROMPTS=1 makes /v1/chat/completions
+	// and /v1/responses log full prompt + response text at INFO level. Useful
+	// for debugging client integrations; risky for prod logs because prompts
+	// often carry secrets / PII / large pasted content.
+	if os.Getenv("DEVCELL_LOG_PROMPTS") == "1" {
+		srv.SetLogPrompts(true)
+	}
 
 	addr, errCh := srv.Start(ctx)
 	if addr == "" {

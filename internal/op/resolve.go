@@ -20,16 +20,23 @@ type item struct {
 // ResolveItems calls `op item get` for each item name and returns a merged
 // map of label→value for all fields that have both a label and a value.
 // Items later in the slice win on key conflict.
-func ResolveItems(items []string) (map[string]string, error) {
+//
+// Resolution is optimistic: a failure on one item is recorded in the returned
+// []error slice and the loop continues with the next item. The caller is
+// expected to surface the per-item errors and apply whatever did resolve.
+func ResolveItems(items []string) (map[string]string, []error) {
 	env := make(map[string]string)
+	var errs []error
 	for _, name := range items {
 		out, err := exec.Command("op", "item", "get", name, "--format", "json", "--reveal", "--cache").Output()
 		if err != nil {
-			return nil, fmt.Errorf("op item get %s: %w", name, err)
+			errs = append(errs, fmt.Errorf("op item get %s: %w", name, err))
+			continue
 		}
 		var it item
 		if err := json.Unmarshal(out, &it); err != nil {
-			return nil, fmt.Errorf("op item get %s: parse JSON: %w", name, err)
+			errs = append(errs, fmt.Errorf("op item get %s: parse JSON: %w", name, err))
+			continue
 		}
 		for _, f := range it.Fields {
 			if f.Label != "" && f.Value != "" {
@@ -37,5 +44,5 @@ func ResolveItems(items []string) (map[string]string, error) {
 			}
 		}
 	}
-	return env, nil
+	return env, errs
 }

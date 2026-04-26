@@ -37,7 +37,7 @@ func decodeAPIError(t *testing.T, rec *httptest.ResponseRecorder) APIError {
 
 func TestResponses_StringInput(t *testing.T) {
 	fe := &fakeExec{stdout: "world"}
-	h := NewResponsesHandler(fe)
+	h := NewResponsesHandler(fe, false)
 
 	rec := postResponses(t, h, `{"model":"anthropic/sonnet","input":"hello"}`)
 	if rec.Code != http.StatusOK {
@@ -85,7 +85,7 @@ func TestResponses_StringInput(t *testing.T) {
 
 func TestResponses_ArrayInput(t *testing.T) {
 	fe := &fakeExec{stdout: "ok"}
-	h := NewResponsesHandler(fe)
+	h := NewResponsesHandler(fe, false)
 
 	body := `{
 		"model": "anthropic/sonnet",
@@ -108,7 +108,7 @@ func TestResponses_ArrayInput(t *testing.T) {
 
 func TestResponses_ContentParts(t *testing.T) {
 	fe := &fakeExec{stdout: "ok"}
-	h := NewResponsesHandler(fe)
+	h := NewResponsesHandler(fe, false)
 
 	body := `{
 		"model": "anthropic/sonnet",
@@ -127,7 +127,7 @@ func TestResponses_ContentParts(t *testing.T) {
 
 func TestResponses_Instructions(t *testing.T) {
 	fe := &fakeExec{stdout: "ok"}
-	h := NewResponsesHandler(fe)
+	h := NewResponsesHandler(fe, false)
 
 	body := `{"model":"anthropic/sonnet","instructions":"be brief","input":"hi"}`
 	rec := postResponses(t, h, body)
@@ -149,7 +149,7 @@ func TestResponses_Instructions(t *testing.T) {
 
 func TestResponses_SystemRoleInArray(t *testing.T) {
 	fe := &fakeExec{stdout: "ok"}
-	h := NewResponsesHandler(fe)
+	h := NewResponsesHandler(fe, false)
 
 	// system role inside input[] flattens to [system]: line.
 	body := `{
@@ -171,7 +171,7 @@ func TestResponses_SystemRoleInArray(t *testing.T) {
 
 func TestResponses_DeveloperRoleAliasesToSystem(t *testing.T) {
 	fe := &fakeExec{stdout: "ok"}
-	h := NewResponsesHandler(fe)
+	h := NewResponsesHandler(fe, false)
 
 	body := `{
 		"model": "anthropic/sonnet",
@@ -191,7 +191,7 @@ func TestResponses_DeveloperRoleAliasesToSystem(t *testing.T) {
 
 func TestResponses_StreamRejected(t *testing.T) {
 	fe := &fakeExec{stdout: "ok"}
-	h := NewResponsesHandler(fe)
+	h := NewResponsesHandler(fe, false)
 
 	rec := postResponses(t, h, `{"model":"anthropic/sonnet","input":"hi","stream":true}`)
 	if rec.Code != http.StatusBadRequest {
@@ -214,7 +214,7 @@ func TestResponses_StreamRejected(t *testing.T) {
 
 func TestResponses_BadJSON(t *testing.T) {
 	fe := &fakeExec{stdout: "ok"}
-	h := NewResponsesHandler(fe)
+	h := NewResponsesHandler(fe, false)
 
 	rec := postResponses(t, h, `{not json}`)
 	if rec.Code != http.StatusBadRequest {
@@ -227,7 +227,7 @@ func TestResponses_BadJSON(t *testing.T) {
 }
 
 func TestResponses_EmptyModel(t *testing.T) {
-	h := NewResponsesHandler(&fakeExec{})
+	h := NewResponsesHandler(&fakeExec{}, false)
 	rec := postResponses(t, h, `{"input":"hi"}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rec.Code)
@@ -239,7 +239,7 @@ func TestResponses_EmptyModel(t *testing.T) {
 }
 
 func TestResponses_UnknownModel(t *testing.T) {
-	h := NewResponsesHandler(&fakeExec{})
+	h := NewResponsesHandler(&fakeExec{}, false)
 	rec := postResponses(t, h, `{"model":"gpt-4","input":"hi"}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rec.Code)
@@ -251,7 +251,7 @@ func TestResponses_UnknownModel(t *testing.T) {
 }
 
 func TestResponses_EmptyInputString(t *testing.T) {
-	h := NewResponsesHandler(&fakeExec{})
+	h := NewResponsesHandler(&fakeExec{}, false)
 	rec := postResponses(t, h, `{"model":"anthropic/sonnet","input":""}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rec.Code)
@@ -263,7 +263,7 @@ func TestResponses_EmptyInputString(t *testing.T) {
 }
 
 func TestResponses_EmptyInputArray(t *testing.T) {
-	h := NewResponsesHandler(&fakeExec{})
+	h := NewResponsesHandler(&fakeExec{}, false)
 	rec := postResponses(t, h, `{"model":"anthropic/sonnet","input":[]}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rec.Code)
@@ -275,7 +275,7 @@ func TestResponses_EmptyInputArray(t *testing.T) {
 }
 
 func TestResponses_MissingInput(t *testing.T) {
-	h := NewResponsesHandler(&fakeExec{})
+	h := NewResponsesHandler(&fakeExec{}, false)
 	rec := postResponses(t, h, `{"model":"anthropic/sonnet"}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", rec.Code)
@@ -287,7 +287,7 @@ func TestResponses_MissingInput(t *testing.T) {
 }
 
 func TestResponses_NonPOST(t *testing.T) {
-	h := NewResponsesHandler(&fakeExec{})
+	h := NewResponsesHandler(&fakeExec{}, false)
 	req := httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -302,7 +302,7 @@ func TestResponses_NonPOST(t *testing.T) {
 
 func TestResponses_ExitCodeFailure(t *testing.T) {
 	fe := &fakeExec{stderr: "boom", exitCode: 1}
-	h := NewResponsesHandler(fe)
+	h := NewResponsesHandler(fe, false)
 
 	rec := postResponses(t, h, `{"model":"anthropic/sonnet","input":"hi"}`)
 	// Failure is a 200 with status: "failed" and error populated — matches OpenAI.
@@ -326,7 +326,7 @@ func TestResponses_ExitCodeFailure(t *testing.T) {
 
 func TestResponses_IgnoredFieldsTolerated(t *testing.T) {
 	fe := &fakeExec{stdout: "ok"}
-	h := NewResponsesHandler(fe)
+	h := NewResponsesHandler(fe, false)
 
 	// All these fields should decode cleanly and have no effect.
 	body := `{
@@ -388,7 +388,7 @@ func TestResponses_Effort_OpenAISpecValuesPassThrough(t *testing.T) {
 	for _, v := range []string{"low", "medium", "high"} {
 		t.Run(v, func(t *testing.T) {
 			fe := &fakeExec{stdout: "ok"}
-			h := NewResponsesHandler(fe)
+			h := NewResponsesHandler(fe, false)
 			body := `{"model":"anthropic/sonnet","input":"hi","reasoning":{"effort":"` + v + `"}}`
 			rec := postResponses(t, h, body)
 			if rec.Code != http.StatusOK {
@@ -408,7 +408,7 @@ func TestResponses_Effort_ClaudeOnlyValuesDropped(t *testing.T) {
 	for _, v := range []string{"xhigh", "max"} {
 		t.Run(v, func(t *testing.T) {
 			fe := &fakeExec{stdout: "ok"}
-			h := NewResponsesHandler(fe)
+			h := NewResponsesHandler(fe, false)
 			body := `{"model":"anthropic/sonnet","input":"hi","reasoning":{"effort":"` + v + `"}}`
 			rec := postResponses(t, h, body)
 			if rec.Code != http.StatusOK {
@@ -426,7 +426,7 @@ func TestResponses_Effort_UnknownValuesDropped(t *testing.T) {
 	for _, v := range []string{"extreme", "minimal", "LOW", "High", "auto", "none"} {
 		t.Run(v, func(t *testing.T) {
 			fe := &fakeExec{stdout: "ok"}
-			h := NewResponsesHandler(fe)
+			h := NewResponsesHandler(fe, false)
 			body := `{"model":"anthropic/sonnet","input":"hi","reasoning":{"effort":"` + v + `"}}`
 			rec := postResponses(t, h, body)
 			if rec.Code != http.StatusOK {
@@ -441,7 +441,7 @@ func TestResponses_Effort_UnknownValuesDropped(t *testing.T) {
 
 func TestResponses_Effort_AbsentNoFlag(t *testing.T) {
 	fe := &fakeExec{stdout: "ok"}
-	h := NewResponsesHandler(fe)
+	h := NewResponsesHandler(fe, false)
 	rec := postResponses(t, h, `{"model":"anthropic/sonnet","input":"hi"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
@@ -454,7 +454,7 @@ func TestResponses_Effort_AbsentNoFlag(t *testing.T) {
 func TestResponses_Effort_OtherReasoningFieldsIgnored(t *testing.T) {
 	// `summary` and `generate_summary` decode but have no effect.
 	fe := &fakeExec{stdout: "ok"}
-	h := NewResponsesHandler(fe)
+	h := NewResponsesHandler(fe, false)
 	body := `{
 		"model":"anthropic/sonnet","input":"hi",
 		"reasoning":{"effort":"medium","summary":"detailed","generate_summary":"auto"}
@@ -472,7 +472,7 @@ func TestResponses_Effort_EchoedInResponse(t *testing.T) {
 	// The reasoning object should be echoed back verbatim (with whatever
 	// fields the client sent) so SDK round-trips don't drop information.
 	fe := &fakeExec{stdout: "ok"}
-	h := NewResponsesHandler(fe)
+	h := NewResponsesHandler(fe, false)
 	rec := postResponses(t, h,
 		`{"model":"anthropic/sonnet","input":"hi","reasoning":{"effort":"high","summary":"auto"}}`)
 	if rec.Code != http.StatusOK {
@@ -492,7 +492,7 @@ func TestResponses_Effort_EchoedInResponse(t *testing.T) {
 
 func TestResponses_OpenCodeRouting(t *testing.T) {
 	fe := &fakeExec{stdout: "ok"}
-	h := NewResponsesHandler(fe)
+	h := NewResponsesHandler(fe, false)
 
 	rec := postResponses(t, h, `{"model":"opencode","input":"hi"}`)
 	if rec.Code != http.StatusOK {

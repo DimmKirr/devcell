@@ -1,4 +1,4 @@
-# project-management.nix — Project management and time-tracking MCP servers
+# project-management.nix — Project management, time-tracking, and workflow-automation MCP servers
 {pkgs, config, ...}: let
   bin = config.devcell.managedMcp.nixBinPrefix;
   # hubstaff-mcp: Python MCP server for Hubstaff time tracking and project management.
@@ -23,9 +23,25 @@
     ];
     doCheck = false;
   };
+
+  # n8n-mcp: Node MCP server bridging Claude/agents to an n8n workflow-automation instance.
+  # https://github.com/czlonkowski/n8n-mcp
+  n8nMcp = pkgs.buildNpmPackage {
+    pname = "n8n-mcp";
+    version = "2.47.14";
+    src = pkgs.fetchFromGitHub {
+      owner = "czlonkowski";
+      repo = "n8n-mcp";
+      rev = "v2.47.14";
+      hash = "sha256-nHuWh3hMkvXnUZQcex5pmxF627UlZwVP01ekTI7QCdI=";
+    };
+    npmDepsHash = "sha256-x/gzRVq7rhnNGNGzG3UU/V4SSwCD0FXspvtx5gLf5iE=";
+    nodejs = pkgs.nodejs_22;
+  };
 in {
   home.packages = [
     hubstaffMcp  # Hubstaff MCP server for time tracking (use: hubstaff-mcp)
+    n8nMcp       # n8n MCP server for workflow automation (use: n8n-mcp)
   ];
 
   devcell.managedMcp.servers."hubstaff-mcp" = {
@@ -39,5 +55,17 @@ in {
   devcell.managedMcp.servers."linear-server" = {
     type = "http";
     url = "https://mcp.linear.app/mcp";
+  };
+
+  # n8n — workflow automation. Talks to a self-hosted or cloud n8n instance via its REST API.
+  # Required env vars: N8N_API_URL (e.g. https://n8n.example.com), N8N_API_KEY (instance API key).
+  # The \${VAR} escape produces literal ${VAR} in the generated JSON, which Claude expands at spawn time.
+  devcell.managedMcp.servers."n8n" = {
+    command = "${bin}/n8n-mcp";
+    args = [];
+    env = {
+      N8N_API_URL = "\${N8N_API_URL}";
+      N8N_API_KEY = "\${N8N_API_KEY}";
+    };
   };
 }
