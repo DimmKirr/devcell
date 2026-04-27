@@ -36,6 +36,15 @@
       hash = "sha256-nHuWh3hMkvXnUZQcex5pmxF627UlZwVP01ekTI7QCdI=";
     };
     npmDepsHash = "sha256-x/gzRVq7rhnNGNGzG3UU/V4SSwCD0FXspvtx5gLf5iE=";
+    # --legacy-peer-deps: upstream's lockfile has unresolvable peer-dep conflicts
+    # (langchain/langgraph vs langchain/core, huggingface/inference vs langchain/community).
+    # Without it, npm's FOD prefetch silently skips conflicting transitive deps
+    # (e.g. @azure/search-documents) and the offline build phase fails ENOTCACHED.
+    # --ignore-scripts: esbuild's postinstall does a strict version-match against
+    # its native binary; nixpkgs' esbuild version drifts from upstream's pin and
+    # the script throws. The package's own `npm run build` still runs (driven
+    # separately by buildNpmPackage), so TS→JS compilation is unaffected.
+    npmFlags = ["--legacy-peer-deps" "--ignore-scripts"];
     nodejs = pkgs.nodejs_22;
   };
 in {

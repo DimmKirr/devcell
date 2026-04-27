@@ -3,6 +3,7 @@ package serve
 import (
 	"bytes"
 	"os/exec"
+	"strings"
 	"syscall"
 	"time"
 
@@ -65,8 +66,12 @@ func (e *ShellExecutor) Run(opts ExecOpts) ExecResult {
 		logger.Info("agent completed", "agent", opts.Agent, "duration", duration.String())
 	}
 
+	// Agent CLIs (claude, opencode) terminate stdout with a trailing newline,
+	// which would leak into output_text on /v1/responses and message.content
+	// on /v1/chat/completions. Strip only trailing newlines — preserves any
+	// intentional leading whitespace and indentation inside the answer.
 	return ExecResult{
-		Stdout:   stdout.String(),
+		Stdout:   strings.TrimRight(stdout.String(), "\n"),
 		Stderr:   stderr.String(),
 		ExitCode: exitCode,
 	}
