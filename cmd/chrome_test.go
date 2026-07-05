@@ -6,11 +6,11 @@ import (
 	"testing"
 )
 
-// TestChrome_HelpShowsAppNameArg verifies "cell chrome" shows the app-name positional arg.
-func TestChrome_HelpShowsAppNameArg(t *testing.T) {
-	out, err := exec.Command(binaryPath, "chrome", "--help").CombinedOutput()
+// TestAuthChrome_HelpShowsAppNameArg verifies "cell auth chrome" shows the app-name positional arg.
+func TestAuthChrome_HelpShowsAppNameArg(t *testing.T) {
+	out, err := exec.Command(binaryPath, "auth", "chrome", "--help").CombinedOutput()
 	if err != nil {
-		t.Fatalf("chrome --help failed: %v\noutput: %s", err, out)
+		t.Fatalf("auth chrome --help failed: %v\noutput: %s", err, out)
 	}
 	s := string(out)
 	if !strings.Contains(s, "[app-name]") {
@@ -18,15 +18,15 @@ func TestChrome_HelpShowsAppNameArg(t *testing.T) {
 	}
 }
 
-// TestChrome_HelpShowsExamples verifies help includes key examples.
-func TestChrome_HelpShowsExamples(t *testing.T) {
-	out, err := exec.Command(binaryPath, "chrome", "--help").CombinedOutput()
+// TestAuthChrome_HelpShowsExamples verifies help includes key examples.
+func TestAuthChrome_HelpShowsExamples(t *testing.T) {
+	out, err := exec.Command(binaryPath, "auth", "chrome", "--help").CombinedOutput()
 	if err != nil {
-		t.Fatalf("chrome --help failed: %v\noutput: %s", err, out)
+		t.Fatalf("auth chrome --help failed: %v\noutput: %s", err, out)
 	}
 	s := string(out)
 	for _, want := range []string{
-		"cell chrome tripit",
+		"cell auth chrome tripit",
 		"--sync",
 		"--no-sync",
 	} {
@@ -36,9 +36,9 @@ func TestChrome_HelpShowsExamples(t *testing.T) {
 	}
 }
 
-// TestChrome_SyncRequiresBrowser verifies --sync errors without a running browser.
-func TestChrome_SyncRequiresBrowser(t *testing.T) {
-	cmd := exec.Command(binaryPath, "chrome", "--sync", "test-app")
+// TestAuthChrome_SyncRequiresBrowser verifies --sync errors without a running browser.
+func TestAuthChrome_SyncRequiresBrowser(t *testing.T) {
+	cmd := exec.Command(binaryPath, "auth", "chrome", "--sync", "test-app")
 	cmd.Env = append(cmd.Environ(),
 		"HOME="+t.TempDir(),
 		"TMUX_PANE=%0",
@@ -53,11 +53,11 @@ func TestChrome_SyncRequiresBrowser(t *testing.T) {
 	}
 }
 
-// TestChrome_FlagsRegistered verifies --sync and --no-sync flags exist.
-func TestChrome_FlagsRegistered(t *testing.T) {
-	out, err := exec.Command(binaryPath, "chrome", "--help").CombinedOutput()
+// TestAuthChrome_FlagsRegistered verifies --sync and --no-sync flags exist.
+func TestAuthChrome_FlagsRegistered(t *testing.T) {
+	out, err := exec.Command(binaryPath, "auth", "chrome", "--help").CombinedOutput()
 	if err != nil {
-		t.Fatalf("chrome --help failed: %v\noutput: %s", err, out)
+		t.Fatalf("auth chrome --help failed: %v\noutput: %s", err, out)
 	}
 	s := string(out)
 	if !strings.Contains(s, "--sync") {
@@ -68,26 +68,36 @@ func TestChrome_FlagsRegistered(t *testing.T) {
 	}
 }
 
-// TestLogin_HelpShowsURL verifies "cell login" shows URL arg.
-func TestLogin_HelpShowsURL(t *testing.T) {
-	out, err := exec.Command(binaryPath, "login", "--help").CombinedOutput()
+// TestAuthChrome_ListedUnderAuth verifies "cell auth --help" lists the chrome subcommand.
+func TestAuthChrome_ListedUnderAuth(t *testing.T) {
+	out, err := exec.Command(binaryPath, "auth", "--help").CombinedOutput()
 	if err != nil {
-		t.Fatalf("login --help failed: %v\noutput: %s", err, out)
+		t.Fatalf("auth --help failed: %v\noutput: %s", err, out)
 	}
 	s := string(out)
-	if !strings.Contains(s, "<url>") {
-		t.Errorf("expected <url> in usage, got:\n%s", s)
+	if !strings.Contains(s, "chrome") {
+		t.Errorf("expected 'chrome' subcommand in auth --help, got:\n%s", s)
 	}
-	if !strings.Contains(s, "cell login https://tripit.com") {
-		t.Errorf("expected example in help, got:\n%s", s)
+	if !strings.Contains(s, "kube") {
+		t.Errorf("expected 'kube' subcommand in auth --help, got:\n%s", s)
 	}
 }
 
-// TestLogin_RequiresURL verifies "cell login" without args errors.
-func TestLogin_RequiresURL(t *testing.T) {
-	cmd := exec.Command(binaryPath, "login")
-	out, err := cmd.CombinedOutput()
-	if err == nil {
-		t.Fatalf("expected error for missing URL, got: %s", out)
+// TestRootChrome_Removed verifies "cell chrome" no longer exists as a root subcommand.
+func TestRootChrome_Removed(t *testing.T) {
+	out, _ := exec.Command(binaryPath, "--help").CombinedOutput()
+	s := string(out)
+	// Root help lists subcommands in "Available Commands:" — chrome should NOT appear there.
+	if strings.Contains(s, "\n  chrome ") || strings.Contains(s, "\n  chrome\t") {
+		t.Errorf("expected `chrome` removed from root command list, got:\n%s", s)
+	}
+}
+
+// TestRootLogin_Removed verifies "cell login" no longer exists.
+func TestRootLogin_Removed(t *testing.T) {
+	out, _ := exec.Command(binaryPath, "--help").CombinedOutput()
+	s := string(out)
+	if strings.Contains(s, "\n  login ") || strings.Contains(s, "\n  login\t") {
+		t.Errorf("expected `login` removed from root command list, got:\n%s", s)
 	}
 }

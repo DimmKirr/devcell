@@ -96,8 +96,6 @@ func init() {
 		opencodeCmd,
 		geminiCmd,
 		shellCmd,
-		chromeCmd,
-		loginCmd,
 		buildCmd,
 		initCmd,
 		vncCmd,
