@@ -44,7 +44,7 @@
         version = "0.0.0";
         src = cellSrc;
 
-        vendorHash = "sha256-0jKFCqnPD4pkekFO3pJ9q6NqoDH2KFt6Zg+cc4wM+mc=";
+        vendorHash = "sha256-yEh9BUxg7jgSvZEEvMRPvFIFwlLbyjIuRT/JF5CKQNw=";
 
         subPackages = ["cmd"];
 
