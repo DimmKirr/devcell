@@ -337,6 +337,18 @@ func TestArgv_ReadonlyVolume(t *testing.T) {
 	}
 }
 
+// Shorthand: a colonless mount path expands to `path:path`, mounting the
+// host path at the same path inside the container.
+func TestArgv_CfgVolumes_SinglePathShorthand(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.CellCfg.Volumes = []cfg.VolumeMount{{Mount: "/Users/dmitry/dev/evercars/evercars-backend"}}
+	})
+	want := "/Users/dmitry/dev/evercars/evercars-backend:/Users/dmitry/dev/evercars/evercars-backend"
+	if !hasConsecutive(argv, "-v", want) {
+		t.Errorf("expected -v %s in argv: %v", want, argv)
+	}
+}
+
 // --- cfg mise ---
 
 func TestArgv_MiseEnvVars(t *testing.T) {

@@ -432,7 +432,7 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 
 	// cfg [[volumes]] entries
 	for _, vol := range spec.CellCfg.Volumes {
-		argv = append(argv, "-v", vol.Mount)
+		argv = append(argv, "-v", vol.Resolved())
 	}
 
 	// [ports].publish_ip — host interface prefix for `docker run -p`.

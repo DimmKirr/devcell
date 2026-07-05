@@ -401,18 +401,90 @@ func TestDockerHostPath_NoEnvNoChange(t *testing.T) {
 	}
 }
 
-// CELL-156 follow-up: home-manager runs as root in the thin builder, so the
-// user profile lands at /nix/var/nix/profiles/per-user/root/profile. MCP
-// server configs, the baked ENV PATH, and entrypoint fragments all address it
-// via the canonical /opt/devcell/.local/state/nix/profiles/profile path —
-// the builder must create that symlink or every nix-managed MCP server fails
-// with ENOENT at runtime.
-func TestThinBuildArgv_CanonicalProfileSymlink(t *testing.T) {
+// The canonical container-local profile path
+// (/opt/devcell/.local/state/nix/profiles/profile) MUST resolve to an
+// immutable /nix/store path, NOT to /nix/var/nix/profiles/per-user/root/profile.
+// The per-user/root profile lives on the shared devcell-nix-store docker
+// volume — every thin build's `home-manager switch` overwrites it, so a
+// container labelled `ultimate` will lose packages the moment someone builds
+// a leaner stack against the same volume (see the CELL-322 kirr.dev-540
+// clobber where chromium/patchright disappeared from PATH).
+//
+// The builder captures the just-switched target's realpath and bakes THAT
+// store path into the image. Once baked, no cross-container switch can touch
+// what this image sees.
+func TestThinBuildArgv_ProfileSymlinkResolvesToStorePath(t *testing.T) {
 	argv := ThinBuildArgv(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, testStack, "x86_64")
 	script := argv[len(argv)-1]
-	want := "ln -sfT /nix/var/nix/profiles/per-user/root/profile /opt/devcell/.local/state/nix/profiles/profile"
-	if !strings.Contains(script, want) {
-		t.Errorf("builder script must symlink canonical profile path to per-user/root profile, want %q", want)
+
+	// MUST NOT symlink into the mutable shared-volume slot.
+	bad := "ln -sfT /nix/var/nix/profiles/per-user/root/profile /opt/devcell/.local/state/nix/profiles/profile"
+	if strings.Contains(script, bad) {
+		t.Errorf("builder must NOT redirect container profile into the shared-volume mutable slot; found: %q", bad)
+	}
+
+	// MUST resolve the profile's realpath after home-manager switch.
+	if !strings.Contains(script, "readlink -f /nix/var/nix/profiles/per-user/root/profile") {
+		t.Error("builder must resolve the just-switched profile's realpath (readlink -f) before baking the container-local symlink")
+	}
+
+	// MUST symlink the container-local profile to that resolved store path.
+	// Match the shell expression that assigns realpath into a var and then uses it as the ln target.
+	if !strings.Contains(script, `ln -sfT "$HM_PROFILE" /opt/devcell/.local/state/nix/profiles/profile`) {
+		t.Error("builder must symlink /opt/devcell/.local/state/nix/profiles/profile → $HM_PROFILE (the resolved store path)")
+	}
+}
+
+// A store path only reachable through a symlink baked inside an image is not
+// a GC root — `nix-collect-garbage` on the shared volume can't see through
+// image layers. Without a per-stack GC root, a later cleanup wipes the
+// home-manager-path our container depends on, breaking every already-built
+// image the next time it's started fresh.
+//
+// The builder must register the resolved profile as an indirect GC root
+// under /nix/var/nix/gcroots/ so the store path stays alive on the volume.
+func TestThinBuildArgv_ProfilePinnedAsGCRoot(t *testing.T) {
+	argv := ThinBuildArgvFull(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, "local", "x86_64", testStack, "", "")
+	script := argv[len(argv)-1]
+
+	if !strings.Contains(script, "/nix/var/nix/gcroots/devcell/") {
+		t.Error("builder must register the resolved home-manager profile as a GC root under /nix/var/nix/gcroots/devcell/ so the shared-volume GC does not reap it")
+	}
+
+	// Per-stack GC root name — different stacks must not clobber each other's
+	// roots. Use the hmTarget + archSuffix combo, matching the existing flake
+	// key convention (`devcell-<hmTarget><archSuffix>`).
+	if !strings.Contains(script, "/nix/var/nix/gcroots/devcell/local") {
+		t.Error("GC root name must be per-hmTarget so different stacks preserve their own home-manager-path")
+	}
+}
+
+// The image's runtime ENV PATH must NOT include /nix/var/nix/profiles/per-user/root/profile/bin.
+// That path lives on the shared devcell-nix-store volume and gets rewritten
+// by every `home-manager switch` from any container — leaving it on PATH
+// defeats the whole store-path-symlink fix because PATH lookup would still
+// resolve tools through the mutable slot before the immutable one.
+func TestThinBuildArgv_RuntimePathExcludesSharedProfileSlot(t *testing.T) {
+	argv := ThinBuildArgv(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, testStack, "x86_64")
+	script := argv[len(argv)-1]
+
+	// Look at the `ENV PATH=` line specifically (the baked image env). The
+	// build-time `export PATH=` lines inside the builder are fine — they only
+	// affect the ephemeral builder container.
+	envPathIdx := strings.Index(script, "ENV PATH=")
+	if envPathIdx < 0 {
+		t.Fatal("script must contain a baked ENV PATH= line")
+	}
+	envPathLine := script[envPathIdx:]
+	if nl := strings.Index(envPathLine, "\n"); nl >= 0 {
+		envPathLine = envPathLine[:nl]
+	}
+	if strings.Contains(envPathLine, "/nix/var/nix/profiles/per-user/root/profile/bin") {
+		t.Errorf("baked ENV PATH must NOT include the mutable per-user/root profile bin; got: %s", envPathLine)
+	}
+	// Sanity: the container-local (now immutable) profile bin MUST still be on PATH.
+	if !strings.Contains(envPathLine, "/opt/devcell/.local/state/nix/profiles/profile/bin") {
+		t.Errorf("baked ENV PATH must still include /opt/devcell/.local/state/nix/profiles/profile/bin, got: %s", envPathLine)
 	}
 }
 

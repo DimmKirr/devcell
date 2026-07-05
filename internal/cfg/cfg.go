@@ -132,6 +132,22 @@ type VolumeMount struct {
 	Mount string `toml:"mount"`
 }
 
+// Resolved returns the mount string in `host:container[:mode]` form,
+// expanding the single-path shorthand where a colonless value means
+// "mount this path at the same path inside the container".
+//
+// Examples:
+//
+//	"/foo/bar"          → "/foo/bar:/foo/bar"
+//	"/foo:/bar"         → "/foo:/bar"      (unchanged)
+//	"/foo:/bar:ro"      → "/foo:/bar:ro"   (unchanged)
+func (v VolumeMount) Resolved() string {
+	if !strings.Contains(v.Mount, ":") && v.Mount != "" {
+		return v.Mount + ":" + v.Mount
+	}
+	return v.Mount
+}
+
 // PackagesSection holds [packages] config for npm and python tools.
 type PackagesSection struct {
 	Npm    map[string]string `toml:"npm"`

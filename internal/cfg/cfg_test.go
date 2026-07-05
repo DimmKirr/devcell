@@ -92,6 +92,23 @@ func TestMerge_EnvAccumulates(t *testing.T) {
 	}
 }
 
+func TestVolumeMount_Resolved(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"/host/path:/container/path", "/host/path:/container/path"},
+		{"/host:/container:ro", "/host:/container:ro"},
+		{"/Users/dmitry/dev/evercars/evercars-backend", "/Users/dmitry/dev/evercars/evercars-backend:/Users/dmitry/dev/evercars/evercars-backend"},
+		{"", ""},
+	}
+	for _, tc := range cases {
+		got := cfg.VolumeMount{Mount: tc.in}.Resolved()
+		if got != tc.want {
+			t.Errorf("Resolved(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestMerge_VolumesAccumulate(t *testing.T) {
 	global := cfg.CellConfig{Volumes: []cfg.VolumeMount{{Mount: "a:b"}}}
 	project := cfg.CellConfig{Volumes: []cfg.VolumeMount{{Mount: "c:d:ro"}}}

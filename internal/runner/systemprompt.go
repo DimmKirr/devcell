@@ -49,7 +49,7 @@ func ContainerContext(c config.Config, cellCfg cfg.CellConfig) string {
 	fmt.Fprintf(&b, "  /etc/devcell/config = %s (user build config)\n", c.ConfigDir)
 
 	for _, vol := range cellCfg.Volumes {
-		parts := strings.SplitN(vol.Mount, ":", 3)
+		parts := strings.SplitN(vol.Resolved(), ":", 3)
 		if len(parts) >= 2 {
 			mode := "read-write"
 			if len(parts) == 3 && parts[2] == "ro" {
@@ -64,7 +64,7 @@ func ContainerContext(c config.Config, cellCfg cfg.CellConfig) string {
 	fmt.Fprintf(&b, "  host: %s → container: %s\n", hostDir, hostDir)
 	fmt.Fprintf(&b, "  host: %s → container: %s\n", c.HostHome, homeDir)
 	for _, vol := range cellCfg.Volumes {
-		parts := strings.SplitN(vol.Mount, ":", 3)
+		parts := strings.SplitN(vol.Resolved(), ":", 3)
 		if len(parts) >= 2 {
 			fmt.Fprintf(&b, "  host: %s → container: %s\n", parts[0], parts[1])
 		}
