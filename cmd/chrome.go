@@ -25,49 +25,35 @@ var (
 
 var chromeCmd = &cobra.Command{
 	Use:   "chrome [app-name] [-- urls...]",
-	Short: "Open Chromium with a project-scoped profile and sync cookies to Playwright",
+	Short: "Mint a Playwright storage-state credential from an interactive Chromium login",
 	Long: `Opens Chromium on the host with a per-app browser profile. Log in to the
 sites you need, then press Enter in the terminal. Chromium closes and
-cookies are exported as a Playwright storage-state.json so authenticated
-sessions carry over to browser automation inside the container.
+cookies are exported as a Playwright storage-state.json that the cell
+mounts read-only — so authenticated sessions carry over to browser
+automation inside the container.
 
 Each app-name gets its own isolated Chrome profile stored at
 ~/.devcell/<cell>/.chrome/<app-name>/. When only one cell is running
-the app-name is optional.
+the app-name is optional. Pass a URL after -- to land directly on a
+login page.
 
 Examples:
 
-    cell chrome tripit                  # open, log in, Enter → sync
-    cell chrome tripit -- https://tripit.com
-    cell chrome --sync tripit           # re-sync without opening browser
-    cell chrome --no-sync tripit        # browse without syncing`,
+    cell auth chrome tripit                    # open, log in, Enter → sync
+    cell auth chrome tripit -- https://tripit.com
+    cell auth chrome --sync tripit             # re-sync without opening browser
+    cell auth chrome --no-sync tripit          # browse without syncing`,
 	Args:              cobra.ArbitraryArgs,
 	RunE:              runChrome,
 	ValidArgsFunction: completeRunningApps,
-}
-
-var loginCmd = &cobra.Command{
-	Use:   "login <url>",
-	Short: "Open a URL in Chromium, log in, and sync cookies to Playwright",
-	Long: `Shortcut for "cell chrome" that opens a specific URL directly.
-Opens Chromium, navigates to the URL, waits for you to log in, then
-exports cookies as storage-state.json for Playwright MCP.
-
-Examples:
-
-    cell login https://tripit.com
-    cell login https://github.com/login`,
-	Args: cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return runChrome(cmd, args)
-	},
 }
 
 func init() {
 	chromeCmd.Flags().BoolVar(&chromeSyncOnly, "sync", false, "sync cookies only (don't open browser)")
 	chromeCmd.Flags().BoolVar(&chromeNoSync, "no-sync", false, "open browser without syncing cookies on close")
 	chromeCmd.Flags().BoolVar(&chromeForce, "force", false, "wipe saved browser profile and force a fresh login")
-	loginCmd.Flags().BoolVar(&chromeForce, "force", false, "wipe saved browser profile and force a fresh login")
+
+	authCmd.AddCommand(chromeCmd)
 }
 
 // chromeBinary returns the path to the best available Chromium/Chrome binary.
@@ -117,7 +103,7 @@ func runChrome(cmd *cobra.Command, args []string) error {
 	ux.Debugf("storage-state: %s", storageStatePath)
 
 	if chromeSyncOnly {
-		return fmt.Errorf("--sync requires a running browser; use 'cell chrome' or 'cell login' instead")
+		return fmt.Errorf("--sync requires a running browser; use 'cell auth chrome' instead")
 	}
 
 	if chromeForce {

@@ -9,7 +9,7 @@ import (
 // kickMcpInCellsSharingCellHome iterates running cell-* containers, finds
 // those whose /home/<HostUser> mount source equals cellHome, and SIGTERMs
 // mcp-server-patchright inside them. Best-effort — never returns an error
-// that would block `cell login`.
+// that would block `cell auth chrome`.
 //
 // Helper is dependency-injected so tests don't shell out to docker.
 

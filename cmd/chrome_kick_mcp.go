@@ -22,14 +22,14 @@ type kickDeps struct {
 // written storage-state.json on next browser tool call.
 //
 // Why this exists: Playwright's BrowserContext loads --storage-state ONCE at
-// context creation. After `cell login` rewrites storage-state.json, the
+// context creation. After `cell auth chrome` rewrites storage-state.json, the
 // long-lived patchright MCP in each cell still has the pre-relog cookies in
 // memory. Killing it forces Claude's MCP client to respawn it with the fresh
 // file.
 //
 // Returns the list of container IDs we ATTEMPTED to kick — failures don't
 // abort the loop and are logged separately. Best-effort by design: a flaky
-// docker daemon shouldn't block a successful `cell login`.
+// docker daemon shouldn't block a successful `cell auth chrome`.
 func kickMcpInCellsSharingCellHome(deps kickDeps) []string {
 	ids, err := deps.listContainers()
 	if err != nil {
@@ -56,7 +56,7 @@ func kickMcpInCellsSharingCellHome(deps kickDeps) []string {
 }
 
 // Real (non-test) implementations of the docker plumbing — used by the
-// `cell login` call site. Kept terse; each is one shell-out.
+// `cell auth chrome` call site. Kept terse; each is one shell-out.
 
 func dockerListCellContainers() ([]string, error) {
 	out, err := exec.Command("docker", "ps", "-q", "--filter", "name=cell-").Output()
