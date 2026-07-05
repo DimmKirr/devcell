@@ -1,0 +1,16 @@
+# mise config for devcell contributors who don't use `nix develop`.
+#
+# `mise install` in the repo root pins pre-commit and — via the
+# `[hooks]` block — runs `pre-commit install` on first entry so the
+# git hooks land automatically.
+#
+# Nix-native contributors get the same behavior from the shellHook
+# in flake.nix; `.tool-versions` handles Go pinning for asdf users.
+[tools]
+pre-commit = "4.0.1"
+
+[hooks]
+# mise fires `enter` on `cd` into the repo (needs `mise trust` once
+# per machine). Idempotent — pre-commit skips if the hook is already
+# installed.
+enter = "pre-commit install --install-hooks"

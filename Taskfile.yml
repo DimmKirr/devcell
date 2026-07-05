@@ -86,6 +86,17 @@ tasks:
         echo ""
         echo "All stacks valid."
 
+  nix:update-vendor-hash:
+    desc: Refresh flake.nix vendorHash after go.mod/go.sum change (writes flake.nix in place)
+    dir: "{{.TASKFILE_DIR}}"
+    silent: true
+    cmds:
+      # nix-update reads flake.nix, sets vendorHash to fakeHash, builds
+      # .#cell, extracts the "got: sha256-…" line from Nix's mismatch
+      # error, and rewrites flake.nix. --version=skip prevents version
+      # bumps; we only want the hash refresh.
+      - nix-update --flake --version=skip cell
+
   bake:validate:
     desc: Print resolved docker-bake config (HCL parse check, no build)
     dir: "{{.TASKFILE_DIR}}"

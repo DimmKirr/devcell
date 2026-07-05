@@ -44,7 +44,7 @@
         version = "0.0.0";
         src = cellSrc;
 
-        vendorHash = "sha256-0jKFCqnPD4pkekFO3pJ9q6NqoDH2KFt6Zg+cc4wM+mc=";
+        vendorHash = "sha256-yEh9BUxg7jgSvZEEvMRPvFIFwlLbyjIuRT/JF5CKQNw=";
 
         subPackages = ["cmd"];
 
@@ -79,12 +79,27 @@
     });
 
     # `nix develop` for local hacking — provides Go 1.26 + tooling.
+    # nix-update rewrites `vendorHash` in this file after go.mod/go.sum
+    # changes; pre-commit dispatches the hook defined in
+    # .pre-commit-config.yaml. Both are pulled in here so contributors
+    # get them for free by entering the dev shell.
     devShells = forAllSystems ({
       system,
       pkgs,
     }: {
       default = pkgs.mkShellNoCC {
-        packages = [pkgs.go_1_26 pkgs.go-task];
+        packages = [
+          pkgs.go_1_26
+          pkgs.go-task
+          pkgs.nix-update
+          pkgs.pre-commit
+        ];
+        shellHook = ''
+          if [ -d .git ] && [ -f .pre-commit-config.yaml ] && \
+             [ ! -f .git/hooks/pre-commit ]; then
+            pre-commit install --install-hooks >/dev/null
+          fi
+        '';
       };
     });
   };
