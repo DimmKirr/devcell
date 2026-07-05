@@ -211,14 +211,32 @@ export PATH="/nix/var/nix/profiles/devcell-tools/bin:$PATH"
 echo "Running home-manager switch (nix store on volume)..."
 home-manager switch --flake %s#devcell-%s%s
 
-# Canonical profile path — home-manager ran as root, so the user profile is at
-# per-user/root. The baked ENV PATH, nix-managed MCP server commands, and
-# entrypoint fragments all address it via the /opt/devcell path instead.
-# -T: replace the link itself, never create inside the target dir.
-ln -sfT /nix/var/nix/profiles/per-user/root/profile /opt/devcell/.local/state/nix/profiles/profile
+# Capture the just-switched home-manager-path as an immutable /nix/store
+# realpath. /nix/var/nix/profiles/per-user/root/profile is a mutable slot on
+# the shared devcell-nix-store docker volume — any later home-manager switch
+# from another container rewrites it, and every image whose profile symlink
+# went through that slot would silently lose packages (see CELL-322: a leaner
+# stack build clobbered chromium/patchright out of an ultimate container
+# PATH). Resolve once here and bake the resulting store path.
+HM_PROFILE=$(readlink -f /nix/var/nix/profiles/per-user/root/profile)
+if [ -z "$HM_PROFILE" ] || [ ! -d "$HM_PROFILE" ]; then
+  echo "ERROR: could not resolve home-manager profile realpath" >&2
+  exit 1
+fi
+
+# Canonical profile path — points at the immutable store target, not the
+# shared-volume slot. -T: replace the link itself, never create inside dir.
+ln -sfT "$HM_PROFILE" /opt/devcell/.local/state/nix/profiles/profile
+
+# Pin the resolved store path as a persistent GC root on the shared volume
+# so nix-collect-garbage from another container cannot reap the target our
+# baked-in symlink depends on. Named per-hmTarget + arch so concurrent stacks
+# preserve their own home-manager-path independently.
+mkdir -p /nix/var/nix/gcroots/devcell
+ln -sfT "$HM_PROFILE" /nix/var/nix/gcroots/devcell/%s%s
 
 # Source home-manager session vars (sets NIX_LD for nix-ld)
-HM_VARS="/nix/var/nix/profiles/per-user/root/profile/etc/profile.d/hm-session-vars.sh"
+HM_VARS="$HM_PROFILE/etc/profile.d/hm-session-vars.sh"
 if [ -f "$HM_VARS" ]; then . "$HM_VARS"; fi
 # NIX_LD_LIBRARY_PATH: nix-ld needs this to resolve shared libs for non-nix binaries.
 # At runtime, entrypoint populates ~/.nix-ld-libs (merged symlink dir).
@@ -291,7 +309,7 @@ COPY entrypoint.sh /opt/devcell/.local/bin/entrypoint.sh
 %sENV HOME=/opt/devcell
 ENV USER=devcell
 ENV DEVCELL_PROFILE=devcell-%s
-ENV PATH="/nix/var/nix/profiles/devcell-tools/bin:/nix/var/nix/profiles/per-user/root/profile/bin:/opt/devcell/.local/state/nix/profiles/profile/bin:/opt/devcell/.local/bin:/nix/var/nix/profiles/default/bin:/usr/local/bin:/usr/bin:/bin"
+ENV PATH="/nix/var/nix/profiles/devcell-tools/bin:/opt/devcell/.local/state/nix/profiles/profile/bin:/opt/devcell/.local/bin:/nix/var/nix/profiles/default/bin:/usr/local/bin:/usr/bin:/bin"
 ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 ENV NIX_SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 ENV LOCALE_ARCHIVE=/nix/var/nix/profiles/devcell-tools/lib/locale/locale-archive
@@ -318,6 +336,7 @@ echo "Done — thin image: %s"`,
 		stack,           // export DEVCELL_STACK
 		modules,         // export DEVCELL_MODULES
 		flakeArg, hmTarget, archSuffix, // home-manager switch
+		hmTarget, archSuffix, // /nix/var/nix/gcroots/devcell/<hmTarget><arch>
 		cellStageCmd,    // stage cell binary into $CTX (or empty)
 		cellCopyLine,    // COPY cell ... into Dockerfile (or empty)
 		hmTarget,        // ENV DEVCELL_PROFILE=devcell-<hmTarget>
