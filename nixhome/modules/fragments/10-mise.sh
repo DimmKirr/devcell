@@ -4,6 +4,8 @@
 
 command -v mise &>/dev/null || return 0
 
+notify mise.starting
+
 # ── Copy .tool-versions to session user home ─────────────────────────
 # Written to /etc/devcell/tool-versions by nix activation (no dangling symlinks).
 # Always overwrite — persistent $HOME may have a dangling symlink from a
@@ -18,35 +20,40 @@ fi
 # (MISE_GLOBAL_CONFIG_FILE, MISE_NODE_DEFAULT_PACKAGES_FILE) set in shell rc overrides.
 
 # ── Setup ~/.local/share/mise (user-persisted MISE_DATA_DIR) ─────────
-# /opt/mise holds baked-in installs (ephemeral, reset on each container start).
-# ~/.local/share/mise (CellHome, bind-mounted) holds user-installed versions
-# that persist. Baked-in versions are symlinked per-version so mise resolves
-# both through a single MISE_DATA_DIR without copying data.
+# Baked installs are resolved natively by mise via MISE_SHARED_INSTALL_DIRS
+# (read-only, set as image env; mise ≥2026.3.9). ~/.local/share/mise
+# (CellHome, bind-mounted) holds user-installed versions, which take
+# precedence — like PATH, but for mise installs. No symlinks or copies of
+# baked tools ever land in $HOME (the old cross-bind design dangled on
+# every image rebuild, CELL-75).
 setup_mise_home() {
-    local baked="/opt/mise"
     local user_mise="$HOME/.local/share/mise"
-    local mise_bin="/opt/devcell/.local/state/nix/profiles/profile/bin/mise"
+    local mise_bin
+    mise_bin="$(command -v mise 2>/dev/null)" || mise_bin="/opt/devcell/.local/state/nix/profiles/profile/bin/mise"
 
     mkdir -p "$user_mise/installs" "$user_mise/shims"
 
-    # ── Clean dangling install symlinks UNCONDITIONALLY (DIMM-214) ──────
-    # Pure images don't have /opt/mise, so the cross-bind loop below is a
-    # no-op for them. But user cell-home may still contain dangling symlinks
-    # from a prior image generation where /opt/mise existed (impure → pure
-    # transition, or image rebuilds where baked tool versions changed).
-    # Dangling symlinks trick mise reshim into skipping the tool ("install
-    # not found"), which is the user-reported bug: terraform/opentofu shims
-    # silently absent on every fresh pure cell launch. Hoisting cleanup out
-    # of the cross-bind loop ensures it runs even when /opt/mise is absent.
+    # ── Clean cross-tier install symlinks UNCONDITIONALLY (CELL-85/294) ─
+    # Older images cross-bound baked installs into $HOME as ABSOLUTE
+    # symlinks (→ /opt/...); those dangle whenever the baked location moves
+    # or versions change between image generations, and dangling links trick
+    # mise reshim into skipping the tool ("install not found"): the historic
+    # terraform/opentofu missing-shims bug. Remove absolute-target links and
+    # dangling links — but PRESERVE mise's own relative version aliases
+    # (24 -> ./24.16.0, latest -> ...): deleting those forces mise to
+    # recreate them and invalidates the sha-gate on every boot.
     local cleanup_removed=0
     for tool_dir in "$user_mise/installs"/*; do
         [ -d "$tool_dir" ] || continue
         for link in "$tool_dir"/*; do
-            if [ -L "$link" ] && [ ! -e "$link" ]; then
-                log "Removing dangling mise install symlink: $link"
-                rm -f "$link"
-                cleanup_removed=1
-            fi
+            [ -L "$link" ] || continue
+            case "$(readlink "$link")" in
+                /*) ;;                          # absolute → legacy cross-bind
+                *) [ -e "$link" ] && continue ;; # relative + resolves → mise alias, keep
+            esac
+            log "Removing legacy/stale mise install symlink: $link"
+            rm -f "$link"
+            cleanup_removed=1
         done
     done
 
@@ -64,7 +71,7 @@ setup_mise_home() {
         fi
     done
 
-    # ── Invalidate sha-gate when cleanup wiped any install (DIMM-215) ────
+    # ── Invalidate sha-gate when cleanup wiped any install (CELL-66) ────
     # The install steps below skip `mise install -y` when ~/.tool-versions's
     # sha matches the value persisted at .tv-{global,workspace}.sha. But if
     # cleanup just removed install symlinks (or any tool dir is empty), the
@@ -74,30 +81,6 @@ setup_mise_home() {
     if [ "$cleanup_removed" = 1 ]; then
         log "Stale mise state detected — invalidating .tv-*.sha to force reinstall"
         rm -f "$user_mise/.tv-global.sha" "$user_mise/.tv-workspace.sha"
-    fi
-
-    # ── Cross-bind baked installs (impure path only) ─────────────────────
-    # When /opt/mise/installs/ exists (Dockerfile bake-time output), symlink
-    # each baked tool version into the user cell-home so mise sees them via
-    # MISE_DATA_DIR=$user_mise. Pure images skip this entirely — the for-loop
-    # over empty/missing glob is a natural no-op, and the explicit `-d`
-    # check below documents the intent.
-    if [ -d "$baked/installs" ]; then
-        for tool_dir in "$baked/installs"/*/; do
-            [ -d "$tool_dir" ] || continue
-            tool_name=$(basename "$tool_dir")
-            mkdir -p "$user_mise/installs/$tool_name"
-
-            # Symlink current baked-in versions (skip real dirs — user installs).
-            for ver_dir in "$tool_dir"*/; do
-                [ -d "$ver_dir" ] || continue
-                ver_name=$(basename "$ver_dir")
-                dest="$user_mise/installs/$tool_name/$ver_name"
-                # Never overwrite a real directory (user-installed version).
-                [ -d "$dest" ] && [ ! -L "$dest" ] && continue
-                ln -sfT "$ver_dir" "$dest"
-            done
-        done
     fi
 
     # Install any versions listed in ~/.tool-versions that aren't baked.
@@ -122,19 +105,21 @@ setup_mise_home() {
                 "$mise_bin" install -y 2>&1) | while IFS= read -r line; do log "$line"; done || true
             chown -R "$HOST_USER" "$user_mise"
 
-            # Regenerate shims for all currently visible installs (DIMM-214).
-            # Failures are logged loudly — silenced failures historically hid the
-            # terraform/opentofu missing-shim bug (mise skips reshim for dangling
-            # install symlinks but said nothing about it).
-            # The image already bakes shims at /opt/devcell/.local/share/mise/shims,
-            # so even if this runtime reshim fails, declared tools stay on PATH via
-            # the level-2 fallback. This step covers post-boot user installs.
+            # Regenerate shims for all currently visible installs — including
+            # shared (baked) ones, which mise discovers via
+            # MISE_SHARED_INSTALL_DIRS. Failures are logged loudly — silenced
+            # failures historically hid the terraform/opentofu missing-shim bug.
             if ! MISE_DATA_DIR="$user_mise" HOME="$HOME" "$mise_bin" reshim 2>&1; then
-                log "⚠ mise reshim failed — user-installed tool shims may be missing; baked shims at /opt/devcell/.local/share/mise/shims still provide declared tools"
+                log "⚠ mise reshim failed — tool shims may be missing from PATH"
             fi
 
             # Fix ownership of mise state dir (created by reshim running as root).
             [ -d "$HOME/.local/state/mise" ] && chown -R "$HOST_USER" "$HOME/.local/state/mise"
+            # Cache too: install/reshim write lockfiles + metadata to
+            # ~/.cache/mise as root even when versions resolve from the shared
+            # layer; left root-owned, user-level `mise install` (project
+            # .tool-versions pins) fails with EACCES on the lockfile dir.
+            [ -d "$HOME/.cache/mise" ] && chown -R "$HOST_USER" "$HOME/.cache/mise"
 
             echo "$tv_sha" > "$user_mise/.tv-global.sha"
         fi
@@ -154,6 +139,7 @@ setup_mise_home() {
             (cd "$workspace" && MISE_DATA_DIR="$user_mise" HOME="$HOME" USER="$HOST_USER" \
                 "$mise_bin" install -y 2>&1) | while IFS= read -r line; do log "$line"; done || true
             chown -R "$HOST_USER" "$user_mise"
+            [ -d "$HOME/.cache/mise" ] && chown -R "$HOST_USER" "$HOME/.cache/mise"
             echo "$ws_sha" > "$user_mise/.tv-workspace.sha"
         fi
     fi
@@ -168,3 +154,5 @@ export MISE_DATA_DIR="${HOME}/.local/share/mise"
 export MISE_GLOBAL_CONFIG_FILE="$(readlink -f "$DEVCELL_HOME/.config/mise/config.toml" 2>/dev/null)"
 export MISE_NODE_DEFAULT_PACKAGES_FILE="$(readlink -f "$DEVCELL_HOME/.default-npm-packages" 2>/dev/null)"
 export PATH="${HOME}/.local/share/mise/shims:${PATH}"
+
+notify mise.ready

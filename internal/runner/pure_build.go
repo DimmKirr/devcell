@@ -49,6 +49,9 @@ type PureBuildSpec struct {
 	// so users running `cell <agent> --pure --debug` see real progress
 	// instead of just a spinner.
 	Verbose bool
+	// Thin builds a thin image (no /nix/store layers). The nix store is
+	// expected to be provided at runtime via a Docker named volume.
+	Thin bool
 }
 
 // PureBuildArgv composes the `nix build` argv targeting the per-stack
@@ -75,8 +78,12 @@ func PureBuildArgv(spec PureBuildSpec) []string {
 	if flakeBase == "" {
 		flakeBase = "path:" + spec.NixhomePath
 	}
-	flakeRef := fmt.Sprintf("%s#packages.%s.devcell-%s-pure-image",
-		flakeBase, arch, spec.StackName)
+	imageSuffix := "pure-image"
+	if spec.Thin {
+		imageSuffix = "thin-image"
+	}
+	flakeRef := fmt.Sprintf("%s#packages.%s.devcell-%s-%s",
+		flakeBase, arch, spec.StackName, imageSuffix)
 	argv := []string{
 		"nix", "build",
 		"--extra-experimental-features", "nix-command flakes",

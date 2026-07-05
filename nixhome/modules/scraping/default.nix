@@ -1,18 +1,19 @@
-# scraping/default.nix — Patchright MCP server + stealth Chromium automation
+# scraping/default.nix -- Patchright MCP server + stealth Chromium automation
 # Self-contained module: buildNpmPackage, playwright-driver browsers, stealth
 # init script, config JSON, and wrapper script. No dependency on desktop/.
 #
 # Interactive browsing: nix chromium wrapper (--no-sandbox, per-app profile).
-# Automation: Patchright's bundled Chromium (stealth — no webdriver leak).
-# Do NOT set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH — it overrides the patched binary.
+# Automation: Patchright's bundled Chromium (stealth -- no webdriver leak).
+# Do NOT set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH -- it overrides the patched binary.
 {pkgs, lib, config, ...}:
 let
+  cfg = config.devcell.modules.scraping;
   mcpCfg = config.devcell.managedMcp;
 
-  # Third-party Chromium extensions (DIMM-267). Options + registry live in
+  # Third-party Chromium extensions (CELL-37). Options + registry live in
   # ./extensions.nix; this just reads the resolved store paths and folds them
   # into Chromium's --load-extension / --disable-extensions-except flags.
-  # Empty list (the default) → flags are omitted entirely so an empty arg
+  # Empty list (the default) -> flags are omitted entirely so an empty arg
   # doesn't sneak in and confuse chromium's flag parser.
   extensionPaths = config.devcell.scraping.extensionPaths;
   extensionPathsCsv = lib.concatStringsSep "," (map toString extensionPaths);
@@ -21,17 +22,11 @@ let
     "--disable-extensions-except=${extensionPathsCsv}"
   ];
 
-  # UA architecture — must match what Chromium puts in navigator.userAgent.
-  # Chrome's "UA reduction" always reports "x86_64" regardless of real CPU,
-  # but getHighEntropyValues().architecture leaks the real arch ("arm" on aarch64).
-  # Detection scripts compare these and flag the mismatch.
-  # Always "x86" because that's what Chrome's UA string claims.
-  uaArch = "x86";
 
-  # Chromium browser from playwright-driver — chromium only, no firefox/webkit/ffmpeg.
+  # Chromium browser from playwright-driver -- chromium only, no firefox/webkit/ffmpeg.
   # patchright-core reads browsers.json for expected revision (e.g. 1208) but nixpkgs
   # playwright-driver may ship a different revision (e.g. 1194). Bridge with symlinks.
-  patchrightChromiumRevision = "1208";
+  patchrightChromiumRevision = "1223";
   baseBrowsers = pkgs.playwright-driver.browsers.override {
     withFirefox = false;
     withWebkit = false;
@@ -56,55 +51,202 @@ let
   # buildNpmPackage derivation for patchright MCP server
   patchrightMcp = pkgs.buildNpmPackage {
     pname = "mcp-server-patchright";
-    version = "0.0.68";
+    version = "0.0.68-pr1.60.2";
     src = pkgs.runCommandLocal "patchright-mcp-src" {} ''
       mkdir -p $out
       cp ${./patchright-mcp-package.json} $out/package.json
       cp ${./patchright-mcp-package-lock.json} $out/package-lock.json
     '';
-    npmDepsHash = "sha256-3eQTPUgM58Pfb3WibUr4dUx3YkVOhgWBBu6I+4VEXL4=";
+    npmDepsHash = "sha256-mteUzPzn90hUwmKXcOsYH/n1nlvpPU3Hgc0zsAlUYe0=";
     npmPackFlags = [ "--ignore-scripts" ];
     npmFlags = [ "--ignore-scripts" ];
     dontNpmBuild = true;
     nativeBuildInputs = [ pkgs.makeWrapper ];
 
     postInstall = ''
-      # Inject human-like mouse movement into browser_click handler.
-      # Patches snapshot.js to add Bezier cursor trajectory before each click.
-      SNAP="$out/lib/node_modules/nix-patchright-mcp-server/node_modules/patchright/lib/mcp/browser/tools/snapshot.js"
-      if [ -f "$SNAP" ]; then
-        # Add humanMove function before the module.exports line
-        ${pkgs.gnused}/bin/sed -i '/^module.exports/i \
-// --- Human mouse movement (injected by devcell nix patch) ---\
-var __hmLastX = 960, __hmLastY = 540;\
-async function __hmMove(page, tx, ty) {\
-  var sx=__hmLastX, sy=__hmLastY, dist=Math.hypot(tx-sx,ty-sy);\
-  if(dist<2){__hmLastX=tx;__hmLastY=ty;return;}\
-  if(dist<50){var st=5+~~(Math.random()*5);for(var i=1;i<=st;i++){var t=i/st,e=t*t*(3-2*t);await page.mouse.move(sx+(tx-sx)*e+(Math.random()-.5)*2,sy+(ty-sy)*e+(Math.random()-.5)*2);await new Promise(r=>setTimeout(r,5+Math.random()*10));}await page.mouse.move(tx,ty);__hmLastX=tx;__hmLastY=ty;return;}\
-  var steps=Math.max(30,~~(dist/5)+~~(Math.random()*20)),dur=200+dist*1.0+Math.random()*250;\
-  var ang=Math.atan2(ty-sy,tx-sx),perp=ang+Math.PI/2;\
-  var arcMag=dist*(0.08+Math.random()*0.15)*(Math.random()>.5?1:-1);\
-  var cp1t=0.2+Math.random()*0.15,cp2t=0.65+Math.random()*0.15;\
-  var cx1=sx+(tx-sx)*cp1t+Math.cos(perp)*arcMag,cy1=sy+(ty-sy)*cp1t+Math.sin(perp)*arcMag;\
-  var cx2=sx+(tx-sx)*cp2t+Math.cos(perp)*arcMag*0.6,cy2=sy+(ty-sy)*cp2t+Math.sin(perp)*arcMag*0.6;\
-  var ov=4+(dist/200)*5+Math.random()*4,ox=tx+Math.cos(ang)*ov,oy=ty+Math.sin(ang)*ov;\
-  for(var i2=0;i2<=steps;i2++){var t2=i2/steps,e2;if(t2<.5)e2=16*t2*t2*t2*t2*t2;else{var f=-2*t2+2;e2=1-f*f*f*f*f/2;}\
-  var x2,y2;if(t2<.88){var b=Math.min(e2/.88,1),u=1-b;x2=u*u*u*sx+3*u*u*b*cx1+3*u*b*b*cx2+b*b*b*ox;y2=u*u*u*sy+3*u*u*b*cy1+3*u*b*b*cy2+b*b*b*oy;}else{var c=(t2-.88)/.12,ce=c*c*(3-2*c);x2=ox+(tx-ox)*ce;y2=oy+(ty-oy)*ce;}\
-  var tr=0.5+(1-Math.sin(t2*Math.PI))*1.5;x2+=(Math.random()-.5)*tr;y2+=(Math.random()-.5)*tr;\
-  await page.mouse.move(x2,y2);var spd=0.3+Math.sin(t2*Math.PI)*1.0;await new Promise(r=>setTimeout(r,(dur/steps)/spd+Math.random()*3));}\
-  await page.mouse.move(tx,ty);__hmLastX=tx;__hmLastY=ty;\
-}\
-// --- End human mouse movement ---' "$SNAP"
+      MCP="$out/lib/node_modules/nix-patchright-mcp-server/node_modules/patchright-mcp"
 
-        # Patch click: add mouse movement before locator.click
-        ${pkgs.gnused}/bin/sed -i 's/await locator\.click(options);/{ const __b = await locator.boundingBox(); if (__b) { const __tx = __b.x + __b.width * (0.35 + Math.random() * 0.3); const __ty = __b.y + __b.height * (0.35 + Math.random() * 0.3); await __hmMove(tab.page, __tx, __ty); await new Promise(r => setTimeout(r, 30 + Math.random() * 120)); } await locator.click(options); if (typeof __hmLastX !== "undefined" \&\& locator.boundingBox) { try { const __ab = await locator.boundingBox(); if (__ab) { __hmLastX = __ab.x + __ab.width\/2; __hmLastY = __ab.y + __ab.height\/2; } } catch(e){} } }/' "$SNAP"
+      # --- Fix patchright 1.60 import path migration ---
+      # patchright 1.60 moved MCP code from patchright/lib/mcp/* to patchright-core/lib/coreBundle.
+      # Patch cli.js: decorateCommand → decorateMCPCommand from coreBundle.tools
+      ${pkgs.gnused}/bin/sed -i \
+        "s|const { decorateCommand } = require('patchright/lib/mcp/program');|const { tools: _mcpTools } = require('patchright-core/lib/coreBundle');|" \
+        "$MCP/cli.js"
+      ${pkgs.gnused}/bin/sed -i \
+        "s|decorateCommand(p, packageJSON.version)|_mcpTools.decorateMCPCommand(p, packageJSON.version)|" \
+        "$MCP/cli.js"
+      echo "Patched cli.js: patchright/lib/mcp/program → patchright-core/lib/coreBundle"
 
-        # Same for dblclick
-        ${pkgs.gnused}/bin/sed -i 's/await locator\.dblclick(options);/{ const __b = await locator.boundingBox(); if (__b) { const __tx = __b.x + __b.width * (0.35 + Math.random() * 0.3); const __ty = __b.y + __b.height * (0.35 + Math.random() * 0.3); await __hmMove(tab.page, __tx, __ty); await new Promise(r => setTimeout(r, 30 + Math.random() * 80)); } await locator.dblclick(options); }/' "$SNAP"
+      # Patch index.js: createConnection from coreBundle.tools
+      ${pkgs.gnused}/bin/sed -i \
+        "s|const { createConnection } = require('patchright/lib/mcp/index');|const { tools: _mcpTools } = require('patchright-core/lib/coreBundle'); const { createConnection } = _mcpTools;|" \
+        "$MCP/index.js"
+      echo "Patched index.js: patchright/lib/mcp/index → patchright-core/lib/coreBundle"
 
-        echo "Patched snapshot.js with human mouse movement"
+      # --- Inject human mouse movement into browser_click/browser_drag tools ---
+      # In patchright 1.60+, snapshot.js is bundled in coreBundle. Instead of sed-patching
+      # a minified bundle, we write a JS shim that monkey-patches the tool handlers at startup.
+      SHIM="$out/lib/node_modules/nix-patchright-mcp-server/node_modules/patchright-mcp/devcell-mouse-shim.js"
+      cat > "$SHIM" << 'SHIMEOF'
+// devcell human mouse movement shim — wraps browser_click tool handler
+// with Bezier cursor trajectory before each click.
+const { tools } = require('patchright-core/lib/coreBundle');
+let __hmLastX = 960, __hmLastY = 540;
+async function __hmMove(page, tx, ty) {
+  const sx = __hmLastX, sy = __hmLastY, dist = Math.hypot(tx-sx, ty-sy);
+  if (dist < 2) { __hmLastX = tx; __hmLastY = ty; return; }
+  if (dist < 50) {
+    const st = 5 + ~~(Math.random()*5);
+    for (let i = 1; i <= st; i++) {
+      const t = i/st, e = t*t*(3-2*t);
+      await page.mouse.move(sx+(tx-sx)*e+(Math.random()-.5)*2, sy+(ty-sy)*e+(Math.random()-.5)*2);
+      await new Promise(r => setTimeout(r, 5+Math.random()*10));
+    }
+    await page.mouse.move(tx, ty);
+    __hmLastX = tx; __hmLastY = ty; return;
+  }
+  const steps = Math.max(30, ~~(dist/5)+~~(Math.random()*20));
+  const dur = 200 + dist*1.0 + Math.random()*250;
+  const ang = Math.atan2(ty-sy, tx-sx), perp = ang + Math.PI/2;
+  const arcMag = dist*(0.08+Math.random()*0.15)*(Math.random()>.5?1:-1);
+  const cp1t = 0.2+Math.random()*0.15, cp2t = 0.65+Math.random()*0.15;
+  const cx1 = sx+(tx-sx)*cp1t+Math.cos(perp)*arcMag, cy1 = sy+(ty-sy)*cp1t+Math.sin(perp)*arcMag;
+  const cx2 = sx+(tx-sx)*cp2t+Math.cos(perp)*arcMag*0.6, cy2 = sy+(ty-sy)*cp2t+Math.sin(perp)*arcMag*0.6;
+  const ov = 4+(dist/200)*5+Math.random()*4;
+  const ox = tx+Math.cos(ang)*ov, oy = ty+Math.sin(ang)*ov;
+  for (let i = 0; i <= steps; i++) {
+    const t = i/steps;
+    let e2; if (t<.5) e2=16*t*t*t*t*t; else { const f=-2*t+2; e2=1-f*f*f*f*f/2; }
+    let x, y;
+    if (t < .88) {
+      const b = Math.min(e2/.88,1), u = 1-b;
+      x = u*u*u*sx+3*u*u*b*cx1+3*u*b*b*cx2+b*b*b*ox;
+      y = u*u*u*sy+3*u*u*b*cy1+3*u*b*b*cy2+b*b*b*oy;
+    } else {
+      const c = (t-.88)/.12, ce = c*c*(3-2*c);
+      x = ox+(tx-ox)*ce; y = oy+(ty-oy)*ce;
+    }
+    const tr = 0.5+(1-Math.sin(t*Math.PI))*1.5;
+    x += (Math.random()-.5)*tr; y += (Math.random()-.5)*tr;
+    await page.mouse.move(x, y);
+    const spd = 0.3+Math.sin(t*Math.PI)*1.0;
+    await new Promise(r => setTimeout(r, (dur/steps)/spd+Math.random()*3));
+  }
+  await page.mouse.move(tx, ty);
+  __hmLastX = tx; __hmLastY = ty;
+}
+
+// Wrap browser_click tool
+const clickTool = tools.browserTools.find(t => t.schema && t.schema.name === 'browser_click');
+if (clickTool) {
+  const origHandle = clickTool.handle;
+  clickTool.handle = async function(context, params) {
+    // Move mouse to element before clicking
+    try {
+      const tab = context.currentTab || context._currentTab;
+      if (tab && tab.page) {
+        // Try to resolve the element position from the ref parameter
+        const snapshot = tab.lastSnapshot;
+        if (snapshot && params.ref) {
+          const locator = snapshot.refLocator(params.ref);
+          if (locator) {
+            const box = await locator.boundingBox().catch(() => null);
+            if (box) {
+              const tx = box.x + box.width * (0.35 + Math.random() * 0.3);
+              const ty = box.y + box.height * (0.35 + Math.random() * 0.3);
+              await __hmMove(tab.page, tx, ty);
+              await new Promise(r => setTimeout(r, 30 + Math.random() * 120));
+            }
+          }
+        }
+      }
+    } catch (e) { /* non-critical — proceed with click */ }
+    return origHandle.call(this, context, params);
+  };
+}
+
+// Wrap browser_drag tool
+const dragTool = tools.browserTools.find(t => t.schema && t.schema.name === 'browser_drag');
+if (dragTool) {
+  const origDragHandle = dragTool.handle;
+  dragTool.handle = async function(context, params) {
+    try {
+      const tab = context.currentTab || context._currentTab;
+      if (tab && tab.page && params.startRef) {
+        const snapshot = tab.lastSnapshot;
+        if (snapshot) {
+          const locator = snapshot.refLocator(params.startRef);
+          if (locator) {
+            const box = await locator.boundingBox().catch(() => null);
+            if (box) {
+              const tx = box.x + box.width * 0.5;
+              const ty = box.y + box.height * 0.5;
+              await __hmMove(tab.page, tx, ty);
+              await new Promise(r => setTimeout(r, 30 + Math.random() * 80));
+            }
+          }
+        }
+      }
+    } catch (e) { /* non-critical */ }
+    return origDragHandle.call(this, context, params);
+  };
+}
+SHIMEOF
+      # Inject the shim require at the top of cli.js (after the shebang)
+      ${pkgs.gnused}/bin/sed -i '2i require("./devcell-mouse-shim");' "$MCP/cli.js"
+      echo "Injected human mouse movement shim into cli.js"
+
+      # --- Fix patchright-core calculateUserAgentMetadata: recognize aarch64 as arm ---
+      # patchright-core hardcodes architecture="x86" and only checks ua.includes("ARM")
+      # (uppercase). Our UA contains "aarch64" which isn't matched, so Sec-CH-UA-Arch
+      # HTTP header reports "x86" on arm hosts. Also respects userAgentMetadata from
+      # context options if explicitly provided (patchright ignores it).
+      # Proof: patchright-core/lib/coreBundle.js calculateUserAgentMetadata() line ~37091
+      # https://github.com/nicenemo/patchright/blob/main/packages/playwright-core/src/server/chromium/crPage.ts
+      CORE="$out/lib/node_modules/nix-patchright-mcp-server/node_modules/patchright-core/lib/coreBundle.js"
+      if [ -f "$CORE" ]; then
+        ${pkgs.gnused}/bin/sed -i 's#if (ua.includes("ARM"))#if (ua.includes("ARM") || ua.includes("aarch64") || ua.includes("arm64"))#' "$CORE"
+        echo "Patched coreBundle.js: calculateUserAgentMetadata recognizes aarch64/arm64 as arm"
+
+        # CELL-150: patchright-core's calculateUserAgentMetadata omits the `bitness`
+        # field entirely, producing empty Sec-CH-UA-Bitness HTTP header / JS
+        # getHighEntropyValues().bitness on real Chrome (which always sends "64").
+        # Wrap the call site so the result includes bitness:"64" plus any
+        # user-supplied userAgentMetadata overrides from contextOptions.
+        ${pkgs.gnused}/bin/sed -i 's#userAgentMetadata: calculateUserAgentMetadata(options2)#userAgentMetadata: Object.assign({ bitness: "64" }, calculateUserAgentMetadata(options2), options2.userAgentMetadata || {})#' "$CORE"
+        if ${pkgs.gnugrep}/bin/grep -q 'bitness: "64"' "$CORE"; then
+          echo "Patched coreBundle.js: _updateUserAgent injects bitness=64 (CELL-150)"
+        else
+          echo "ERROR: CELL-150 bitness patch did NOT apply — coreBundle.js layout changed"
+          exit 1
+        fi
+
+        # CELL-69: real Chrome's Sec-CH-UA includes "Google Chrome" brand
+        # alongside "Chromium" and a GREASE entry; patchright/Chromium ships
+        # only Chromium + Not:A-Brand. Google's identifier-step classifier
+        # rejects sign-in when "Google Chrome" is absent ("This browser or
+        # app may not be secure"). Extend the CELL-150 Object.assign to also
+        # inject brands + fullVersionList with all three brand entries.
+        # Chrome major hardcoded to 141 (matches bundled chromium at time of
+        # patch); grep guard fails the build if the assign signature drifts.
+        ${pkgs.gnused}/bin/sed -i 's#Object.assign({ bitness: "64" }, calculateUserAgentMetadata(options2)#Object.assign({ bitness: "64", brands: [{brand:"Google Chrome",version:"141"},{brand:"Chromium",version:"141"},{brand:"Not?A_Brand",version:"8"}], fullVersionList: [{brand:"Google Chrome",version:"141.0.7390.108"},{brand:"Chromium",version:"141.0.7390.108"},{brand:"Not?A_Brand",version:"8.0.0.0"}] }, calculateUserAgentMetadata(options2)#' "$CORE"
+        if ${pkgs.gnugrep}/bin/grep -q 'brand:"Google Chrome"' "$CORE"; then
+          echo "Patched coreBundle.js: _updateUserAgent injects Google Chrome brand (CELL-69)"
+        else
+          echo "ERROR: CELL-69 brand patch did NOT apply — CELL-150 patch signature may have changed"
+          exit 1
+        fi
       else
-        echo "WARNING: snapshot.js not found at $SNAP"
+        echo "WARNING: coreBundle.js not found at $CORE"
+      fi
+
+      # --- Disable stealth-plugin evasions that conflict with our stealth-init.js ---
+      SETUP="$MCP/playwright-extra-setup.js"
+      if [ -f "$SETUP" ]; then
+        ${pkgs.gnused}/bin/sed -i "s|extra.use(StealthPlugin());|var _s = StealthPlugin(); ['webgl.vendor','user-agent-override'].forEach(function(e){_s.enabledEvasions.delete(e);}); extra.use(_s);|" "$SETUP"
+        echo "Patched playwright-extra-setup.js: disabled webgl.vendor + user-agent-override evasions"
+      else
+        echo "WARNING: playwright-extra-setup.js not found at $SETUP"
       fi
 
       bin="$out/lib/node_modules/nix-patchright-mcp-server/node_modules/.bin"
@@ -116,7 +258,7 @@ async function __hmMove(page, tx, ty) {\
   };
 
   # Static LD_LIBRARY_PATH fallback for the patchright-mcp-cell wrapper.
-  # This wrapper is a nix derivation baked at eval time — can't source files at runtime.
+  # This wrapper is a nix derivation baked at eval time -- can't source files at runtime.
   # All other contexts (entrypoint services, interactive shells) use the merged
   # /opt/devcell/.nix-ld-libs/ directory via NIX_LD_LIBRARY_PATH.
   runtimeLibs = with pkgs; [
@@ -129,7 +271,7 @@ async function __hmMove(page, tx, ty) {\
     cups
     libxkbcommon
     at-spi2-core
-    xorg.libX11       # libX11 + libX11-xcb — core X11 client lib (Electron SIGTRAP without it)
+    xorg.libX11       # libX11 + libX11-xcb -- core X11 client lib (Electron SIGTRAP without it)
     xorg.libXcomposite
     xorg.libXcursor
     xorg.libXdamage
@@ -139,20 +281,20 @@ async function __hmMove(page, tx, ty) {\
     xorg.libXrandr
     xorg.libXtst
     xorg.libxkbfile
-    libgbm        # GBM buffer manager — mesa itself does NOT provide libgbm.so
-    mesa          # Mesa 3D — llvmpipe software rasterizer
+    libgbm        # GBM buffer manager -- mesa itself does NOT provide libgbm.so
+    mesa          # Mesa 3D -- llvmpipe software rasterizer
     cairo
     pango
     alsa-lib
     pulseaudio    # PulseAudio client lib
     gcc.cc.lib    # libgomp (OpenMP runtime)
-    gtk3          # GTK 3 — needed by Electron/Chromium-based GUI apps
+    gtk3          # GTK 3 -- needed by Electron/Chromium-based GUI apps
   ];
   runtimeLibPath = pkgs.lib.makeLibraryPath runtimeLibs;
 
-  # Patchright MCP config — Chromium launch args for X11 display.
+  # Patchright MCP config -- Chromium launch args for X11 display.
   # No --ozone-platform needed (auto-detects X11 from DISPLAY).
-  # WebGL via Mesa Lavapipe: ANGLE → Vulkan → lvp (CPU software renderer).
+  # WebGL via Mesa Lavapipe: ANGLE -> Vulkan -> lvp (CPU software renderer).
   # --ignore-gpu-blocklist prevents Chromium from disabling WebGL on software renderers.
   patchrightConfig = pkgs.writeTextFile {
     name = "patchright-mcp-config.json";
@@ -167,7 +309,7 @@ async function __hmMove(page, tx, ty) {\
         "--autoplay-policy=no-user-gesture-required"
         "--disable-blink-features=AutomationControlled"
       ] ++ extensionArgs;
-      # Block ServiceWorkers — they run in a separate scope unreachable by init-script.
+      # Block ServiceWorkers -- they run in a separate scope unreachable by init-script.
       # Forces detection scripts to fall back to SharedWorker, which we CAN intercept.
       browser.contextOptions.serviceWorkers = "block";
     };
@@ -183,28 +325,32 @@ async function __hmMove(page, tx, ty) {\
         configurable: true
       });
 
-      // Mock chrome.runtime — install via Object.defineProperty so late
-      // Chromium injection (observed on arm64 detection-suite tests; DIMM-89)
-      // cannot overwrite the runtime mock with its own chrome object.
-      // Fall back to plain assignment if defineProperty throws (e.g. when
-      // window already has a non-configurable chrome descriptor).
-      const _chromeMock = {
-        runtime: { connect: function(){}, sendMessage: function(){} },
-        loadTimes: function() { return {}; },
-        csi: function() { return {}; }
-      };
-      try {
-        Object.defineProperty(window, 'chrome', {
-          value: _chromeMock,
-          writable: false,
-          configurable: false,
-          enumerable: true
-        });
-      } catch (e) {
-        window.chrome = _chromeMock;
+      // Ensure chrome.runtime exists -- Chromium may already provide window.chrome
+      // as a non-configurable property (patchright 1.60+, headed mode). Extend
+      // the existing object instead of replacing it.
+      if (typeof window.chrome === 'undefined') {
+        try {
+          Object.defineProperty(window, 'chrome', {
+            value: {},
+            writable: true,
+            configurable: true,
+            enumerable: true
+          });
+        } catch (e) {
+          window.chrome = {};
+        }
+      }
+      if (!window.chrome.runtime) {
+        window.chrome.runtime = { connect: function(){}, sendMessage: function(){} };
+      }
+      if (!window.chrome.loadTimes) {
+        window.chrome.loadTimes = function() { return {}; };
+      }
+      if (!window.chrome.csi) {
+        window.chrome.csi = function() { return {}; };
       }
 
-      // --- Fix toString leaks (must be early — WebGL patching uses _nativeFnNames) ---
+      // --- Fix toString leaks (must be early -- WebGL patching uses _nativeFnNames) ---
       const origToString = Function.prototype.toString;
       const _nativeFnNames = new WeakMap();
       Function.prototype.toString = function() {
@@ -224,7 +370,7 @@ async function __hmMove(page, tx, ty) {\
         if (window.chrome.csi) _nativeFnNames.set(window.chrome.csi, 'csi');
       }
 
-      // Fix plugins + mimeTypes — headless Chrome may have empty arrays.
+      // Fix plugins + mimeTypes -- headless Chrome may have empty arrays.
       if (navigator.plugins.length === 0) {
         const pdfMime = { type: 'application/pdf', suffixes: 'pdf', description: 'Portable Document Format' };
         const fakePlugins = [
@@ -255,21 +401,30 @@ async function __hmMove(page, tx, ty) {\
           ? Promise.resolve({ state: Notification.permission })
           : origQuery(params);
 
-      // Spoof userAgentData high-entropy values — Chromium's userAgent says "x86_64"
-      // (UA reduction) but getHighEntropyValues() leaks the real arch on arm64.
-      // Detection scripts compare these and flag the mismatch.
-      // Architecture value injected at nix build time: "${uaArch}"
-      // Must use Object.defineProperty on prototype — direct assignment is a no-op
-      // because the property is non-writable on NavigatorUAData.prototype.
-      if (typeof NavigatorUAData !== 'undefined') {
+      // Spoof userAgentData high-entropy values from __cellStealth global
+      // (injected by wrapper from DEVCELL_STEALTH_ARCH / DEVCELL_STEALTH_PLATFORM).
+      // CDP userAgentMetadata handles HTTP headers; this is belt-and-suspenders for JS.
+      if (typeof NavigatorUAData !== 'undefined' && window.__cellStealth) {
         const origGetHigh = NavigatorUAData.prototype.getHighEntropyValues;
         Object.defineProperty(NavigatorUAData.prototype, 'getHighEntropyValues', {
           value: async function(hints) {
             const values = await origGetHigh.call(this, hints);
-            values.architecture = '${uaArch}';
+            values.architecture = window.__cellStealth.arch;
+            if (window.__cellStealth.platform) values.platform = window.__cellStealth.platform;
             return values;
           },
           writable: true,
+          configurable: true
+        });
+      }
+
+      // Spoof navigator.platform from __cellStealth (always runs).
+      // __cellFp override below can supersede this when fingerprint.json is present.
+      if (window.__cellStealth) {
+        const _stealthNavPlatform = window.__cellStealth.platform === 'macOS' ? 'MacIntel'
+          : window.__cellStealth.arch === 'arm' ? 'Linux aarch64' : 'Linux x86_64';
+        Object.defineProperty(Navigator.prototype, 'platform', {
+          get: () => _stealthNavPlatform,
           configurable: true
         });
       }
@@ -278,14 +433,14 @@ async function __hmMove(page, tx, ty) {\
       // window.__cellFp is injected by the patchright-mcp-cell preamble init script
       // when $HOME/.playwright/fingerprint.json exists (written by `cell login` on macOS).
       if (window.__cellFp) {
-        // navigator.platform → "MacIntel"
+        // navigator.platform -> "MacIntel" (overrides __cellStealth spoof above)
         Object.defineProperty(Navigator.prototype, 'platform', {
           get: () => window.__cellFp.platform || 'MacIntel',
           configurable: true
         });
 
         if (typeof NavigatorUAData !== 'undefined') {
-          // navigator.userAgentData.platform → "macOS"
+          // navigator.userAgentData.platform -> "macOS"
           const _fpPlatformDesc = Object.getOwnPropertyDescriptor(NavigatorUAData.prototype, 'platform');
           if (_fpPlatformDesc) {
             Object.defineProperty(NavigatorUAData.prototype, 'platform', {
@@ -294,7 +449,7 @@ async function __hmMove(page, tx, ty) {\
             });
           }
 
-          // navigator.userAgentData.brands → Chrome brands
+          // navigator.userAgentData.brands -> Chrome brands
           const _fpBrandsDesc = Object.getOwnPropertyDescriptor(NavigatorUAData.prototype, 'brands');
           if (_fpBrandsDesc && window.__cellFp.brands) {
             Object.defineProperty(NavigatorUAData.prototype, 'brands', {
@@ -330,7 +485,7 @@ async function __hmMove(page, tx, ty) {\
         navigator.canShare = function(data) { return true; };
       }
 
-      // --- Media devices mock (headless has 0 devices → bot signal) ---
+      // --- Media devices mock (headless has 0 devices -> bot signal) ---
       if (navigator.mediaDevices) {
         const _origEnum = navigator.mediaDevices.enumerateDevices;
         navigator.mediaDevices.enumerateDevices = async function() {
@@ -345,17 +500,23 @@ async function __hmMove(page, tx, ty) {\
       }
 
       // Spoof WebGL renderer + parameters (hide SwiftShader fingerprint)
-      // Use Object.defineProperty on WebGL prototypes — works on ALL contexts
+      // Use Object.defineProperty on WebGL prototypes -- works on ALL contexts
       // regardless of how they're created (Canvas, OffscreenCanvas, iframe).
       // Proxy-wrapping getContext gets bypassed by CreepJS; prototype patching doesn't.
-      const _wglVendor = 'Intel Inc.';
-      const _wglRenderer = 'Intel Iris OpenGL Engine';
+      // CELL-70: Linux-appropriate WebGL strings. The previous values
+      // ('Intel Inc.' / 'Intel Iris OpenGL Engine') are macOS Intel iGPU
+      // strings that contradict the spoofed Linux aarch64 UA — amiunique
+      // scores that combination at 1.22% similarity. Real Chrome on
+      // Linux with software rasterization reports 'Google Inc. (Google)'
+      // as the unmasked vendor and an ANGLE/SwiftShader renderer.
+      const _wglVendor = 'Google Inc. (Google)';
+      const _wglRenderer = 'ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)';
       // Intel-realistic parameter overrides (SwiftShader defaults in comments)
       const _wglParams = {
         37445: _wglVendor,   // UNMASKED_VENDOR_WEBGL
         37446: _wglRenderer, // UNMASKED_RENDERER_WEBGL
         3379:  16384,        // MAX_TEXTURE_SIZE (SwiftShader: 8192)
-        3386:  'viewport',   // MAX_VIEWPORT_DIMS — special handling below
+        3386:  'viewport',   // MAX_VIEWPORT_DIMS -- special handling below
         34076: 16384,        // MAX_CUBE_MAP_TEXTURE_SIZE (SwiftShader: 8192)
         34024: 16384,        // MAX_RENDERBUFFER_SIZE (SwiftShader: 8192)
         34047: 16,           // MAX_TEXTURE_MAX_ANISOTROPY_EXT
@@ -424,8 +585,8 @@ async function __hmMove(page, tx, ty) {\
       }
 
       // Belt-and-suspenders: also patch the WebGL context instance returned
-      // by getContext (DIMM-89). The prototype-only patch above did NOT take
-      // effect on arm64 Mesa/llvmpipe — detection saw real "Google Inc. (Mesa)"
+      // by getContext (CELL-169). The prototype-only patch above did NOT take
+      // effect on arm64 Mesa/llvmpipe -- detection saw real "Google Inc. (Mesa)"
       // and "ANGLE (Mesa, llvmpipe)" instead of our 'Intel Inc.' /
       // 'Intel Iris OpenGL Engine' spoof. Likely cause: Chromium installs
       // getParameter as an own-property on the context instance that shadows
@@ -464,13 +625,54 @@ async function __hmMove(page, tx, ty) {\
         _nativeFnNames.set(_newGetContext, 'getContext');
       } catch (e) { /* prototype patch above still applies */ }
 
+      // OffscreenCanvas instance-level patch (main thread) — mirrors HTMLCanvasElement
+      // wrapper above. OffscreenCanvas WebGL contexts may also shadow prototype patches.
+      try {
+        if (typeof OffscreenCanvas !== 'undefined') {
+          const _origOCGetContext = OffscreenCanvas.prototype.getContext;
+          const _newOCGetContext = function(type) {
+            const ctx = _origOCGetContext.apply(this, arguments);
+            if (ctx && typeof type === 'string' && /webgl/i.test(type) && typeof ctx.getParameter === 'function') {
+              try {
+                const _origCtxGP = ctx.getParameter.bind(ctx);
+                const _params = (type === 'webgl2') ? _wgl2AllParams : _wglParams;
+                const _newCtxGP = function(p) {
+                  if (p === 3386) return new Int32Array([16384, 16384]);
+                  if (p in _params) return _params[p];
+                  return _origCtxGP(p);
+                };
+                Object.defineProperty(ctx, 'getParameter', {
+                  value: _newCtxGP,
+                  writable: true,
+                  configurable: true,
+                  enumerable: true
+                });
+                _nativeFnNames.set(_newCtxGP, 'getParameter');
+              } catch (e) {}
+            }
+            return ctx;
+          };
+          Object.defineProperty(OffscreenCanvas.prototype, 'getContext', {
+            value: _newOCGetContext,
+            writable: true,
+            configurable: true
+          });
+          _nativeFnNames.set(_newOCGetContext, 'getContext');
+        }
+      } catch (e) {}
+
       // --- Patch Web Workers (spoof WebGL + UAData in worker scope) ---
       // Workers run in a separate global; init-script patches don't reach them.
       // Intercept Worker constructor to prepend spoof code into worker scripts.
-      const _workerPatch = `
+      const _cellStealthJson = (typeof window !== 'undefined' && window.__cellStealth)
+        ? JSON.stringify(window.__cellStealth)
+        : '{"arch":"arm","platform":"Linux"}';
+      const _workerPatch = `var __cellStealth = ''${"" + _cellStealthJson};
         (function() {
           if (typeof WebGLRenderingContext !== 'undefined') {
-            var params = {37445:'Intel Inc.',37446:'Intel Iris OpenGL Engine',7936:'WebKit',7937:'WebKit WebGL',3379:16384,34076:16384,34024:16384,36183:8};
+            // CELL-70: must match main-thread _wglVendor / _wglRenderer above.
+            var params = {37445:'Google Inc. (Google)',37446:'ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)',7936:'WebKit',7937:'WebKit WebGL',3379:16384,34076:16384,34024:16384,36183:8};
+            var params2 = Object.assign({}, params, {7938:'WebGL 2.0 (OpenGL ES 3.0 Chromium)',35724:'WebGL GLSL ES 3.00 (OpenGL ES GLSL ES 3.0 Chromium)'});
             function patchGL(P) {
               var orig = P.prototype.getParameter;
               P.prototype.getParameter = function(p) {
@@ -481,25 +683,61 @@ async function __hmMove(page, tx, ty) {\
             }
             patchGL(WebGLRenderingContext);
             if (typeof WebGL2RenderingContext !== 'undefined') patchGL(WebGL2RenderingContext);
+            if (typeof OffscreenCanvas !== 'undefined') {
+              var _origOCGetCtx = OffscreenCanvas.prototype.getContext;
+              OffscreenCanvas.prototype.getContext = function(type) {
+                var ctx = _origOCGetCtx.apply(this, arguments);
+                if (ctx && typeof type === 'string' && /webgl/i.test(type) && typeof ctx.getParameter === 'function') {
+                  try {
+                    var _origGP = ctx.getParameter.bind(ctx);
+                    var _p = (type === 'webgl2') ? params2 : params;
+                    ctx.getParameter = function(p) {
+                      if (p === 3386) return new Int32Array([16384, 16384]);
+                      if (p in _p) return _p[p];
+                      return _origGP(p);
+                    };
+                  } catch(e) {}
+                }
+                return ctx;
+              };
+            }
           }
-          if (typeof NavigatorUAData !== 'undefined') {
+          if (typeof NavigatorUAData !== 'undefined' && typeof __cellStealth !== 'undefined') {
             var origGetHigh = NavigatorUAData.prototype.getHighEntropyValues;
             Object.defineProperty(NavigatorUAData.prototype, 'getHighEntropyValues', {
               value: async function(hints) {
                 var values = await origGetHigh.call(this, hints);
-                values.architecture = '${uaArch}';
+                values.architecture = __cellStealth.arch;
+                if (__cellStealth.platform) values.platform = __cellStealth.platform;
                 return values;
               },
               writable: true,
               configurable: true
             });
           }
+          // Spoof navigator.platform in Workers (main thread is spoofed separately;
+          // Workers inherit the real value, causing cross-context mismatch).
+          if (typeof __cellStealth !== 'undefined') {
+            var _wkPlatform = __cellStealth.platform === 'macOS' ? 'MacIntel'
+              : __cellStealth.arch === 'arm' ? 'Linux aarch64' : 'Linux x86_64';
+            if (typeof Navigator !== 'undefined' && Navigator.prototype) {
+              Object.defineProperty(Navigator.prototype, 'platform', {
+                get: function() { return _wkPlatform; },
+                configurable: true
+              });
+            } else if (typeof navigator !== 'undefined') {
+              Object.defineProperty(navigator, 'platform', {
+                get: function() { return _wkPlatform; },
+                configurable: true
+              });
+            }
+          }
         })();\n`;
       const _origWorker = window.Worker;
       const _origBlob = window.Blob;
       window.Worker = function(url, opts) {
         try {
-          // Handle Blob URLs — read the blob content, prepend patch
+          // Handle Blob URLs -- read the blob content, prepend patch
           if (typeof url === 'string' && url.startsWith('blob:')) {
             const xhr = new XMLHttpRequest();
             xhr.open('GET', url, false);
@@ -509,7 +747,7 @@ async function __hmMove(page, tx, ty) {\
               return new _origWorker(URL.createObjectURL(blob), opts);
             }
           }
-          // Handle regular URLs — fetch script, prepend patch
+          // Handle regular URLs -- fetch script, prepend patch
           if (typeof url === 'string' || (url instanceof URL)) {
             const urlStr = url instanceof URL ? url.href : url;
             const xhr = new XMLHttpRequest();
@@ -665,7 +903,7 @@ async function __hmMove(page, tx, ty) {\
         });
       }
 
-      // Window dimensions — realistic maximized Chrome on 1920x1080
+      // Window dimensions -- realistic maximized Chrome on 1920x1080
       // outerWidth > innerWidth is normal (scrollbar), outerHeight > innerHeight (chrome UI)
       const vpDims = {
         outerWidth: 1920, outerHeight: 1040,
@@ -678,7 +916,7 @@ async function __hmMove(page, tx, ty) {\
         });
       }
 
-      // VisualViewport — matches innerWidth/innerHeight
+      // VisualViewport -- matches innerWidth/innerHeight
       if (window.visualViewport) {
         for (const [prop, val] of Object.entries({
           width: 1903, height: 969,
@@ -691,7 +929,7 @@ async function __hmMove(page, tx, ty) {\
         }
       }
 
-      // ScreenOrientation — 1920x1080 = landscape
+      // ScreenOrientation -- 1920x1080 = landscape
       if (screen.orientation) {
         Object.defineProperty(screen.orientation, 'type', {
           get: () => 'landscape-primary', configurable: true
@@ -701,7 +939,7 @@ async function __hmMove(page, tx, ty) {\
         });
       }
 
-      // matchMedia — proxy dimension queries to match our spoofed viewport.
+      // matchMedia -- proxy dimension queries to match our spoofed viewport.
       // CSS @media is compositor-side (ozone's real screen), but matchMedia
       // is JS-side. We override to be consistent with our viewport spoofs.
       const _origMM = window.matchMedia;
@@ -782,7 +1020,7 @@ async function __hmMove(page, tx, ty) {\
         _nativeFnNames.set(window.ContactsManager, 'ContactsManager');
       }
 
-      // --- NetworkInformation — realistic 4G WiFi connection profile ---
+      // --- NetworkInformation -- realistic 4G WiFi connection profile ---
       if (navigator.connection) {
         var _connProps = {
           effectiveType: '4g',
@@ -807,23 +1045,27 @@ async function __hmMove(page, tx, ty) {\
         get: () => 8, configurable: true
       });
 
-      // --- speechSynthesis.getVoices() returns [] on headless — bot signal ---
-      if (window.speechSynthesis) {
+      // --- speechSynthesis.getVoices() returns [] on headless -- bot signal ---
+      try { if (window.speechSynthesis) {
+        var _voiceProto = (function() {
+          var v = window.speechSynthesis.getVoices();
+          return v.length > 0 ? Object.getPrototypeOf(v[0]) : Object.prototype;
+        })();
         var _fakeVoices = [
           { voiceURI: 'Google US English', name: 'Google US English', lang: 'en-US', localService: false, default: true },
           { voiceURI: 'Google UK English Female', name: 'Google UK English Female', lang: 'en-GB', localService: false, default: false },
           { voiceURI: 'Google UK English Male', name: 'Google UK English Male', lang: 'en-GB', localService: false, default: false },
           { voiceURI: 'Google Deutsch', name: 'Google Deutsch', lang: 'de-DE', localService: false, default: false },
-          { voiceURI: 'Google español', name: 'Google español', lang: 'es-ES', localService: false, default: false },
-          { voiceURI: 'Google français', name: 'Google français', lang: 'fr-FR', localService: false, default: false },
-        ].map(function(v) { return Object.assign(Object.create(SpeechSynthesisVoice.prototype), v); });
+          { voiceURI: 'Google espa\u00f1ol', name: 'Google espa\u00f1ol', lang: 'es-ES', localService: false, default: false },
+          { voiceURI: 'Google fran\u00e7ais', name: 'Google fran\u00e7ais', lang: 'fr-FR', localService: false, default: false },
+        ].map(function(v) { return Object.assign(Object.create(_voiceProto), v); });
         var _origGV = window.speechSynthesis.getVoices.bind(window.speechSynthesis);
         window.speechSynthesis.getVoices = function() {
           var real = _origGV();
           return real.length > 0 ? real : _fakeVoices;
         };
         _nativeFnNames.set(window.speechSynthesis.getVoices, 'getVoices');
-      }
+      } } catch(e) { /* speechSynthesis spoof is non-critical */ }
 
       // --- Battery API spoof (charging:true + level:1.0 = classic VM signal) ---
       // Real laptop: discharging, ~70% level, ~2h remaining.
@@ -886,7 +1128,7 @@ async function __hmMove(page, tx, ty) {\
 
       // --- Audio fingerprint noise (OfflineAudioContext oscillator hash) ---
       // Fingerprinting reads AudioBuffer.getChannelData() after rendering an oscillator.
-      // Add tiny per-session float noise (< 1e-7) — inaudible, changes the hash.
+      // Add tiny per-session float noise (< 1e-7) -- inaudible, changes the hash.
       // Patch both AudioBuffer (OfflineAudioContext result) and AnalyserNode readbacks.
       (function() {
         var _as = (Math.random() * 0x7FFFFFFF) | 0;
@@ -895,7 +1137,7 @@ async function __hmMove(page, tx, ty) {\
           return (x & 0xFF) * 1e-9 - 1.275e-7;
         }
 
-        // AudioBuffer.getChannelData — main audio fingerprint vector
+        // AudioBuffer.getChannelData -- main audio fingerprint vector
         if (typeof AudioBuffer !== 'undefined') {
           var _origGCD = AudioBuffer.prototype.getChannelData;
           AudioBuffer.prototype.getChannelData = function(ch) {
@@ -930,7 +1172,7 @@ async function __hmMove(page, tx, ty) {\
 
       // --- Font enumeration spoof (Windows/macOS fonts absent on Linux = fingerprint) ---
       // Detection: measure text width with "Calibri,sans-serif" vs "sans-serif" baseline.
-      // If equal → font absent. We apply per-font width factors so probed fonts read
+      // If equal -> font absent. We apply per-font width factors so probed fonts read
       // as present. Factors are approximate ratio of real font width to sans-serif fallback.
       // Also patched on OffscreenCanvas (used by CreepJS and similar scanners).
       (function() {
@@ -964,7 +1206,7 @@ async function __hmMove(page, tx, ty) {\
         };
 
         function _matchFont(fontStr) {
-          var lower = (fontStr || '''').toLowerCase();
+          var lower = (fontStr || "").toLowerCase();
           for (var name in _fonts) {
             if (lower.indexOf(name) !== -1) return _fonts[name];
           }
@@ -998,7 +1240,7 @@ async function __hmMove(page, tx, ty) {\
     '';
   };
 
-  # Keep-alive init script — prevents session timeouts by simulating user activity.
+  # Keep-alive init script -- prevents session timeouts by simulating user activity.
   # Scrolls 10px up/down every 60 seconds after 60 seconds of no user interaction.
   # Resets timer on any scroll, click, keypress, or mouse movement.
   keepAliveInitScript = pkgs.writeTextFile {
@@ -1006,11 +1248,11 @@ async function __hmMove(page, tx, ty) {\
     text = ''
       (function() {
         var _kaTimer = null;
-        var _KA_IDLE_MS = 240000; // 4 min — refresh before 5-min JWT TTLs expire
+        var _KA_IDLE_MS = 240000; // 4 min -- refresh before 5-min JWT TTLs expire
         function _kaTick() {
           // Silent favicon fetch: sends cookies to the server so it can
           // see authenticated activity without reloading the page.
-          // Uses GET (not HEAD) — many CDN/WAF configs (e.g. Akamai) return
+          // Uses GET (not HEAD) -- many CDN/WAF configs (e.g. Akamai) return
           // 503 for HEAD requests. Falls back to a GET on the current URL
           // if the favicon CDN is cross-origin (won't carry auth cookies).
           var _faviconEl = document.querySelector('link[rel~="icon"]');
@@ -1036,7 +1278,7 @@ async function __hmMove(page, tx, ty) {\
     '';
   };
 
-  # Network capture init script — wraps window.fetch and XMLHttpRequest to record
+  # Network capture init script -- wraps window.fetch and XMLHttpRequest to record
   # request/response bodies into an in-page buffer. INERT by default (HAR alone
   # doesn't reliably capture bodies under CSP / streaming / opaque responses;
   # this fills that gap when we need it).
@@ -1049,7 +1291,7 @@ async function __hmMove(page, tx, ty) {\
   #   window.__cellNet.disable()          // stop capturing, leaves buffer intact
   #   window.__cellNet.clear()            // clear buffer only
   #
-  # Re-runs on every frame/navigation (init-script behavior) — guards against
+  # Re-runs on every frame/navigation (init-script behavior) -- guards against
   # double-wrapping so toString() stays clean and stealth isn't broken.
   networkCaptureInitScript = pkgs.writeTextFile {
     name = "network-capture-init.js";
@@ -1105,7 +1347,7 @@ async function __hmMove(page, tx, ty) {\
         if (typeof _origFetch === 'function') {
           var _wrappedFetch = function(input, init) {
             if (!state.enabled) return _origFetch.apply(this, arguments);
-            var url = (typeof input === 'string') ? input : (input && input.url) || '''';
+            var url = (typeof input === 'string') ? input : (input && input.url) || "";
             if (!_match(url)) return _origFetch.apply(this, arguments);
             var method = (init && init.method) || (input && input.method) || 'GET';
             var reqHeaders = _headersToObj((init && init.headers) || (input && input.headers));
@@ -1166,7 +1408,7 @@ async function __hmMove(page, tx, ty) {\
               this.addEventListener('loadend', function() {
                 var resHeaders = {};
                 try {
-                  var raw = xhr.getAllResponseHeaders() || '''';
+                  var raw = xhr.getAllResponseHeaders() || "";
                   raw.trim().split(/[\r\n]+/).forEach(function(line) {
                     var idx = line.indexOf(':');
                     if (idx > 0) resHeaders[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
@@ -1174,7 +1416,7 @@ async function __hmMove(page, tx, ty) {\
                 } catch (e) {}
                 var resBody = null;
                 try {
-                  if (xhr.responseType === '''' || xhr.responseType === 'text') resBody = _trim(xhr.responseText);
+                  if (xhr.responseType === "" || xhr.responseType === 'text') resBody = _trim(xhr.responseText);
                   else if (xhr.responseType === 'json') resBody = _trim(JSON.stringify(xhr.response));
                   else resBody = '[binary responseType=' + xhr.responseType + ']';
                 } catch (e) { resBody = '[unreadable: ' + String(e) + ']'; }
@@ -1216,7 +1458,7 @@ async function __hmMove(page, tx, ty) {\
     '';
   };
 
-  # chromium-singleton-sweep — DIMM-222 shared helper invoked by both
+  # chromium-singleton-sweep -- CELL-62 shared helper invoked by both
   # patchright-mcp-cell and the interactive chromiumWrapper just before they
   # exec chrome. Sweeps the stale Singleton triple when the recorded owner
   # PID is dead (or recycled to a non-chrome process), leaves the triple
@@ -1232,7 +1474,7 @@ async function __hmMove(page, tx, ty) {\
     _dir="''${1:?usage: chromium-singleton-sweep <user-data-dir>}"
     [ -d "$_dir" ] || exit 0
     _lock="$_dir/SingletonLock"
-    # No lock present — nothing to do (Chromium will create one cleanly).
+    # No lock present -- nothing to do (Chromium will create one cleanly).
     [ -L "$_lock" ] || [ -e "$_lock" ] || exit 0
     _target=$(readlink "$_lock" 2>/dev/null || true)
     _pid=""
@@ -1244,14 +1486,14 @@ async function __hmMove(page, tx, ty) {\
       # (e.g. cell-devcell-786), so split on the LAST dash for the PID.
       _pid="''${_target##*-}"
       case "$_pid" in
-        ""|*[!0-9]*) ;;  # non-numeric → treat as stale
+        ""|*[!0-9]*) ;;  # non-numeric -> treat as stale
         *)
           if kill -0 "$_pid" 2>/dev/null; then
             _alive=1
             _comm=$(cat "/proc/$_pid/comm" 2>/dev/null || true)
             case "$_comm" in
               chrome|chromium|Chromium*|chrome*)
-                # Genuine live chrome owner — never touch its lock.
+                # Genuine live chrome owner -- never touch its lock.
                 exit 0 ;;
             esac
           fi
@@ -1273,14 +1515,14 @@ async function __hmMove(page, tx, ty) {\
       "$_dir" "''${_pid:-?}" "$_alive" "''${_comm:-?}" >&2
   '';
 
-  # patchright-mcp-cell wrapper — bundles LD_LIBRARY_PATH, secrets, user-data-dir,
+  # patchright-mcp-cell wrapper -- bundles LD_LIBRARY_PATH, secrets, user-data-dir,
   # and auto-discovers config.json + stealth-init.js from co-located share/ dir.
   patchrightMcpCell = let
     wrapperScript = pkgs.writeShellScript "patchright-mcp-cell-inner" ''
       export PLAYWRIGHT_BROWSERS_PATH="${browsers}"
       export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
       export LD_LIBRARY_PATH="${runtimeLibPath}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-      # Mesa Lavapipe — software Vulkan ICD for WebGL via ANGLE→Vulkan→lvp
+      # Mesa Lavapipe -- software Vulkan ICD for WebGL via ANGLE->Vulkan->lvp
       export VK_ICD_FILENAMES="${pkgs.mesa.drivers}/share/vulkan/icd.d/lvp_icd.${pkgs.stdenv.hostPlatform.uname.processor}.json"
 
       # Always use config and init-script from co-located share/ dir.
@@ -1303,10 +1545,10 @@ async function __hmMove(page, tx, ty) {\
       # Generate runtime config with dynamic timezone from $TZ.
       # Merges static nix config with runtime-only contextOptions.
       _RUNTIME_CONFIG=$(mktemp /tmp/pw-config-XXXXXX.json)
-      trap 'rm -f "$_RUNTIME_CONFIG" "$SECRETS_FILE"' EXIT
+      trap 'rm -f "$_RUNTIME_CONFIG" "$SECRETS_FILE" "$_STEALTH_INIT"' EXIT
       # Convert LANG (e.g. en_US.UTF-8) to Playwright locale (en-US).
       _PW_LOCALE="''${LANG%%.*}"        # strip .UTF-8
-      _PW_LOCALE="''${_PW_LOCALE//_/-}" # en_US → en-US
+      _PW_LOCALE="''${_PW_LOCALE//_/-}" # en_US -> en-US
       : "''${_PW_LOCALE:=en-US}"        # default
       _NEED_RUNTIME=false
       [ -n "''${TZ:-}" ] && [ "$TZ" != "UTC" ] && _NEED_RUNTIME=true
@@ -1322,8 +1564,76 @@ async function __hmMove(page, tx, ty) {\
         _EXTRA_ARGS+=(--config "$_SHARE/config.json")
       fi
 
+      # Stealth identity: merge userAgentMetadata from DEVCELL_STEALTH_ARCH /
+      # DEVCELL_STEALTH_PLATFORM env vars. This is the SINGLE SOURCE OF TRUTH
+      # for CDP-level client-hints (Sec-CH-UA-Arch, Sec-CH-UA-Platform, etc.)
+      # and must run BEFORE the fingerprint overlay so cell login can override.
+      _STEALTH_ARCH="''${DEVCELL_STEALTH_ARCH:-arm}"
+      _STEALTH_PLATFORM="''${DEVCELL_STEALTH_PLATFORM:-Linux}"
+      # Detect real Chromium version from the browser binary so UA + brands match.
+      _CHROME_BIN=$(find "''${PLAYWRIGHT_BROWSERS_PATH:-/dev/null}" -name 'chrome' -type f 2>/dev/null | tail -1)
+      _CHROME_FULL_VER="141.0.0.0"
+      if [ -n "$_CHROME_BIN" ] && [ -x "$_CHROME_BIN" ]; then
+        _CHROME_FULL_VER=$("$_CHROME_BIN" --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+\.\d+' || echo "141.0.0.0")
+      fi
+      _CHROME_MAJOR="''${_CHROME_FULL_VER%%.*}"
+      # Build UA string from arch + platform + detected Chrome version.
+      case "$_STEALTH_PLATFORM" in
+        macOS)   _STEALTH_UA="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/$_CHROME_FULL_VER Safari/537.36" ;;
+        Windows) _STEALTH_UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/$_CHROME_FULL_VER Safari/537.36" ;;
+        *)
+          if [ "$_STEALTH_ARCH" = "arm" ]; then
+            _STEALTH_UA="Mozilla/5.0 (X11; Linux aarch64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/$_CHROME_FULL_VER Safari/537.36"
+          else
+            _STEALTH_UA="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/$_CHROME_FULL_VER Safari/537.36"
+          fi ;;
+      esac
+      _STEALTH_BASE="$_SHARE/config.json"
+      [ -s "$_RUNTIME_CONFIG" ] && _STEALTH_BASE="$_RUNTIME_CONFIG"
+      if [ -f "$_STEALTH_BASE" ]; then
+        ${pkgs.jq}/bin/jq \
+          --arg arch "$_STEALTH_ARCH" \
+          --arg plat "$_STEALTH_PLATFORM" \
+          --arg ua "$_STEALTH_UA" \
+          --arg cmajor "$_CHROME_MAJOR" \
+          --arg cfull "$_CHROME_FULL_VER" \
+          '.browser.contextOptions.userAgent = $ua
+          | .browser.launchOptions.args = ((.browser.launchOptions.args // []) + ["--user-agent=" + $ua])
+          | .browser.contextOptions.userAgentMetadata = (
+            (.browser.contextOptions.userAgentMetadata // {}) + {
+              "platform": $plat,
+              "platformVersion": "",
+              "architecture": $arch,
+              "bitness": "64",
+              "model": "",
+              "mobile": false,
+              "brands": [
+                {"brand": "Chromium", "version": $cmajor},
+                {"brand": "Not?A_Brand", "version": "8"}
+              ],
+              "fullVersionList": [
+                {"brand": "Chromium", "version": $cfull},
+                {"brand": "Not?A_Brand", "version": "8.0.0.0"}
+              ]
+            }
+          )' "$_STEALTH_BASE" > "$_RUNTIME_CONFIG.stealth"
+        mv "$_RUNTIME_CONFIG.stealth" "$_RUNTIME_CONFIG"
+        _EXTRA_ARGS=()
+        _EXTRA_ARGS+=(--config "$_RUNTIME_CONFIG")
+      fi
+
+      # Inject __cellStealth global into init-script preamble so JS spoofs
+      # read arch/platform from the same source as CDP userAgentMetadata.
+      _STEALTH_PREAMBLE="window.__cellStealth = { arch: \"$_STEALTH_ARCH\", platform: \"$_STEALTH_PLATFORM\" };"
+      _STEALTH_INIT=$(mktemp /tmp/pw-stealth-preamble-XXXXXX.js)
+      printf '%s\n' "$_STEALTH_PREAMBLE" > "$_STEALTH_INIT"
+      if [ -f "$_SHARE/stealth-init.js" ]; then
+        cat "$_SHARE/stealth-init.js" >> "$_STEALTH_INIT"
+      fi
+      _EXTRA_ARGS+=(--init-script "$_STEALTH_INIT")
+
       # Inject macOS fingerprint from $HOME/.playwright/fingerprint.json if present
-      # (written by `cell login` on macOS — new layout). Merges userAgent into the
+      # (written by `cell login` on macOS -- new layout). Merges userAgent into the
       # runtime config and prepends a preamble init script that sets window.__cellFp
       # before stealth-init.js runs.
       _FP_FILE="$HOME/.playwright/fingerprint.json"
@@ -1342,6 +1652,9 @@ async function __hmMove(page, tx, ty) {\
           [ -s "$_RUNTIME_CONFIG" ] && _BASE_CONFIG="$_RUNTIME_CONFIG"
           ${pkgs.jq}/bin/jq -n \
             --arg ua "$_UA" \
+            --arg stealthArch "$_STEALTH_ARCH" \
+            --arg cmajor "$_CHROME_MAJOR" \
+            --arg cfull "$_CHROME_FULL_VER" \
             --slurpfile fp "$_FP_FILE" \
             --slurpfile cfg "$_BASE_CONFIG" \
             '($cfg[0]) as $cfg | ($fp[0]) as $fp |
@@ -1353,18 +1666,17 @@ async function __hmMove(page, tx, ty) {\
              | .browser.contextOptions.userAgentMetadata = {
                  "platform": $platform,
                  "platformVersion": "",
-                 "architecture": "x86_64",
+                 "architecture": $stealthArch,
+                 "bitness": "64",
                  "model": "",
                  "mobile": false,
                  "brands": (if ($brands | length) > 0 then $brands else [
-                   {"brand": "Google Chrome", "version": "146"},
-                   {"brand": "Chromium", "version": "146"},
-                   {"brand": "Not/A)Brand", "version": "8"}
+                   {"brand": "Chromium", "version": $cmajor},
+                   {"brand": "Not?A_Brand", "version": "8"}
                  ] end),
                  "fullVersionList": (if ($brands | length) > 0 then $brands else [
-                   {"brand": "Google Chrome", "version": ($ver // "146.0.0.0")},
-                   {"brand": "Chromium", "version": ($ver // "146.0.0.0")},
-                   {"brand": "Not/A)Brand", "version": "8.0.0.0"}
+                   {"brand": "Chromium", "version": ($ver // $cfull)},
+                   {"brand": "Not?A_Brand", "version": "8.0.0.0"}
                  ] end)
                }
              | .browser.launchOptions.args = ((.browser.launchOptions.args // []) + ["--user-agent=" + $ua])
@@ -1389,7 +1701,7 @@ async function __hmMove(page, tx, ty) {\
 
           # Prepend preamble BEFORE stealth-init.js so it is available to all init scripts.
           _EXTRA_ARGS+=(--init-script "$_FP_PREAMBLE")
-          trap 'rm -f "$_RUNTIME_CONFIG" "$SECRETS_FILE" "$_FP_CONFIG" "$_FP_PREAMBLE"' EXIT
+          trap 'rm -f "$_RUNTIME_CONFIG" "$SECRETS_FILE" "$_STEALTH_INIT" "$_FP_CONFIG" "$_FP_PREAMBLE"' EXIT
         fi
       fi
 
@@ -1429,15 +1741,18 @@ async function __hmMove(page, tx, ty) {\
         exec mcp-server-patchright --cdp-endpoint "$_CDP_URL" --secrets "$SECRETS_FILE" "''${_EXTRA_ARGS[@]}" "$@"
       fi
 
-      # DIMM-208 layout: Playwright-format state under ~/.playwright/,
+      # CELL-74 layout: Playwright-format state under ~/.playwright/,
       # Chromium-format profiles under ~/.chrome/<app>/. No legacy fallback.
       STORAGE_STATE="$HOME/.playwright/storage-state.json"
       if [ -f "$STORAGE_STATE" ]; then
-        mcp-server-patchright --no-sandbox --isolated --storage-state "$STORAGE_STATE" --secrets "$SECRETS_FILE" "''${_EXTRA_ARGS[@]}" "$@"
+        USER_DATA_DIR="''${PLAYWRIGHT_MCP_USER_DATA_DIR:-$HOME/.chrome/''${APP_NAME:-cell}}"
+        mkdir -p "$USER_DATA_DIR"
+        ${chromiumSingletonSweep} "$USER_DATA_DIR"
+        mcp-server-patchright --no-sandbox --user-data-dir "$USER_DATA_DIR" --storage-state "$STORAGE_STATE" --secrets "$SECRETS_FILE" "''${_EXTRA_ARGS[@]}" "$@"
       else
         USER_DATA_DIR="''${PLAYWRIGHT_MCP_USER_DATA_DIR:-$HOME/.chrome/''${APP_NAME:-cell}}"
 
-        # DIMM-222: chromium's WebAppDatabase::OnAllDataAndMetadataRead hits a
+        # CELL-62: chromium's WebAppDatabase::OnAllDataAndMetadataRead hits a
         # compiler-emitted brk #0 (__builtin_unreachable) when the persisted
         # sync data/metadata records are out of sync. The most likely cause is
         # abrupt termination (container SIGKILL, OOM, host shutdown) while
@@ -1455,22 +1770,22 @@ async function __hmMove(page, tx, ty) {\
         _profile_looks_crashed() {
           local _udd="$1"
           local _prefs="$_udd/Default/Preferences"
-          # Signal A — canonical: profile.exit_type set to anything but Normal
+          # Signal A -- canonical: profile.exit_type set to anything but Normal
           # by chromium itself (default state is Crashed, only flipped to
           # Normal on graceful shutdown).
           if [ -f "$_prefs" ] && \
              ${pkgs.jq}/bin/jq -e '.profile.exit_type != "Normal"' "$_prefs" >/dev/null 2>&1; then
-            _pwlog "crash heuristic A trip — Preferences exit_type != Normal ($_prefs)"
+            _pwlog "crash heuristic A trip -- Preferences exit_type != Normal ($_prefs)"
             return 0
           fi
-          # Signal B — crashpad pending dump newer than Local State. Catches
+          # Signal B -- crashpad pending dump newer than Local State. Catches
           # kills where exit_type managed to flip to Normal but a child
           # process crashed during shutdown flush.
           local _crashdir="$HOME/.config/chromium/Crash Reports/pending"
           local _localstate="$_udd/Local State"
           if [ -d "$_crashdir" ] && [ -f "$_localstate" ] && \
              find "$_crashdir" -name '*.dmp' -newer "$_localstate" -print -quit 2>/dev/null | grep -q .; then
-            _pwlog "crash heuristic B trip — crashpad dump newer than $_localstate"
+            _pwlog "crash heuristic B trip -- crashpad dump newer than $_localstate"
             return 0
           fi
           return 1
@@ -1482,7 +1797,7 @@ async function __hmMove(page, tx, ty) {\
           if mv "$USER_DATA_DIR" "$_archive" 2>/dev/null; then
             _pwlog "archived unclean profile: $USER_DATA_DIR -> $_archive"
           else
-            _pwlog "archive failed (mv returned non-zero) — proceeding with existing profile dir"
+            _pwlog "archive failed (mv returned non-zero) -- proceeding with existing profile dir"
           fi
           # Rotate: keep the 3 newest .crashed-* archives, prune the rest.
           ls -dt -- "''${USER_DATA_DIR}.crashed-"* 2>/dev/null | tail -n +4 | while IFS= read -r _old; do
@@ -1494,7 +1809,7 @@ async function __hmMove(page, tx, ty) {\
         fi
 
         mkdir -p "$USER_DATA_DIR"
-        # DIMM-222: sweep stale SingletonLock/Cookie/Socket from a prior crash.
+        # CELL-62: sweep stale SingletonLock/Cookie/Socket from a prior crash.
         ${chromiumSingletonSweep} "$USER_DATA_DIR"
         mcp-server-patchright --no-sandbox --user-data-dir "$USER_DATA_DIR" --secrets "$SECRETS_FILE" "''${_EXTRA_ARGS[@]}" "$@"
       fi
@@ -1509,18 +1824,18 @@ async function __hmMove(page, tx, ty) {\
     cp ${networkCaptureInitScript} $out/share/patchright/network-capture-init.js
   '';
 
-  # Interactive chromium wrapper — reads CHROMIUM_PROFILE_PATH at runtime so each
+  # Interactive chromium wrapper -- reads CHROMIUM_PROFILE_PATH at runtime so each
   # container can have an isolated profile even when sharing CELL_HOME.
   # --remote-debugging-port=9222 exposes a CDP endpoint so:
   #   1) Playwright/MCP/CDP clients can attach via connectOverCDP('http://127.0.0.1:9222')
   #   2) The patchright-mcp-cell wrapper auto-detects and attaches to this browser
   #      instead of launching its own, so xdg-open OAuth flows and MCP browser
   #      automation share one chromium instance + one set of cookies/sessions.
-  # Bound to 127.0.0.1 only — exposing CDP on 0.0.0.0 is a remote-code-execution surface.
+  # Bound to 127.0.0.1 only -- exposing CDP on 0.0.0.0 is a remote-code-execution surface.
   chromiumWrapper = pkgs.writeShellScriptBin "chromium" ''
     _profile="''${CHROMIUM_PROFILE_PATH:-$HOME/.chrome/''${APP_NAME:-default}}"
     mkdir -p "$_profile"
-    # DIMM-222: sweep stale SingletonLock/Cookie/Socket left by a crashed
+    # CELL-62: sweep stale SingletonLock/Cookie/Socket left by a crashed
     # peer (this wrapper and patchright-mcp-cell share the same profile dir).
     ${chromiumSingletonSweep} "$_profile"
     exec ${pkgs.chromium}/bin/chromium \
@@ -1538,7 +1853,20 @@ async function __hmMove(page, tx, ty) {\
 in {
   imports = [ ./extensions.nix ];
 
-  config = {
+  options.devcell.modules.scraping = {
+    enable = lib.mkEnableOption "Patchright stealth browser (Chromium + stealth patches + MCP)";
+    meta = lib.mkOption {
+      type = lib.types.attrs;
+      readOnly = true;
+      default = {
+        description = "Patchright stealth browser MCP — anti-bot Chromium for Cloudflare/Kasada-grade sites";
+        mcpServers = [ "playwright" ];
+        sizeMb = 700;
+      };
+    };
+  };
+
+  config = lib.mkIf cfg.enable {
     home.packages = [
       patchrightMcp
       patchrightMcpCell
@@ -1547,16 +1875,16 @@ in {
 
     home.sessionVariables = {
       # Patchright uses its own bundled Chromium (with webdriver stealth patches).
-      # Do NOT set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH — it overrides the patched binary.
+      # Do NOT set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH -- it overrides the patched binary.
       # The interactive chromium wrapper above uses pkgs.chromium for manual browsing.
       PLAYWRIGHT_BROWSERS_PATH = "${browsers}";
       PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1";
     };
 
     # Contribute patchright MCP server to the system-level managed-mcp.json.
-    # Patchright = stealth Playwright fork — patches CDP Runtime.enable, adds
+    # Patchright = stealth Playwright fork -- patches CDP Runtime.enable, adds
     # playwright-extra + puppeteer-extra-plugin-stealth (triple stealth stack).
-    # ${VAR} in string values → literal ${VAR} in JSON → Claude Code expands at runtime.
+    # ${VAR} in string values -> literal ${VAR} in JSON -> Claude Code expands at runtime.
     devcell.managedMcp.servers.playwright = {
       command = "${mcpCfg.nixBinPrefix}/patchright-mcp-cell";
       args = [

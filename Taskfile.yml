@@ -1,10 +1,15 @@
 # DevCell Taskfile. See README.md
 #
-# Taxonomy (post DIMM-205 refactor):
-#   noun-first, variant-first inside `image:*`
-#   image:impure:*  ← Dockerfile/bake path (legacy, opt-in)
-#   image:pure:*    ← nix2container path (default)
-#   image:{build,push}        — aggregates over both variants
+# SCOPE: `task image:*` is for CI / release publishing only.
+# For LOCAL DEVELOPMENT, use the CLI: `cell build`.
+#   - `cell build`        — rebuild the local cell image from this checkout
+#   - `cell build --update` — bump nix flake inputs + rebuild
+#   - `cell build --thin` — incremental, mounts nix store on a Docker volume
+#
+# Taxonomy (post CELL-180 + Modules 2.0):
+#   image:pure:*    ← nix2container path (default, what CI ships)
+#   image:impure:*  ← Dockerfile/bake path (DEPRECATED, kept for one release)
+#   image:{build,push}        — aggregates (pure only after Modules 2.0)
 #   image:{mirror,manifest}   — variant-agnostic utilities
 #
 # Back-compat aliases for muscle memory + external refs are preserved
@@ -123,31 +128,34 @@ tasks:
       - '[ "$(uname -s)" != "Darwin" ] || codesign --force --sign - ~/.local/bin/cell'
       - echo "Installed to ~/.local/bin/cell"
 
-  # ── image (aggregates over both variants) ──────────────────────────────
-  # When we deprecate the impure path, `rm -rf image:impure:*` and these
-  # aggregates degrade gracefully to pure-only.
+  # ── image (CI/release aggregates) ──────────────────────────────────────
+  # For LOCAL development, use `cell build` — these tasks are for CI/release.
+  # After Modules 2.0, image:build = pure only. Impure remains opt-in for
+  # one release as image:impure:* and will be removed when nothing depends
+  # on it.
   image:build:
-    desc: Build both impure + pure images (host platform, no push)
+    desc: Build pure images (CI/release path). For local dev, use `cell build`.
     cmds:
-      - task: image:impure:build
       - task: image:pure:build
 
   image:push:
-    desc: Push both impure + pure images to registry
+    desc: Push pure images to registry (CI). Impure path is opt-in via image:impure:push.
     cmds:
-      - task: image:impure:push
       - task: image:pure:push
 
-  # ── image:impure (Dockerfile/bake — legacy, opt-in) ────────────────────
+  # ── image:impure (DEPRECATED Dockerfile/bake path) ─────────────────────
+  # Kept for one release for callers still on the legacy build path.
+  # Will be removed once Modules 2.0 is the only supported workflow.
+  # Do not use for new local development — use `cell build` instead.
   image:impure:build:
-    desc: Build all impure local images (base + ultimate)
+    desc: "[DEPRECATED] Build legacy impure images. Use `cell build` for local dev."
     cmds:
       - task: image:impure:build:base
       - task: image:impure:build:ultimate
 
   image:impure:build:base:
     aliases: [bake:local, image:build:base]    # back-compat
-    desc: Build local impure base image (host platform only, no push)
+    desc: "[DEPRECATED] Build legacy impure base image. Use `cell build` for local dev."
     silent: true
     cmds:
       - >-
@@ -159,7 +167,7 @@ tasks:
 
   image:impure:build:ultimate:
     aliases: [image:build:ultimate]            # back-compat
-    desc: Build local impure ultimate image (FROM base, adds nix ultimate stack + KiCad)
+    desc: "[DEPRECATED] Build legacy impure ultimate image. Use `cell build` for local dev."
     silent: true
     cmds:
       - >-
@@ -171,7 +179,7 @@ tasks:
 
   image:impure:push:
     aliases: [image:push:debian]               # back-compat (pre-rename name)
-    desc: Build + push impure ci group to registry with OCI manifest (fixes skopeo zstd/v2s2 — DIMM-212)
+    desc: "[DEPRECATED] Push legacy impure ci group. CI should publish pure images via image:pure:push."
     silent: true
     cmds:
       # oci-mediatypes=true: publish with OCI manifest so zstd-compressed
@@ -213,7 +221,7 @@ tasks:
       STACK: '{{.STACK | default "base"}}'
       # SUDO: empty in CI (Determinate Systems single-user nix on PATH) and on
       # the host (Determinate or upstream single-user). Override SUDO=sudo for
-      # devcell containers where DEVCELL_NIX_DAEMON=false (pre-DIMM-210 builds).
+      # devcell containers where DEVCELL_NIX_DAEMON=false (pre-CELL-72 builds).
       SUDO: '{{.SUDO | default ""}}'
       # NIX: defaults to "nix" on PATH. Override NIX=/full/path/to/nix when the
       # binary isn't on PATH (uncommon — devcell, CI, and host all expose nix).
@@ -255,7 +263,7 @@ tasks:
     silent: true
     vars:
       STACK:    '{{.STACK    | default "ultimate"}}'
-      REGISTRY: '{{.REGISTRY | default "ghcr.io/dimmkirr/devcell"}}'
+      REGISTRY: '{{.REGISTRY | default "ghcr.io/devcell-sh/devcell"}}'
       TAG:      '{{.TAG      | default (printf "v0.0.0-%s-pure" .STACK)}}'
       SUDO:     '{{.SUDO     | default ""}}'      # see image:pure:build:stack notes
       NIX:      '{{.NIX      | default "nix"}}'
@@ -344,3 +352,62 @@ tasks:
     cmds:
       - npm install
       - npm run dev
+
+
+  # ── Cache round-trip test (top-level user control) ─────────────────────
+  # Runs the local proxy for the GHCR nix-cache pipeline in
+  # build.dev.yml. All orchestration — registry lifecycle, fixture
+  # build, push, pull, verify, teardown — lives in
+  # test/cache_roundtrip_test.go (Go test idiom). This Taskfile entry
+  # is just the ergonomic top-level wrapper, matching test:unit /
+  # test:integration / test:vagrant.
+  test:cache:
+    desc: Round-trip nix-cache pipeline locally (~1 min, requires docker + crane)
+    cmds:
+      - go test -v -count=1 -run TestCacheRoundtrip ./test/...
+
+  # ── Nix-store GHCR cache pipeline ──────────────────────────────────────
+  # Stream the populated /nix volume to GHCR as a single-layer cache image.
+  # `cell nix-store push` uses pkg/v1/stream.NewLayer from go-containerregistry:
+  # stdin is gzipped lazily, the digest is computed incrementally, and the
+  # blob is uploaded via the OCI chunked-upload protocol — peak runner disk
+  # is the pipe buffer, not the volume size.
+  #
+  # Used by CI (build.dev.yml + build.release.yml) AND reproducible locally
+  # against a populated devcell-nix-store-<arch> volume.
+  nix-cache:publish:
+    desc: Publish the /nix Docker volume to GHCR as a nix-cache image
+    dir: "{{.TASKFILE_DIR}}"
+    requires:
+      vars: [ARCH, REGISTRY, IMAGE_NAME_LC, HASH]
+    vars:
+      STAGE: '{{.STAGE | default "publish"}}'
+      VOL: 'devcell-nix-store-{{.ARCH}}'
+      EXACT: '{{.REGISTRY}}/{{.IMAGE_NAME_LC}}:nix-cache-{{.ARCH}}-{{.HASH}}'
+      LATEST: '{{.REGISTRY}}/{{.IMAGE_NAME_LC}}:nix-cache-{{.ARCH}}-latest'
+      # gcr.io distroless static — ~2 MB, multi-arch manifest resolves
+      # automatically, generous anonymous pulls (no ECR-style rate limit).
+      BASE: 'gcr.io/distroless/static-debian12:latest'
+    cmds:
+      - |
+        set -eo pipefail
+        SIZE_KB=$(docker run --rm -v "{{.VOL}}:/nix:ro" alpine du -s /nix 2>/dev/null | awk '{print $1}')
+        if [ "${SIZE_KB:-0}" -lt 1000000 ]; then
+          echo "[{{.STAGE}}] skipping publish: /nix is only ${SIZE_KB}KB"
+          exit 0
+        fi
+        echo "[{{.STAGE}}] publishing /nix (${SIZE_KB}KB)"
+
+        docker run --rm -v "{{.VOL}}:/nix:ro" alpine \
+          tar -cf - \
+            --exclude='nix/var/nix/daemon-socket' \
+            -C / nix \
+          | ./bin/cell nix-store push \
+              --base "{{.BASE}}" \
+              --image "{{.LATEST}}"
+
+        docker buildx imagetools create --tag "{{.EXACT}}" "{{.LATEST}}"
+
+        echo "[{{.STAGE}}] pushed nix-cache images:"
+        echo "  {{.EXACT}}"
+        echo "  {{.LATEST}}"

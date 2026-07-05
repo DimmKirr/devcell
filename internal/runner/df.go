@@ -136,7 +136,7 @@ type FormatOpts struct {
 
 // FormatTable renders the ranked entries as a human-readable table with a
 // totals footer and bottom reclaim hint. Mirrors the layout shown in the
-// `cell build df` design (DIMM-221).
+// `cell build df` design (CELL-98).
 func FormatTable(snap DFSnapshot, opts FormatOpts, w io.Writer) error {
 	entries := selectEntries(snap, opts)
 
@@ -161,6 +161,64 @@ func FormatTable(snap DFSnapshot, opts FormatOpts, w io.Writer) error {
 	if hint := bottomHint(snap); hint != "" {
 		fmt.Fprintln(w, "Hint:   "+hint)
 	}
+	return nil
+}
+
+// FormatTableWithVM renders the ranked entries table plus Docker VM disk info,
+// running containers, volume-to-container mapping, and cleanup instructions.
+func FormatTableWithVM(snap DFSnapshot, opts FormatOpts, vm VMDiskInfo, containers []string, volMounts map[string][]string, w io.Writer) error {
+	// VM disk header
+	if vm.TotalBytes > 0 {
+		fmt.Fprintf(w, "Docker VM disk: %s total, %s used, %s available\n\n",
+			HumanBytes(vm.TotalBytes), HumanBytes(vm.UsedBytes), HumanBytes(vm.AvailBytes))
+	}
+
+	// Enrich volume labels with mount info
+	if len(volMounts) > 0 {
+		for i, v := range snap.Volumes {
+			if users, ok := volMounts[v.Name]; ok {
+				snap.Volumes[i].Name = v.Name // keep name for ID column
+				// Label will be picked up by describeEntry via RankedEntry
+				_ = users // used below in the volume section
+			}
+		}
+	}
+
+	// Main table
+	if err := FormatTable(snap, opts, w); err != nil {
+		return err
+	}
+
+	// Volume → container mapping
+	if len(volMounts) > 0 {
+		hasAny := false
+		for _, v := range snap.Volumes {
+			if users, ok := volMounts[v.Name]; ok && len(users) > 0 {
+				if !hasAny {
+					fmt.Fprintln(w)
+					fmt.Fprintln(w, "Volume mounts:")
+					hasAny = true
+				}
+				fmt.Fprintf(w, "  %s → %s\n", v.Name, strings.Join(users, ", "))
+			}
+		}
+	}
+
+	// Running containers
+	if len(containers) > 0 {
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "Running containers (block prune):")
+		for _, c := range containers {
+			fmt.Fprintf(w, "  %s\n", c)
+		}
+	}
+
+	// Cleanup instructions
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "To free space:")
+	fmt.Fprintln(w, "  1. Stop unused containers:  docker stop <name>")
+	fmt.Fprintln(w, "  2. Prune everything:         docker system prune -a --volumes -f")
+	fmt.Fprintln(w, "  3. Or increase VM disk:      Docker Desktop → Settings → Resources → Virtual disk limit")
 	return nil
 }
 
@@ -374,12 +432,12 @@ func bottomHint(snap DFSnapshot) string {
 	)
 }
 
-// `cell build df` — read-only ranked view of Docker disk usage (DIMM-221).
+// `cell build df` — read-only ranked view of Docker disk usage (CELL-98).
 //
 // Pure parsers + ranking + formatters live here. The cobra wiring
 // (cmd/build_df.go) shells out via DFCollector to docker once, hands the
 // JSON to ParseSystemDF, ranks it, and prints. Mirrors the runner/cmd
-// split established by `cell build prune` (DIMM-200).
+// split established by `cell build prune` (CELL-101).
 
 // DFSnapshot is the typed shape of `docker system df -v --format json`.
 // All numeric fields arrive from docker as strings ("29.8GB", "3", "N/A")

@@ -1,5 +1,6 @@
 # qa-tools.nix — QA and testing MCP tools
-{pkgs, config, ...}: let
+{pkgs, config, lib, ...}: let
+  cfg = config.devcell.modules.qa-tools;
   bin = config.devcell.managedMcp.nixBinPrefix;
   py = pkgs.python312Packages;
 
@@ -46,14 +47,29 @@
     doCheck = false;
   };
 in {
-  home.packages = [
-    mailslurpMcp # MailSlurp email testing MCP (use: mailslurp-mcp)
-  ];
+  options.devcell.modules.qa-tools = {
+    enable = lib.mkEnableOption "MailSlurp email testing MCP";
+    meta = lib.mkOption {
+      type = lib.types.attrs;
+      readOnly = true;
+      default = {
+        description = "MailSlurp — create inboxes, read/list/clear emails programmatically for QA";
+        mcpServers = [ "mailslurp" ];
+        sizeMb = 60;
+      };
+    };
+  };
 
-  # MailSlurp — 6 tools: create_inbox, find_inbox, get_or_create_inbox, read_email, list_emails, clear_inbox.
-  # Requires MAILSLURP_API_KEY env var at runtime.
-  devcell.managedMcp.servers."mailslurp" = {
-    command = "${bin}/mailslurp-mcp";
-    args = [];
+  config = lib.mkIf cfg.enable {
+    home.packages = [
+      mailslurpMcp # MailSlurp email testing MCP (use: mailslurp-mcp)
+    ];
+
+    # MailSlurp — 6 tools: create_inbox, find_inbox, get_or_create_inbox, read_email, list_emails, clear_inbox.
+    # Requires MAILSLURP_API_KEY env var at runtime.
+    devcell.managedMcp.servers."mailslurp" = {
+      command = "${bin}/mailslurp-mcp";
+      args = [];
+    };
   };
 }

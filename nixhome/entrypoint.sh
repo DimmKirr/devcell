@@ -26,6 +26,22 @@ fi
 
 log "Entrypoint start (user=$HOST_USER app=${APP_NAME:-})"
 
+# CELL-264: minimal inline notify so we can emit progress BEFORE 00-notify.sh
+# is sourced. Same shape as the full helper — just touch a sentinel file in
+# the bind-mounted boot dir. The full notify() function (with sanity checks)
+# is defined when 00-notify.sh is sourced below, but for the bootstrap rows
+# we need it available immediately. Idempotent — same definition is OK.
+notify() {
+    [ -n "$DEVCELL_BOOT_DIR" ] && [ -d "$DEVCELL_BOOT_DIR" ] || return 0
+    touch "$DEVCELL_BOOT_DIR/$1" 2>/dev/null || true
+}
+
+# First visible signal: container is running entrypoint. Fills the gap between
+# the host's "Cell ready" and the first fragment-emitted row — accounts for
+# Docker's container creation (~200-1000ms on Docker Desktop) + entrypoint
+# bootstrap (user creation, dotfile copy, etc.).
+notify container.ready
+
 # Read build metadata. /etc/devcell/metadata.json holds STATIC info (stack,
 # package count) that's stable across rebuilds. Per-build provenance (date,
 # git rev) comes from the runner-injected DEVCELL_BUILD_DATE / DEVCELL_BUILD_REV
@@ -97,6 +113,10 @@ if [ -d "$HOME" ]; then
     done
 fi
 
+# Second visible signal: pre-fragment bootstrap done (user/dotfiles/GPG/etc.
+# are wired up). The fragment loop is about to start running real work.
+notify entrypoint.ready
+
 # ── Source entrypoint fragments (nix-generated) ──────────────────────────────
 # Modules drop shell scripts into /etc/devcell/entrypoint.d/ via home-manager.
 # Each fragment guards its own preconditions (e.g. DEVCELL_GUI_ENABLED).
@@ -119,5 +139,10 @@ fi
 find "$HOME" -maxdepth 2 -user root -not -path "*/tmp/*" -exec chown "$HOST_USER" {} + 2>/dev/null || true
 
 log "Entrypoint ready — exec $*"
+
+# CELL-263: signal host that boot is complete — sealing handoff. notify is
+# defined by /etc/devcell/entrypoint.d/00-notify.sh which is the first
+# fragment sourced above; harmless no-op when NOTIFY_SOCKET is unset.
+command -v notify >/dev/null 2>&1 && notify boot.ready
 
 exec gosu "$USER" "$@"

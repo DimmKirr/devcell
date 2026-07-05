@@ -72,3 +72,53 @@ func TestPickSkopeoBin_EmptyInputIsError(t *testing.T) {
 		t.Error("expected error on whitespace-only input")
 	}
 }
+
+// ── Thin image build ────────────────────────────────────────────────────
+
+func TestPureBuildArgv_ThinImage(t *testing.T) {
+	spec := PureBuildSpec{
+		FlakeRef:  "path:/tmp/nixhome",
+		StackName: "ultimate",
+		Arch:      "aarch64-linux",
+		OutLink:   "/tmp/result-ultimate-thin",
+		Thin:      true,
+	}
+	argv := PureBuildArgv(spec)
+	var flakeRef string
+	for _, a := range argv {
+		if a != "nix" && a != "build" && !startsWith(a, "--") && a != "nix-command flakes" {
+			flakeRef = a
+			break
+		}
+	}
+	want := "path:/tmp/nixhome#packages.aarch64-linux.devcell-ultimate-thin-image"
+	if flakeRef != want {
+		t.Errorf("flake ref mismatch\n  got:  %s\n  want: %s", flakeRef, want)
+	}
+}
+
+func TestPureBuildArgv_NonThinImage(t *testing.T) {
+	spec := PureBuildSpec{
+		FlakeRef:  "path:/tmp/nixhome",
+		StackName: "ultimate",
+		Arch:      "aarch64-linux",
+		OutLink:   "/tmp/result-ultimate-pure",
+		Thin:      false,
+	}
+	argv := PureBuildArgv(spec)
+	var flakeRef string
+	for _, a := range argv {
+		if a != "nix" && a != "build" && !startsWith(a, "--") && a != "nix-command flakes" {
+			flakeRef = a
+			break
+		}
+	}
+	want := "path:/tmp/nixhome#packages.aarch64-linux.devcell-ultimate-pure-image"
+	if flakeRef != want {
+		t.Errorf("flake ref mismatch\n  got:  %s\n  want: %s", flakeRef, want)
+	}
+}
+
+func startsWith(s, prefix string) bool {
+	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
+}

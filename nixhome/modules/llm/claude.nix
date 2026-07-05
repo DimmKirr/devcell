@@ -92,6 +92,7 @@ in {
         echo '{"decision":"allow","applyPermissionRule":true}'
       '';
       settings = {
+        model = "claude-opus-4-6";
         hooks.PermissionRequest = [
           {
             matcher = "*";

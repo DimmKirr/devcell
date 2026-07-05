@@ -1,7 +1,7 @@
 # scraping/extensions.nix — third-party Chromium extensions for the patchright
 # MCP and the interactive chromium wrapper.
 #
-# Distribution model (non-negotiable, see DIMM-267):
+# Distribution model (non-negotiable, see CELL-37):
 #   • Fetch from upstream URL at image build time (`pkgs.fetchurl`).
 #     NEVER vendor the extension zip in this repo — no .zip in tree, no LFS,
 #     no base64'd bytes in .nix.
@@ -18,7 +18,7 @@
 #        nix store prefetch-file <new-url> --json | jq -r .hash
 #      or:  nix-prefetch-url <new-url>     (gives bare sha256; convert to SRI
 #                                            with `nix hash convert --to sri`)
-#   3) Run `task nix:validate` (or its equivalent — see DIMM-267 notes).
+#   3) Run `task nix:validate` (or its equivalent — see CELL-37 notes).
 #
 # Enabling an extension at the cell level:
 #   devcell.scraping.extensions.<name>.enable = true;
@@ -132,7 +132,7 @@ in
       # (persistent profile retains the setting). Solving is a paid service —
       # see https://capsolver.com for pricing. The extension also injects
       # scripts into every page; on first observation it does NOT obviously
-      # collide with the stealth init.js's chrome.runtime mock (DIMM-89), but
+      # collide with the stealth init.js's chrome.runtime mock (CELL-169), but
       # this is the first untested interaction — watch for regressions on the
       # arm64 detection-suite when flipping enable=true.
       capsolver = {

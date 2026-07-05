@@ -206,7 +206,7 @@ func vncDefault() error {
 	if err != nil {
 		return err
 	}
-	vncDebug("basedir: %s  cellID: %s  vncPort: %s", c.BaseDir, c.CellID, c.VNCPort)
+	vncDebug("basedir: %s  bunk: %s  vncPort: %s", c.BaseDir, c.Bunk, c.VNCPort)
 
 	cells := collectVNCCells(c, vncGlobal)
 	var dockerCount, vagrantCount int

@@ -31,7 +31,7 @@ func TestEngineVagrant_DryRunPrintsArgv(t *testing.T) {
 	home := vagrantHome(t)
 	cmd := exec.Command(binaryPath, "--engine=vagrant", "shell", "--dry-run")
 	cmd.Dir = home
-	cmd.Env = append(os.Environ(), "CELL_ID=1", "HOME="+home)
+	cmd.Env = append(os.Environ(), "DEVCELL_BUNK=1", "HOME="+home)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("expected exit 0, got: %v\noutput: %s", err, out)
@@ -56,7 +56,7 @@ func TestEngineMacos_AliasForVagrant(t *testing.T) {
 	home := vagrantHome(t)
 	cmd := exec.Command(binaryPath, "--macos", "shell", "--dry-run")
 	cmd.Dir = home
-	cmd.Env = append(os.Environ(), "CELL_ID=1", "HOME="+home)
+	cmd.Env = append(os.Environ(), "DEVCELL_BUNK=1", "HOME="+home)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("expected exit 0 for --macos, got: %v\noutput: %s", err, out)
@@ -74,7 +74,7 @@ func TestEngineVagrant_ScaffoldsLinuxVagrantfile(t *testing.T) {
 
 	cmd := exec.Command(binaryPath, "--engine=vagrant", "shell", "--dry-run")
 	cmd.Dir = home
-	cmd.Env = append(os.Environ(), "CELL_ID=1", "HOME="+home)
+	cmd.Env = append(os.Environ(), "DEVCELL_BUNK=1", "HOME="+home)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("expected exit 0, got: %v\noutput: %s", err, out)
 	}
@@ -91,7 +91,7 @@ func TestEngineVagrant_VagrantfileContainsLinuxProvisioner(t *testing.T) {
 
 	cmd := exec.Command(binaryPath, "--engine=vagrant", "shell", "--dry-run")
 	cmd.Dir = home
-	cmd.Env = append(os.Environ(), "CELL_ID=1", "HOME="+home)
+	cmd.Env = append(os.Environ(), "DEVCELL_BUNK=1", "HOME="+home)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("expected exit 0, got: %v\noutput: %s", err, out)
 	}
@@ -116,7 +116,7 @@ func TestEngineVagrant_BoxNameSubstituted(t *testing.T) {
 
 	cmd := exec.Command(binaryPath, "--engine=vagrant", "--vagrant-box=my-test-box", "shell", "--dry-run")
 	cmd.Dir = home
-	cmd.Env = append(os.Environ(), "CELL_ID=1", "HOME="+home)
+	cmd.Env = append(os.Environ(), "DEVCELL_BUNK=1", "HOME="+home)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("expected exit 0, got: %v\noutput: %s", err, out)
 	}
@@ -138,7 +138,7 @@ func TestEngineVagrant_DryRunContainsVagrantDir(t *testing.T) {
 
 	cmd := exec.Command(binaryPath, "--engine=vagrant", "shell", "--dry-run")
 	cmd.Dir = home
-	cmd.Env = append(os.Environ(), "CELL_ID=1", "HOME="+home)
+	cmd.Env = append(os.Environ(), "DEVCELL_BUNK=1", "HOME="+home)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("expected exit 0, got: %v\noutput: %s", err, out)

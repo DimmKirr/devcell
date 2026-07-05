@@ -290,8 +290,8 @@ func TestEnv_WritePaths(t *testing.T) {
 }
 
 // TestEnv_BasePermissions -- /opt/devcell directories must be owned by devcell (uid 1000).
-// /opt/npm-tools and /opt/python-tools were removed when patchright-mcp (DIMM-94)
-// and codex (DIMM-96) moved to nix; neither variant creates them anymore, so they're
+// /opt/npm-tools and /opt/python-tools were removed when patchright-mcp (CELL-140)
+// and codex (CELL-136) moved to nix; neither variant creates them anymore, so they're
 // no longer part of the contract.
 func TestEnv_BasePermissions(t *testing.T) {
 	c := startEnvContainer(t)
@@ -320,7 +320,7 @@ func TestEnv_BasePermissions(t *testing.T) {
 }
 
 // TestEnv_ImageVersionStamps -- build metadata must be discoverable from
-// /etc/devcell/metadata.json (the canonical source per DIMM-84). Legacy
+// /etc/devcell/metadata.json (the canonical source per CELL-139). Legacy
 // /etc/devcell/{base,user}-image-version files are no longer the contract:
 // base-image-version is impure-only (written by images/Dockerfile but absent
 // on pure images), and user-image-version was never written by any build path
@@ -616,6 +616,72 @@ func TestMise_NonInteractiveShell(t *testing.T) {
 		t.Errorf("FAIL: node not accessible in non-interactive shell (exit %d): %s", code, out)
 	} else {
 		t.Logf("PASS: node accessible: %s", out)
+	}
+}
+
+// TestThinRuntime_NodeIsMiseShim verifies node resolves to a mise shim path,
+// not a nix profile binary. Thin mode bakes shims at /opt/devcell/.local/share/mise/shims/.
+func TestThinRuntime_NodeIsMiseShim(t *testing.T) {
+	if !isThinVariant() {
+		t.Skip("thin variant only")
+	}
+	c := startContainer(t, map[string]string{
+		"APP_NAME":  "test",
+		"HOST_USER": hostUser,
+	})
+
+	shimPath, code := exec(t, c, []string{"sh", "-c", "which node"})
+	if code != 0 {
+		t.Fatalf("node not found on PATH: %s", shimPath)
+	}
+	shimPath = strings.TrimSpace(shimPath)
+	if !strings.Contains(shimPath, "mise/shims") {
+		t.Errorf("node should be a mise shim, got: %s", shimPath)
+	}
+	t.Logf("node shim at: %s", shimPath)
+}
+
+// TestThinRuntime_NodeVersion verifies node --version matches the declared
+// mise config version (24.13.1 from nixhome/modules/node.nix).
+func TestThinRuntime_NodeVersion(t *testing.T) {
+	if !isThinVariant() {
+		t.Skip("thin variant only")
+	}
+	c := startContainer(t, map[string]string{
+		"APP_NAME":  "test",
+		"HOST_USER": hostUser,
+	})
+
+	out, code := exec(t, c, []string{"sh", "-c", "node --version"})
+	if code != 0 {
+		t.Fatalf("node --version failed (exit %d): %s", code, out)
+	}
+	version := strings.TrimSpace(out)
+	if !strings.HasPrefix(version, "v24.") {
+		t.Errorf("node version should be v24.x (from mise config), got: %s", version)
+	}
+	t.Logf("node version: %s", version)
+}
+
+// TestThinRuntime_AllDeclaredTools verifies all mise-declared tools are installed
+// (no "(missing)" in mise ls output).
+func TestThinRuntime_AllDeclaredTools(t *testing.T) {
+	if !isThinVariant() {
+		t.Skip("thin variant only")
+	}
+	c := startContainer(t, map[string]string{
+		"APP_NAME":  "test",
+		"HOST_USER": hostUser,
+	})
+
+	out, code := exec(t, c, []string{"sh", "-c", "mise ls 2>&1"})
+	if code != 0 {
+		t.Fatalf("mise ls failed (exit %d): %s", code, out)
+	}
+	if strings.Contains(out, "(missing)") {
+		t.Errorf("some mise tools are missing:\n%s", out)
+	} else {
+		t.Logf("all mise tools installed:\n%s", out)
 	}
 }
 

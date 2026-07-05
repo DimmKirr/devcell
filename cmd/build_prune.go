@@ -14,7 +14,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// `cell build prune` — standalone cleanup subcommand. See DIMM-200.
+// `cell build prune` — standalone cleanup subcommand. See CELL-101.
 //
 // Default mode: prune the Docker daemon (containers, images, volumes, BuildKit
 // cache). `--pure` switches the target to the nix store (linux-builder VM on
@@ -23,10 +23,10 @@ import (
 // macOS dry-run only; aggressive GC on Linux). `-y` / `--yes` skips the
 // confirmation prompt.
 //
-// NOTE: `--pure` here means "target the nix store" (DIMM-200) and is
+// NOTE: `--pure` here means "target the nix store" (CELL-101) and is
 // UNRELATED to `--pure` on agent commands (`cell claude --pure`, etc.) which
-// is a silent no-op after DIMM-204. Both flags coexist in the cell CLI and
-// the prune meaning is preserved for now. See DIMM-202 chain for the agent
+// is a silent no-op after CELL-183. Both flags coexist in the cell CLI and
+// the prune meaning is preserved for now. See CELL-189 chain for the agent
 // flip context.
 var pruneCmd = &cobra.Command{
 	Use:   "prune",

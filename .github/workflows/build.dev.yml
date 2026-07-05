@@ -26,37 +26,46 @@ permissions:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
-  NIX_CACHE_IMAGE: ${{ inputs.skip_nix_cache == true && 'public.ecr.aws/docker/library/debian:trixie-slim' || 'ghcr.io/dimmkirr/devcell:v0.0.0-ultimate' }}
-  ECR_REGISTRY: public.ecr.aws/w1l3v2k8/devcell
 
 jobs:
   secrets:
     name: Detect Secrets
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # gitleaks CLI directly — bypasses gitleaks-action's org-license
+      # requirement (the license gate lives in the action wrapper, not the
+      # scanner). `detect` exits 1 if leaks are found.
+      - name: Run gitleaks
+        run: |
+          docker run --rm -v "$PWD:/repo" -w /repo \
+            ghcr.io/gitleaks/gitleaks:latest \
+            detect --source=. --verbose --redact
 
   docker-build:
     name: Docker Build (${{ matrix.arch }})
     needs: secrets
     strategy:
       fail-fast: false
+      # Serialize amd64 + arm64 to avoid stressing GHCR + cache.nixos.org
+      # with two concurrent multi-GB push/pull pipelines from the same
+      # repo. Doubles wall-clock; halves peak network pressure.
+      max-parallel: 1
       matrix:
         include:
-          - runner: ubuntu-latest
-            arch: amd64
-            platform: linux/amd64
-          - runner: ubuntu-24.04-arm
+          # amd64 temporarily disabled while we debug the post-base
+          # cache-publish hang on arm64. Re-enable once arm64 is healthy.
+          # - runner: ubuntu-latest
+          #   arch: amd64
+          #   platform: linux/amd64
+          - runner: blacksmith-4vcpu-ubuntu-2404-arm
             arch: arm64
             platform: linux/arm64
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set lowercase image name
         run: echo "IMAGE_NAME_LC=${IMAGE_NAME,,}" >> $GITHUB_ENV
@@ -68,12 +77,8 @@ jobs:
           df -h
 
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-        with:
-          buildkitd-config-inline: |
-            [worker.oci]
-              max-parallelism = 4
+      - name: Setup Blacksmith Builder
+        uses: useblacksmith/setup-docker-builder@v1
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
@@ -82,78 +87,141 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+      - name: Set up Go
+        uses: actions/setup-go@v6
         with:
-          role-to-assume: ${{ secrets.AWS_ECR_ROLE_ARN }}
-          aws-region: us-east-1
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
 
-      - name: Log in to ECR Public
-        uses: aws-actions/amazon-ecr-login@v2
+      - name: Install go-task
+        uses: arduino/setup-task@v2
         with:
-          registry-type: public
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Pre-pull nix-cache as OCI layout
+      # task cell:build = swagger:generate → CGO_ENABLED=0 go build with ldflags
+      # for GitCommit + BuildDate. Single source of truth shared with local dev
+      # (`task cell:build` works the same on a developer machine).
+      - name: Build cell binary
+        run: task cell:build
+
+      # Cache push/pull goes through `cell nix-store {push,pull}` — a
+      # cell subcommand using `pkg/v1/stream.NewLayer` from
+      # go-containerregistry. Layer is streamed (no temp file) and
+      # always single-gzipped on the wire — see CELL-293.
+
+      # Cache the nix-store as a GHCR image. Lives in the SAME
+      # `devcell-sh/devcell` GHCR package as the runtime images, with tag
+      # prefix `nix-cache-` so it doesn't collide with stack tags.
+      - name: Stream-hydrate /nix volume from prior GHCR cache (if available)
         if: inputs.skip_nix_cache != true
         run: |
-          skopeo copy --src-tls-verify=true \
-            docker://${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:v0.0.0-ultimate \
-            oci:/tmp/nix-cache-oci:latest
-          echo "NIX_CACHE_OCI=/tmp/nix-cache-oci" >> "$GITHUB_ENV"
-
-      - name: Build and push ci group (GHCR)
-        run: >-
-          docker buildx bake
-          --set '*.output=type=image,push=true,oci-mediatypes=true,compression=zstd,compression-level=3,force-compression=true'
-          ${{ env.NIX_CACHE_OCI && format('--set ultimate.contexts.nix-cache=oci-layout://{0}', env.NIX_CACHE_OCI) || '' }}
-          ci
-        env:
-          VERSION: v0.0.0-${{ matrix.arch }}
-          PLATFORMS: ${{ matrix.platform }}
-          REGISTRY: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}
-          CACHE_ARCH: -${{ matrix.arch }}
-
-      - name: Push to ECR Public
-        run: |
-          GHCR=${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}
-          ECR=${{ env.ECR_REGISTRY }}
-          V=v0.0.0-${{ matrix.arch }}
-          for suffix in "" "-core" "-ultimate"; do
-            SRC="${GHCR}:${V}${suffix}"
-            DST="${ECR}:${V}${suffix}"
-            docker buildx imagetools create -t "${DST}" "${SRC}"
+          set -eo pipefail
+          HASH=${{ hashFiles('nixhome/**') }}
+          EXACT="${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:nix-cache-${{ matrix.arch }}-${HASH}"
+          LATEST="${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:nix-cache-${{ matrix.arch }}-latest"
+          # Pick the first candidate that resolves a manifest. `cell
+          # nix-store pull` itself fails cleanly on a missing/poisoned
+          # cache, and the workflow falls back to MISS — no upfront
+          # size probe needed.
+          IMG=""
+          for c in "$EXACT" "$LATEST"; do
+            if docker manifest inspect "$c" >/dev/null 2>&1; then
+              IMG="$c"
+              break
+            fi
           done
+          if [ -z "$IMG" ]; then
+            echo "cache MISS — starting from empty volume"
+            exit 0
+          fi
+          echo "cache HIT: $IMG"
+          # `cell nix-store pull` streams $IMG's last layer directly
+          # into the named docker volume (internal gunzip + tar -x).
+          # On failure, fall back to MISS — the next publish overwrites
+          # the cache with the current encoding.
+          docker volume rm devcell-nix-store-${{ matrix.arch }} 2>/dev/null || true
+          docker volume create devcell-nix-store-${{ matrix.arch }} >/dev/null
+          if ./bin/cell nix-store pull \
+               --image "$IMG" \
+               --volume "devcell-nix-store-${{ matrix.arch }}"; then
+            docker run --rm -v devcell-nix-store-${{ matrix.arch }}:/nix:ro alpine \
+              sh -c 'echo "hydrated $(du -sh /nix | cut -f1)"'
+          else
+            echo "WARN: cache pull failed (likely encoding mismatch with legacy cache image)"
+            echo "      falling back to MISS — will rebuild and publish a fresh cache"
+            docker volume rm devcell-nix-store-${{ matrix.arch }} 2>/dev/null || true
+            docker volume create devcell-nix-store-${{ matrix.arch }} >/dev/null
+          fi
+
+      # Build both stacks sequentially in the same job so the nix-store
+      # volume accumulates derivations from both — single tar dump at job
+      # end carries everything needed by docker-test. `cell build --thin`
+      # reuses store paths across the two invocations (nix is
+      # content-addressed), so ultimate after base is incremental.
+      - name: Build thin image (base stack)
+        env:
+          DEVCELL_NIX_VOLUME: devcell-nix-store-${{ matrix.arch }}
+          DEVCELL_NIXHOME_PATH: ${{ github.workspace }}/nixhome
+        run: |
+          BASE_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:v0.0.0-${{ matrix.arch }}-base"
+          ./bin/cell build --thin --stack base --image "$BASE_TAG" --debug
+          echo "BASE_TAG=$BASE_TAG" >> "$GITHUB_ENV"
+
+      # Interim publish: lock in the base-stack derivations as a usable
+      # cache. If the ultimate build below fails catastrophically (OOM,
+      # runner kill, CDN flake), the next run still hydrates the base
+      # cache and skips re-deriving everything in base. Same semantics
+      # as the final publish — runs on prior-step failure, skipped when
+      # cache-bust mode is on or volume is empty.
+      - name: Publish nix cache (post-base, interim)
+        if: ${{ !cancelled() && inputs.skip_nix_cache != true }}
+        env:
+          ARCH: ${{ matrix.arch }}
+          HASH: ${{ hashFiles('nixhome/**') }}
+          STAGE: post-base
+        run: task nix-cache:publish
+
+      - name: Build thin image (ultimate stack)
+        env:
+          DEVCELL_NIX_VOLUME: devcell-nix-store-${{ matrix.arch }}
+          DEVCELL_NIXHOME_PATH: ${{ github.workspace }}/nixhome
+        run: |
+          ULT_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:v0.0.0-${{ matrix.arch }}-ultimate"
+          ./bin/cell build --thin --stack ultimate --image "$ULT_TAG" --debug
+          echo "ULT_TAG=$ULT_TAG" >> "$GITHUB_ENV"
+
+      - name: Push to GHCR (both stacks)
+        run: |
+          docker push "$BASE_TAG"
+          docker push "$ULT_TAG"
+
+      # Final publish: re-pushes after ultimate also lands derivations
+      # into /nix. Overwrites the interim post-base cache with the
+      # fuller closure. Idempotent — same composite action as above.
+      - name: Publish nix cache (post-ultimate, final)
+        if: ${{ !cancelled() && inputs.skip_nix_cache != true }}
+        env:
+          ARCH: ${{ matrix.arch }}
+          HASH: ${{ hashFiles('nixhome/**') }}
+          STAGE: post-ultimate
+        run: task nix-cache:publish
 
   docker-test:
-    name: Docker Test (${{ matrix.arch }}, ${{ matrix.variant }})
+    name: Docker Test (${{ matrix.arch }})
     needs: docker-build
     strategy:
       fail-fast: false
       matrix:
         include:
-          - runner: ubuntu-latest
-            arch: amd64
-            variant: base
-            test_run: "TestBaseImage|TestDotenv"
-            timeout: 600s
-          - runner: ubuntu-24.04-arm
+          # amd64 disabled in step with docker-build above.
+          # - runner: ubuntu-latest
+          #   arch: amd64
+          - runner: blacksmith-4vcpu-ubuntu-2404-arm
             arch: arm64
-            variant: base
-            test_run: "TestBaseImage|TestDotenv"
-            timeout: 600s
-          - runner: ubuntu-latest
-            arch: amd64
-            variant: ultimate
-            test_run: ""
-            timeout: 1200s
-          - runner: ubuntu-24.04-arm
-            arch: arm64
-            variant: ultimate
-            test_run: ""
-            timeout: 1200s
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set lowercase image name
         run: echo "IMAGE_NAME_LC=${IMAGE_NAME,,}" >> $GITHUB_ENV
@@ -166,37 +234,93 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
-      - name: Pull test images
+      - name: Install go-task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Build cell so we can use `cell nix-store pull` below — same
+      # binary docker-build's publish step uses, so any encoding
+      # divergence between push and pull is structurally impossible.
+      - name: Build cell binary
+        run: task cell:build
+
+      # Stream-pull the nix-store cache image's last layer into the
+      # per-arch volume via `cell nix-store pull` — same binary the
+      # publish step in docker-build uses, so push/pull encoding
+      # divergence is impossible by construction.
+      - name: Stream-pull /nix cache from GHCR into volume
         run: |
-          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:v0.0.0-${{ matrix.arch }}-${{ matrix.variant }}
-          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:v0.0.0-${{ matrix.arch }}-core
+          set -eo pipefail
+          HASH=${{ hashFiles('nixhome/**') }}
+          EXACT="${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:nix-cache-${{ matrix.arch }}-${HASH}"
+          LATEST="${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:nix-cache-${{ matrix.arch }}-latest"
+          # Pick the first candidate that resolves a manifest. cell
+          # nix-store pull fails cleanly on a missing cache, and the
+          # workflow falls back to MISS — no upfront probe needed.
+          IMG=""
+          for c in "$EXACT" "$LATEST"; do
+            if docker manifest inspect "$c" >/dev/null 2>&1; then
+              IMG="$c"
+              break
+            fi
+          done
+          if [ -z "$IMG" ]; then
+            echo "cache MISS — tests will run on empty /nix volume (lazy build during cell shell)"
+            exit 0
+          fi
+          echo "cache HIT: $IMG"
+          # If pull fails, tests fall back to an empty volume (lazy
+          # build during cell shell).
+          docker volume rm devcell-nix-store-${{ matrix.arch }} 2>/dev/null || true
+          docker volume create devcell-nix-store-${{ matrix.arch }} >/dev/null
+          if ! ./bin/cell nix-store pull \
+                 --image "$IMG" \
+                 --volume "devcell-nix-store-${{ matrix.arch }}"; then
+            echo "WARN: cache pull failed — tests will run on empty /nix"
+            docker volume rm devcell-nix-store-${{ matrix.arch }} 2>/dev/null || true
+            docker volume create devcell-nix-store-${{ matrix.arch }} >/dev/null
+          fi
+
+      - name: Pull test images (base + ultimate)
+        run: |
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:v0.0.0-${{ matrix.arch }}-base
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:v0.0.0-${{ matrix.arch }}-ultimate
 
       - name: Run container tests
+        # Both `DEVCELL_USER_IMAGE` and `DEVCELL_TEST_IMAGE` point at the
+        # ultimate image (every module + tool baked in) so module-aware tests
+        # (kicad, plex, gui) find what they need. `DEVCELL_TEST_BASE_IMAGE`
+        # points at the smaller base image for entrypoint-only tests
+        # (TestEntrypoint_DebugTimestamps etc.). Setting `DEVCELL_USER_IMAGE`
+        # without `DEVCELL_USER_IMAGE_THIN` works because UserImageTagThin()
+        # falls back to DEVCELL_USER_IMAGE as-is (no `-thin` suffix appended)
+        # per CELL-286 prep.
+        # `DEVCELL_NIX_VOLUME` points cell at the per-arch volume we just
+        # hydrated from the GHCR cache, so `cell shell` / `cell claude` skip
+        # the lazy-build path entirely instead of falling back to the
+        # default-named volume (which would be empty).
         env:
-          DEVCELL_TEST_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:v0.0.0-${{ matrix.arch }}-${{ matrix.variant }}
-          DEVCELL_BASE_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:v0.0.0-${{ matrix.arch }}-core
-          DEVCELL_TEST_BASE_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:v0.0.0-${{ matrix.arch }}-core
-          DEVCELL_USER_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:v0.0.0-${{ matrix.arch }}-${{ matrix.variant }}
+          DEVCELL_NIX_VOLUME: devcell-nix-store-${{ matrix.arch }}
+          DEVCELL_TEST_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:v0.0.0-${{ matrix.arch }}-ultimate
+          DEVCELL_USER_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:v0.0.0-${{ matrix.arch }}-ultimate
+          DEVCELL_TEST_BASE_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:v0.0.0-${{ matrix.arch }}-base
           DEVCELL_TEST_PROJECT_DIR: ${{ runner.temp }}/devcell-test
           MCP_SECRET_TEST_PASSWORD: fake-secret-ci-value
           MCP_SECRET_GITHUB_TOKEN: fake-token-ci-value
-        run: |
-          if [ -n "${{ matrix.test_run }}" ]; then
-            go test -v -run "${{ matrix.test_run }}" -timeout ${{ matrix.timeout }} ./test/...
-          else
-            go test -v -timeout ${{ matrix.timeout }} ./test/...
-          fi
+        run: go test -v -timeout 1200s ./test/...
 
   docker-manifest:
     name: Docker Manifests
     needs: [docker-build]
     if: always() && needs.docker-build.result == 'success'
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - name: Set lowercase image name
         run: echo "IMAGE_NAME_LC=${IMAGE_NAME,,}" >> $GITHUB_ENV
@@ -210,204 +334,36 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_ECR_ROLE_ARN }}
-          aws-region: us-east-1
-
-      - name: Log in to ECR Public
-        uses: aws-actions/amazon-ecr-login@v2
-        with:
-          registry-type: public
-
-      - name: Create GHCR manifests
+      - name: Create GHCR manifests (per stack + ultimate as canonical)
         run: |
           R=${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}
-          for suffix in "" "-core" "-ultimate"; do
-            docker buildx imagetools create \
-              -t "${R}:dev${suffix}" \
-              -t "${R}:latest${suffix}" \
-              -t "${R}:v0.0.0${suffix}" \
-              "${R}:v0.0.0-amd64${suffix}" \
-              "${R}:v0.0.0-arm64${suffix}"
-          done
-
-      - name: Create ECR Public manifests
-        run: |
-          ECR=${{ env.ECR_REGISTRY }}
-          for suffix in "" "-core" "-ultimate"; do
-            docker buildx imagetools create \
-              -t "${ECR}:dev${suffix}" \
-              -t "${ECR}:latest${suffix}" \
-              -t "${ECR}:v0.0.0${suffix}" \
-              "${ECR}:v0.0.0-amd64${suffix}" \
-              "${ECR}:v0.0.0-arm64${suffix}"
-          done
-
-  pure-build:
-    name: Pure Image (${{ matrix.arch }}, ${{ matrix.stack }})
-    needs: secrets
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { runner: ubuntu-latest,    arch: amd64, stack: base }
-          - { runner: ubuntu-latest,    arch: amd64, stack: ultimate }
-          - { runner: ubuntu-24.04-arm, arch: arm64, stack: base }
-          - { runner: ubuntu-24.04-arm, arch: arm64, stack: ultimate }
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set lowercase image name
-        run: echo "IMAGE_NAME_LC=${IMAGE_NAME,,}" >> $GITHUB_ENV
-
-      - name: Free disk space
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-          sudo docker image prune -af
-          df -h
-
-      - name: Install Nix
-        uses: DeterminateSystems/nix-installer-action@v14
-        with:
-          extra-conf: |
-            experimental-features = nix-command flakes
-            sandbox = false
-            filter-syscalls = false
-            max-substitution-jobs = 128
-            http-connections = 128
-
-      # Caches /nix/store between runs. Cache hit (flake.lock + nixhome unchanged) → instant restore;
-      # partial restore on miss via restore-prefixes-first-match seeds substituted layers so we only
-      # re-download what actually changed. GC caps the on-disk store at 5 GB so the GHA cache stays small.
-      - name: Cache /nix/store
-        uses: nix-community/cache-nix-action@v6
-        with:
-          primary-key: nix-${{ matrix.arch }}-${{ matrix.stack }}-${{ hashFiles('nixhome/flake.lock', 'nixhome/**/*.nix') }}
-          restore-prefixes-first-match: nix-${{ matrix.arch }}-${{ matrix.stack }}-
-          purge: true
-          purge-prefixes: nix-${{ matrix.arch }}-${{ matrix.stack }}-
-          purge-created: 604800        # 7 days
-          purge-primary-key: never
-          gc-max-store-size-linux: 5000000000   # 5 GB
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_ECR_ROLE_ARN }}
-          aws-region: us-east-1
-
-      - name: Log in to ECR Public
-        uses: aws-actions/amazon-ecr-login@v2
-        with:
-          registry-type: public
-
-      - name: Install go-task
-        uses: arduino/setup-task@v2
-        with:
-          version: 3.x
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build + push pure image to GHCR
-        run: task image:pure:push:${{ matrix.stack }}
-        env:
-          # Override Taskfile defaults so the task uses CI-installed nix directly,
-          # no sudo (single-user nix), and pushes to the per-arch tag.
-          ARCH: ${{ matrix.arch }}
-          STACK: ${{ matrix.stack }}
-          REGISTRY: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}
-          TAG: v0.0.0-${{ matrix.arch }}-${{ matrix.stack }}-pure
-          SUDO: ""
-          NIX: nix
-          DEVCELL_BUILD_DATE: ${{ github.event.head_commit.timestamp }}
-          DEVCELL_BUILD_REV:  ${{ github.sha }}
-
-      - name: Mirror pure image to ECR Public
-        run: task image:mirror
-        env:
-          SRC: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:v0.0.0-${{ matrix.arch }}-${{ matrix.stack }}-pure
-          DST: ${{ env.ECR_REGISTRY }}:v0.0.0-${{ matrix.arch }}-${{ matrix.stack }}-pure
-
-  pure-manifest:
-    name: Pure Image Manifests
-    needs: pure-build
-    if: always() && needs.pure-build.result == 'success'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set lowercase image name
-        run: echo "IMAGE_NAME_LC=${IMAGE_NAME,,}" >> $GITHUB_ENV
-        env:
-          IMAGE_NAME: ${{ github.repository }}
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_ECR_ROLE_ARN }}
-          aws-region: us-east-1
-
-      - name: Log in to ECR Public
-        uses: aws-actions/amazon-ecr-login@v2
-        with:
-          registry-type: public
-
-      - name: Install go-task
-        uses: arduino/setup-task@v2
-        with:
-          version: 3.x
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Stitch multi-arch GHCR manifests (pure)
-        run: |
-          for stack in base ultimate; do
-            task image:manifest \
-              REPO=${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }} \
-              VERSION=v0.0.0 \
-              SUFFIX=-${stack}-pure \
-              ARCHES=amd64,arm64
-          done
-
-      - name: Stitch multi-arch ECR Public manifests (pure)
-        run: |
-          for stack in base ultimate; do
-            task image:manifest \
-              REPO=${{ env.ECR_REGISTRY }} \
-              VERSION=v0.0.0 \
-              SUFFIX=-${stack}-pure \
-              ARCHES=amd64,arm64
-          done
+          # amd64 inputs commented out in step with docker-build matrix
+          # above — re-add the `${R}:v0.0.0-amd64-*` arguments when amd64
+          # is re-enabled. arm64-only manifests are still valid OCI
+          # indexes; tags resolve cleanly on arm64 hosts.
+          docker buildx imagetools create \
+            -t "${R}:v0.0.0-base" \
+            "${R}:v0.0.0-arm64-base"
+          docker buildx imagetools create \
+            -t "${R}:v0.0.0-ultimate" \
+            -t "${R}:v0.0.0" \
+            -t "${R}:latest" \
+            -t "${R}:dev" \
+            "${R}:v0.0.0-arm64-ultimate"
 
   cell-build:
     name: Cell CLI Dev Build
     needs: secrets
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     env:
       RELEASE_VERSION: v0.0.0
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
@@ -450,9 +406,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: ubuntu-latest
-            arch: amd64
-          - runner: ubuntu-24.04-arm
+          # amd64 disabled in step with docker-build matrix above.
+          # - runner: ubuntu-latest
+          #   arch: amd64
+          - runner: blacksmith-4vcpu-ubuntu-2404-arm
             arch: arm64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
@@ -513,9 +470,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: ubuntu-latest
-            arch: amd64
-          - runner: ubuntu-24.04-arm
+          # amd64 disabled in step with docker-build matrix above.
+          # - runner: ubuntu-latest
+          #   arch: amd64
+          - runner: blacksmith-4vcpu-ubuntu-2404-arm
             arch: arm64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
@@ -527,12 +485,16 @@ jobs:
 
       - name: Brew install devcell-dev
         run: |
-          brew tap DimmKirr/tap
-          brew install devcell-dev || true
+          brew tap devcell-sh/tap
+          # Homebrew 4.5+ refuses to load casks from third-party taps without
+          # explicit trust. `brew trust devcell-sh/tap` trusts every cask in
+          # the tap so non-interactive installs succeed.
+          brew trust devcell-sh/tap
+          brew install --cask devcell-dev || true
           # Verify binary was actually linked despite potential broken pipe
           if ! command -v cell &>/dev/null; then
             echo "Binary not found, retrying..."
-            brew install devcell-dev
+            brew install --cask devcell-dev
           fi
 
       - name: Verify version
@@ -545,4 +507,3 @@ jobs:
             echo "--- FAIL: unexpected version output ---"
             exit 1
           fi
-

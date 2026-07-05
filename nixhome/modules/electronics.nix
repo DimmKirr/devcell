@@ -5,7 +5,8 @@
 #
 # kicad pulls in opencascade-occt and wx as transitive dependencies —
 # no need to list them explicitly.
-{pkgs, config, ...}: let
+{pkgs, config, lib, ...}: let
+  cfg = config.devcell.modules.electronics;
   bin = config.devcell.managedMcp.nixBinPrefix;
   # wokwi-cli: hardware simulator CLI — not in nixpkgs; use pre-built static binary.
   # SHA256 hashes verified from: https://github.com/wokwi/wokwi-cli/releases/tag/v0.26.0
@@ -58,23 +59,38 @@
     doCheck = false;
   };
 in {
-  home.packages = with pkgs;
-    [
-      kicad-small # KiCad EDA without 3D models (saves ~6 GB)
-      ngspice # SPICE simulation (libngspice0 + ngspice CLI)
-      libspnav # 3D mouse / space navigator support
-      esphome # ESP32 framework for home automation
-      platformio # embedded development platform (Arduino, ESP32, etc.)
-      wokwi-cli # Wokwi hardware simulator CLI (v0.26.0 static binary)
-      kicadMcp # KiCad MCP server for Claude
-    ]
-    ++ [
-      pkgs."poppler-utils" # PDF tools (pdfinfo, pdfimages, etc.)
-    ];
+  options.devcell.modules.electronics = {
+    enable = lib.mkEnableOption "KiCad EDA + ngspice + ESPHome + PlatformIO + wokwi-cli + kicad-mcp";
+    meta = lib.mkOption {
+      type = lib.types.attrs;
+      readOnly = true;
+      default = {
+        description = "KiCad EDA, SPICE simulation, ESP32/Arduino dev, hardware sim, PCB MCP";
+        mcpServers = [ "kicad-mcp" ];
+        sizeMb = 800;
+      };
+    };
+  };
 
-  devcell.managedMcp.servers."kicad-mcp" = {
-    command = "${bin}/kicad-mcp";
-    args = [];
-    # kicad-mcp reads KICAD_PROJECT_PATH from the environment at runtime
+  config = lib.mkIf cfg.enable {
+    home.packages = with pkgs;
+      [
+        kicad-small # KiCad EDA without 3D models (saves ~6 GB)
+        ngspice # SPICE simulation (libngspice0 + ngspice CLI)
+        libspnav # 3D mouse / space navigator support
+        esphome # ESP32 framework for home automation
+        platformio # embedded development platform (Arduino, ESP32, etc.)
+        wokwi-cli # Wokwi hardware simulator CLI (v0.26.0 static binary)
+        kicadMcp # KiCad MCP server for Claude
+      ]
+      ++ [
+        pkgs."poppler-utils" # PDF tools (pdfinfo, pdfimages, etc.)
+      ];
+
+    devcell.managedMcp.servers."kicad-mcp" = {
+      command = "${bin}/kicad-mcp";
+      args = [];
+      # kicad-mcp reads KICAD_PROJECT_PATH from the environment at runtime
+    };
   };
 }

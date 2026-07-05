@@ -6,6 +6,8 @@
 # shape as Claude's ~/.claude.json — so the merge mirrors 30-claude.sh,
 # differing only in target paths.
 
+notify gemini.starting
+
 merge_gemini_mcp() {
     local target_file="$1"
     local nix_file="/etc/gemini/nix-mcp-servers.json"
@@ -95,3 +97,5 @@ merge_gemini_mcp() {
 
 merge_gemini_mcp "$HOME/.gemini/settings.json"
 [ -d "$HOME/.gemini" ] && chown -R "$HOST_USER" "$HOME/.gemini"
+
+notify gemini.ready

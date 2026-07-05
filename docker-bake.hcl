@@ -17,7 +17,7 @@
 #   REGISTRY=myregistry.io docker buildx bake
 
 variable "REGISTRY" {
-  default = "ghcr.io/dimmkirr/devcell"
+  default = "ghcr.io/devcell-sh/devcell"
 }
 
 variable "VERSION" {
@@ -95,6 +95,22 @@ target "core" {
   ]
   cache-from = ["type=registry,ref=${REGISTRY}:cache-core${CACHE_ARCH}"]
   cache-to   = ["type=registry,ref=${REGISTRY}:cache-core${CACHE_ARCH},mode=max"]
+}
+
+# dev — Modules 2.0 default seed (scraping + infra, ~3 GB).
+# Smallest published stack that demos value in session 1.
+target "dev" {
+  inherits   = ["_base-args"]
+  context    = "."
+  dockerfile = "images/Dockerfile"
+  target     = "dev"
+  platforms  = split(",", PLATFORMS)
+  tags       = ["${REGISTRY}:${VERSION}-dev"]
+  cache-from = [
+    "type=registry,ref=${REGISTRY}:cache-dev${CACHE_ARCH}",
+    "type=registry,ref=${REGISTRY}:cache-core${CACHE_ARCH}",
+  ]
+  cache-to   = ["type=registry,ref=${REGISTRY}:cache-dev${CACHE_ARCH},mode=max"]
 }
 
 target "go" {
@@ -199,20 +215,20 @@ group "default" {
   targets = ["core"]
 }
 
-# ci: PR and push-to-main builds
+# ci: PR and push-to-main builds (adds dev — Modules 2.0 seed)
 group "ci" {
-  targets = ["core", "ultimate"]
+  targets = ["core", "dev", "ultimate"]
 }
 
 # release: all published stacks for a tagged release
 group "release" {
-  targets = ["core", "ultimate"]
+  targets = ["core", "dev", "ultimate"]
 }
 
-# local-core: core image tagged for local scaffold Dockerfile use (FROM ghcr.io/dimmkirr/devcell:core-local)
+# local-core: core image tagged for local scaffold Dockerfile use (FROM ghcr.io/devcell-sh/devcell:core-local)
 target "local-core" {
   inherits   = ["core"]
-  tags       = ["ghcr.io/dimmkirr/devcell:core-local"]
+  tags       = ["ghcr.io/devcell-sh/devcell:core-local"]
   platforms  = []
   pull       = false
   cache-from = []
@@ -224,7 +240,7 @@ target "local-core" {
 # with NIX_CACHE_IMAGE=public.ecr.aws/docker/library/debian:trixie-slim for no-cache local builds).
 target "local-ultimate" {
   inherits   = ["ultimate"]
-  tags       = ["ghcr.io/dimmkirr/devcell:ultimate-local"]
+  tags       = ["ghcr.io/devcell-sh/devcell:ultimate-local"]
   platforms  = []
   pull       = false
   cache-from = []

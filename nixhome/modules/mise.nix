@@ -2,7 +2,7 @@
 # Each language module (go.nix, node.nix, infra.nix) declares tools via
 # devcell.mise.tools.<name> = "<version>". This module collects them into
 # a single ~/.tool-versions file and generates global mise config.
-{ pkgs, config, lib, ... }:
+{ pkgs, pkgsEdge, config, lib, ... }:
 let
   cfg = config.devcell.mise;
   toolVersionsContent = lib.concatStringsSep "\n"
@@ -22,19 +22,16 @@ in {
   };
 
   config = {
-    home.packages = [ pkgs.mise ];
+    # pkgsEdge: shared install dirs (MISE_SHARED_INSTALL_DIRS) need mise
+    # ≥2026.3.9 (jdx/mise#8581); nixpkgs stable/unstable lag behind.
+    home.packages = [ pkgsEdge.mise ];
 
-    # Two-level shim PATH (DIMM-214).
-    # Level 1 — ~/.local/share/mise/shims: bind-mounted, writable. User installs
-    #          land here via `mise install` post-boot; wins on conflict so users
-    #          can override baked tools with `mise install <tool>@<ver>`.
-    # Level 2 — /opt/devcell/.local/share/mise/shims: image-baked at build time
-    #          by Dockerfile (`MISE_DATA_DIR=… mise reshim`); always present for
-    #          every declared tool even if cell-home is fresh or runtime reshim
-    #          silently fails (previous bug: terraform/opentofu shims missing).
+    # User shims only. Baked tools are resolved natively by mise through
+    # MISE_SHARED_INSTALL_DIRS (read-only baked install dir, set as image
+    # env) — user installs in ~/.local/share/mise take precedence, like PATH.
+    # Replaces the two-level shim PATH + cross-bind symlinks (CELL-85/294).
     home.sessionPath = [
       "${config.home.homeDirectory}/.local/share/mise/shims"
-      "/opt/devcell/.local/share/mise/shims"
     ];
 
     home.file.".config/mise/config.toml" = lib.mkIf (cfg.tools != {}) {

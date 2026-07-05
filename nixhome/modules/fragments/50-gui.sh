@@ -4,6 +4,8 @@
 
 [ "$DEVCELL_GUI_ENABLED" = "true" ] || return 0
 
+notify gui.starting
+
 # Ensure DBUS machine-id exists (Kitty/GTK apps need it)
 [ -f /etc/machine-id ] || dbus-uuidgen > /etc/machine-id 2>/dev/null || true
 
@@ -67,12 +69,47 @@ PULSE_DIR="/tmp/pulse-runtime"
 mkdir -p "$PULSE_DIR"
 chown "$USER:$(id -gn "$USER")" "$PULSE_DIR"
 log "Starting PulseAudio (null sink)..."
+XRDP_PULSE_MOD=$(find "$(dirname "$(command -v pulseaudio)")/../lib" -name 'module-xrdp-sink.so' 2>/dev/null | head -1)
+_PA_DL_SEARCH=()
+if [ -n "$XRDP_PULSE_MOD" ]; then
+    XRDP_PULSE_DIR=$(dirname "$XRDP_PULSE_MOD")
+    _PA_DL_SEARCH=(--dl-search-path="$XRDP_PULSE_DIR")
+    log "  xrdp audio sink found: $XRDP_PULSE_MOD (deferred until chansrv ready)"
+fi
+PULSE_LOG="/var/log/pulseaudio.log"
+touch "$PULSE_LOG" && chown "$USER" "$PULSE_LOG"
 gosu "$USER" env -u LD_LIBRARY_PATH -u _DEVCELL_LD_SET XDG_RUNTIME_DIR="$PULSE_DIR" \
     pulseaudio --daemonize=yes --exit-idle-time=-1 --disable-shm=true -n \
+    --log-target=file:"$PULSE_LOG" --log-level=info \
+    "${_PA_DL_SEARCH[@]}" \
     --load="module-null-sink sink_name=NullSink" \
-    --load="module-native-protocol-unix" 2>/dev/null || true
+    --load="module-native-protocol-unix" 2>/dev/null
+PA_RC=$?
 export PULSE_SERVER="unix:$PULSE_DIR/pulse/native"
 export XDG_RUNTIME_DIR="$PULSE_DIR"
+if [ $PA_RC -eq 0 ]; then
+    log "  PulseAudio started (pid $(cat "$PULSE_DIR/pulse/pid" 2>/dev/null || echo '?'), log: $PULSE_LOG)"
+    gosu "$USER" env PULSE_SERVER="unix:$PULSE_DIR/pulse/native" XDG_RUNTIME_DIR="$PULSE_DIR" \
+        pactl list sinks short 2>/dev/null | while read -r _idx _name _mod _fmt _state; do
+            log "  Sink #${_idx}: ${_name} [${_state}]"
+        done
+else
+    log "  ERROR: PulseAudio failed to start (exit $PA_RC) — check $PULSE_LOG"
+fi
+
+# Persist PulseAudio env vars for shells spawned outside the entrypoint
+# (docker exec, IDE attach, RDP terminal sessions). 05-shell-rc.sh writes
+# the base rc files with > before we run, so >> here is safe and idempotent
+# across container restarts (05-shell-rc.sh overwrites first, we append).
+if [ $PA_RC -eq 0 ]; then
+    _PA_RC_BLOCK="
+# -- PulseAudio (appended by 50-gui.sh) --
+export PULSE_SERVER=\"unix:$PULSE_DIR/pulse/native\"
+export XDG_RUNTIME_DIR=\"$PULSE_DIR\""
+    for _rcfile in .zshrc .zshenv .profile .bashrc; do
+        [ -f "$HOME/$_rcfile" ] && echo "$_PA_RC_BLOCK" >> "$HOME/$_rcfile"
+    done
+fi
 
 if [ -f "$DEVCELL_HOME/.Xresources" ]; then
     (sleep 1; xrdb -display :${DISPLAY_NUM} -merge "$DEVCELL_HOME/.Xresources" 2>/dev/null) &
@@ -147,6 +184,8 @@ if [ -n "$XRDP_BIN" ]; then
     # Copy default configs from nix store (read-only) to writable dir
     cp -a "$XRDP_PREFIX/etc/xrdp/"* "$XRDP_CFG/" 2>/dev/null || true
     chmod u+w "$XRDP_CFG/"* 2>/dev/null || true
+    # chansrv reads sesman.ini from /etc/xrdp/ (hardcoded path)
+    ln -sfT "$XRDP_CFG" /etc/xrdp 2>/dev/null || true
 
     # Pre-generate RSA keys so xrdp can read them at startup
     # (without this, xrdp fails with "cannot read rsakeys.ini" on first connect)
@@ -183,6 +222,7 @@ if [ -n "$XRDP_BIN" ]; then
         -e "s|^port=.*|port=3389|" \
         -e "s|^certificate=.*|certificate=$XRDP_CERT_DIR/cert.pem|" \
         -e "s|^key_file=.*|key_file=$XRDP_CERT_DIR/key.pem|" \
+        -e "s|^security_layer=.*|security_layer=none|" \
         -e "s|^autorun=.*|autorun=vnc-any|" \
         -e "s|^max_bpp=.*|max_bpp=24|" \
         -e "s|^allow_channels=.*|allow_channels=true|" \
@@ -209,7 +249,44 @@ if [ -n "$XRDP_BIN" ]; then
         echo "username=${HOST_USER}"
         echo 'password=vnc'
         echo 'xserverbpp=24'
+        _CHANSRV_UID=$(id -u "$HOST_USER")
+        echo "chansrvport=/var/run/xrdp/${_CHANSRV_UID}/xrdp_chansrv_socket_${DISPLAY_NUM}"
     } >> "$XRDP_CFG/xrdp.ini"
+
+    # xrdp 0.10.x delegates channel handling (rdpsnd, cliprdr) to chansrv.
+    # In sesman-managed sessions, sesexec starts chansrv automatically.
+    # VNC proxy mode bypasses sesman, so start chansrv manually.
+    XRDP_CHANSRV="$XRDP_PREFIX/sbin/xrdp-chansrv"
+    if [ -x "$XRDP_CHANSRV" ]; then
+        XRDP_RUN_DIR="/var/run/xrdp/${_CHANSRV_UID}"
+        mkdir -p "$XRDP_RUN_DIR"
+        chown "$HOST_USER:$(id -gn "$HOST_USER")" "$XRDP_RUN_DIR"
+        log "Starting xrdp-chansrv for display :${DISPLAY_NUM}..."
+        setsid gosu "$HOST_USER" $_NIX_ENV env DISPLAY=:${DISPLAY_NUM} \
+            HOME="/home/$HOST_USER" \
+            CHANSRV_LOG_PATH="/tmp" \
+            PULSE_SERVER="unix:$PULSE_DIR/pulse/native" \
+            XDG_RUNTIME_DIR="$PULSE_DIR" \
+            "$XRDP_CHANSRV" \
+            < /dev/null > /tmp/chansrv.log 2>&1 &
+        _CHANSRV_SOCK="$XRDP_RUN_DIR/xrdp_chansrv_socket_${DISPLAY_NUM}"
+        for i in $(seq 1 40); do
+            [ -S "$_CHANSRV_SOCK" ] && break
+            sleep 0.1
+        done
+        if [ -S "$_CHANSRV_SOCK" ]; then
+            log "  chansrv socket ready"
+            if [ -n "$XRDP_PULSE_MOD" ]; then
+                _PA_RUN="gosu $HOST_USER $_NIX_ENV env PULSE_SERVER=unix:$PULSE_DIR/pulse/native XDG_RUNTIME_DIR=$PULSE_DIR"
+                $_PA_RUN pactl load-module module-xrdp-sink xrdp_socket_path=$XRDP_RUN_DIR 2>/dev/null && {
+                    $_PA_RUN pactl set-default-sink xrdp-sink 2>/dev/null || true
+                    log "  xrdp-sink loaded and set as default"
+                } || log "  WARNING: failed to load module-xrdp-sink"
+            fi
+        else
+            log "  WARNING: chansrv socket not found after 4s — check /tmp/chansrv.log"
+        fi
+    fi
 
     log "Starting xrdp on port 3389 (RDP → VNC :${DISPLAY_NUM})..."
     # Kill any stale xrdp (defunct or running) before binding 3389.
@@ -226,3 +303,5 @@ if [ -n "$XRDP_BIN" ]; then
 else
     log "xrdp not found — skipping RDP server"
 fi
+
+notify gui.ready

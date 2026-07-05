@@ -16,7 +16,7 @@ func TestOpencode_NoArgs_InjectsDot(t *testing.T) {
 
 	cmd := exec.Command(binaryPath, "opencode", "--dry-run")
 	cmd.Dir = home
-	cmd.Env = append(os.Environ(), "CELL_ID=1", "HOME="+home)
+	cmd.Env = append(os.Environ(), "DEVCELL_BUNK=1", "HOME="+home)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("opencode --dry-run failed: %v\noutput: %s", err, out)
@@ -39,7 +39,7 @@ func TestOpencode_WithArgs_NoDot(t *testing.T) {
 
 	cmd := exec.Command(binaryPath, "opencode", "--dry-run", "--model", "foo")
 	cmd.Dir = home
-	cmd.Env = append(os.Environ(), "CELL_ID=1", "HOME="+home)
+	cmd.Env = append(os.Environ(), "DEVCELL_BUNK=1", "HOME="+home)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("opencode --dry-run failed: %v\noutput: %s", err, out)
@@ -59,7 +59,7 @@ func TestOpencode_DebugOnly_InjectsDot(t *testing.T) {
 
 	cmd := exec.Command(binaryPath, "opencode", "--debug", "--dry-run")
 	cmd.Dir = home
-	cmd.Env = append(os.Environ(), "CELL_ID=1", "HOME="+home)
+	cmd.Env = append(os.Environ(), "DEVCELL_BUNK=1", "HOME="+home)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("opencode --debug --dry-run failed: %v\noutput: %s", err, out)
@@ -84,7 +84,7 @@ func TestOpencode_ConfigContentEnvInjected(t *testing.T) {
 
 	cmd := exec.Command(binaryPath, "opencode", "--dry-run")
 	cmd.Dir = home
-	cmd.Env = append(os.Environ(), "CELL_ID=1", "HOME="+home)
+	cmd.Env = append(os.Environ(), "DEVCELL_BUNK=1", "HOME="+home)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("opencode --dry-run failed: %v\noutput: %s", err, out)
@@ -129,7 +129,7 @@ models = ["deepseek-r1:32b", "qwen3:8b"]
 
 	cmd := exec.Command(binaryPath, "opencode", "--dry-run")
 	cmd.Dir = home
-	cmd.Env = append(os.Environ(), "CELL_ID=1", "HOME="+home)
+	cmd.Env = append(os.Environ(), "DEVCELL_BUNK=1", "HOME="+home)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("opencode --dry-run failed: %v\noutput: %s", err, out)
@@ -179,7 +179,7 @@ func TestOpencode_ConfigContentNoModels(t *testing.T) {
 
 	cmd := exec.Command(binaryPath, "opencode", "--dry-run")
 	cmd.Dir = home
-	cmd.Env = append(os.Environ(), "CELL_ID=1", "HOME="+home)
+	cmd.Env = append(os.Environ(), "DEVCELL_BUNK=1", "HOME="+home)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("opencode --dry-run failed: %v\noutput: %s", err, out)
@@ -231,7 +231,7 @@ models = ["qwen3:8b"]
 
 	cmd := exec.Command(binaryPath, "opencode", "--dry-run")
 	cmd.Dir = home
-	cmd.Env = append(os.Environ(), "CELL_ID=1", "HOME="+home)
+	cmd.Env = append(os.Environ(), "DEVCELL_BUNK=1", "HOME="+home)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("opencode --dry-run failed: %v\noutput: %s", err, out)
@@ -286,7 +286,7 @@ models = ["deepseek-r1:32b"]
 
 	cmd := exec.Command(binaryPath, "opencode", "--dry-run")
 	cmd.Dir = home
-	cmd.Env = append(os.Environ(), "CELL_ID=1", "HOME="+home)
+	cmd.Env = append(os.Environ(), "DEVCELL_BUNK=1", "HOME="+home)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("opencode --dry-run failed: %v\noutput: %s", err, out)

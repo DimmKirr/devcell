@@ -227,7 +227,7 @@ func rdpDefault() error {
 		return openRDP(c, port)
 	}
 
-	rdpDebug("basedir: %s  cellID: %s  rdpPort: %s", c.BaseDir, c.CellID, c.RDPPort)
+	rdpDebug("basedir: %s  bunk: %s  rdpPort: %s", c.BaseDir, c.Bunk, c.RDPPort)
 
 	cells := collectRDPCells(c, rdpGlobal)
 	var dockerCount, vagrantCount int

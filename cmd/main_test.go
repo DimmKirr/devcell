@@ -111,7 +111,7 @@ func TestPlainTextNoSpinnerChars(t *testing.T) {
 	cmd := exec.Command(binaryPath, "--plain-text", "shell", "--dry-run")
 	cmd.Dir = home
 	cmd.Env = append(os.Environ(),
-		"CELL_ID=1",
+		"DEVCELL_BUNK=1",
 		"HOME="+home,
 	)
 	out, _ := cmd.CombinedOutput()
@@ -131,7 +131,7 @@ func TestDebugNoSpinnerChars(t *testing.T) {
 	cmd := exec.Command(binaryPath, "--debug", "shell", "--dry-run")
 	cmd.Dir = home
 	cmd.Env = append(os.Environ(),
-		"CELL_ID=1",
+		"DEVCELL_BUNK=1",
 		"HOME="+home,
 	)
 	out, _ := cmd.CombinedOutput()

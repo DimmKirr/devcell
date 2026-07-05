@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/DimmKirr/devcell/internal/cfg"
@@ -28,16 +30,21 @@ var buildCmd = &cobra.Command{
 func init() {
 	buildCmd.Flags().Bool("update", false, "update nix flake inputs and rebuild without cache")
 	buildCmd.Flags().Bool("no-generate", false, "skip regenerating build context (flake.nix, Dockerfile, etc.)")
-	// Post-2026-05-15 flip (DIMM-204): pure is the default. --impure (DIMM-213
+	// Post-2026-05-15 flip (CELL-183): pure is the default. --impure (CELL-165
 	// canonical name) opts into the legacy Dockerfile path. --debian is the
 	// deprecated alias retained for one release. --pure is a silent no-op
 	// (same as default).
 	buildCmd.Flags().Bool("impure", false, "build via legacy Dockerfile path (default is nix2container/pure)")
 	buildCmd.Flags().Bool("debian", false, "deprecated alias for --impure (will be removed)")
-	buildCmd.Flags().Bool("pure", false, "silent no-op (kept for back-compat; pure is the default after DIMM-204)")
-	// DIMM-246: one-shot stack override. Precedence: --stack > $DEVCELL_STACK >
+	buildCmd.Flags().Bool("pure", false, "silent no-op (kept for back-compat; pure is the default after CELL-183)")
+	// CELL-93: one-shot stack override. Precedence: --stack > $DEVCELL_STACK >
 	// [cell].stack in TOML > default (ResolvedStack → "base").
 	buildCmd.Flags().String("stack", "", "override [cell].stack for this build (base, go, node, python, fullstack, electronics, ultimate)")
+	buildCmd.Flags().String("image", "", "override the built image tag (e.g. devcell-user:dev-thin); env DEVCELL_BUILD_IMAGE has lower precedence")
+	// CELL-156: thin image mode — nix store on Docker volume, not baked into image.
+	buildCmd.Flags().Bool("thin", false, "build thin image (default; kept for explicitness)")
+	buildCmd.Flags().Bool("no-thin", false, "build thick image (nix store baked into image)")
+	buildCmd.Flags().Bool("thick", false, "alias for --no-thin")
 }
 
 func runBuild(cmd *cobra.Command, _ []string) error {
@@ -56,9 +63,48 @@ func runBuild(cmd *cobra.Command, _ []string) error {
 		impure = scanFlag("--impure") || scanFlag("--debian")
 	}
 
+	noThin, _ := cmd.Flags().GetBool("no-thin")
+	thick, _ := cmd.Flags().GetBool("thick")
+	if !noThin {
+		noThin = thick || scanFlag("--no-thin") || scanFlag("--thick")
+	}
+
+	thin := false
+	if noThin {
+		thin = false
+	} else {
+		thinFlag, _ := cmd.Flags().GetBool("thin")
+		if thinFlag || scanFlag("--thin") {
+			thin = true
+		} else {
+			c2, _ := config.LoadFromOS()
+			if c2.ConfigDir != "" {
+				thin = cfg.LoadFromOS(c2.ConfigDir, c2.BaseDir).Cell.ResolvedThin()
+			} else {
+				thin = true
+			}
+		}
+	}
+	if !thin {
+		runner.WarnThickDeprecation()
+	}
+
 	c, err := config.LoadFromOS()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
+	}
+
+	// ── Thin image mode (CELL-156): nix store on Docker volume ──
+	if thin {
+		stackOverride, err := resolveStackOverride(cmd.Flags().Lookup("stack").Value.String(), os.Getenv)
+		if err != nil {
+			return err
+		}
+		imageOverride := cmd.Flags().Lookup("image").Value.String()
+		if imageOverride == "" {
+			imageOverride = os.Getenv("DEVCELL_BUILD_IMAGE")
+		}
+		return runBuildThin(c, stackOverride, imageOverride, update)
 	}
 
 	// ── Default: pure (nix2container) engine — strict, no docker-build fallback ──
@@ -186,7 +232,7 @@ func resolveStackOverride(flagValue string, getenv func(string) string) (string,
 }
 
 // runBuildPure runs the nix2container build. stackOverride wins over the
-// TOML-resolved stack when non-empty (DIMM-246). Validation of the override
+// TOML-resolved stack when non-empty (CELL-93). Validation of the override
 // happens at the caller (runBuild) so this function can stay focused on the
 // build itself.
 func runBuildPure(c config.Config, stackOverride string) error {
@@ -234,7 +280,8 @@ func runBuildPure(c config.Config, stackOverride string) error {
 	lc := runner.NewLayerCounter(out)
 	out = lc
 
-	label := fmt.Sprintf("Building devcell image (nix2container, stack=%s)", stack)
+	explicitStack := stackOverride != "" || cellCfg.Cell.StackExplicit()
+	label := runner.BuildLabel("Building devcell image (nix2container)", stack, explicitStack)
 	sp := ux.NewProgressSpinner(label)
 	err := runner.BuildImagePure(ctx, runner.PureBuildSpec{
 		FlakeRef:  flakeRef,
@@ -270,10 +317,170 @@ func runBuildPure(c config.Config, stackOverride string) error {
 	return nil
 }
 
+// runBuildThin builds a thin image (CELL-156):
+//  1. Ensure core image exists (pull or use cached)
+//  2. docker run core with nix volume + docker socket:
+//     - home-manager switch (reuses volume-cached /nix/store)
+//     - docker build (inside container, via socket) → thin image
+func runBuildThin(c config.Config, stackOverride, imageOverride string, forceRecreateVolume bool) error {
+	// Daemon preflight — surface the actionable error when docker is down
+	// before any pull/build attempt (CELL-44). The thin auto-build gate in
+	// cmd/root.go probes first; this guards direct `cell build --thin` callers.
+	if err := runner.DockerDaemonReachable(context.Background()); err != nil {
+		return err
+	}
+
+	cellCfg := cfg.LoadFromOS(c.ConfigDir, c.BaseDir)
+	stack := cellCfg.Cell.ResolvedStack()
+	if stackOverride != "" {
+		stack = stackOverride
+	}
+
+	// Resolve nixhome source — shared with pure path:
+	//   1. [cell].nixhome (TOML/env) — local path
+	//   2. <BaseDir>/nixhome on disk — dev/dogfood convenience
+	//   3. github:DimmKirr/devcell/<ver>?dir=nixhome — prebaked upstream (CELL-38)
+	resolved := runner.ResolvePureNixhomeRef(runner.PureNixhomeInputs{
+		TomlNixhome: cellCfg.Cell.NixhomePath,
+		BaseDir:     c.BaseDir,
+		Version:     version.Version,
+	})
+
+	// Materialise nixhome locally into .devcell/nixhome (handles github refs
+	// via git clone; local paths via cp). Gives us a known on-disk source for
+	// home-manager AND a known entrypoint.sh location.
+	if err := config.EnsureBuildDir(c.BuildDir); err != nil {
+		return fmt.Errorf("ensure build dir: %w", err)
+	}
+	syncSrc := resolved.LocalPath
+	if resolved.Remote {
+		syncSrc = resolved.FlakeRef // SyncNixhome routes github: refs through git clone
+	}
+	if err := scaffold.SyncNixhome(syncSrc, c.BuildDir); err != nil {
+		return fmt.Errorf("sync nixhome: %w", err)
+	}
+
+	// Write the overlay flake at .devcell/flake.nix — same generator as pure
+	// path. Imports path:./nixhome (the just-synced upstream) + enables the
+	// merged TOML modules. home-manager will switch against this overlay's
+	// `devcell-local<arch>` output, not the upstream stack outputs directly,
+	// so [cell].modules takes effect in thin builds (CELL-38 + CELL-61).
+	overlayFlake := scaffold.GenerateFlakeNix(stack, cellCfg.Cell.Modules, version.Version, true)
+	overlayPath := filepath.Join(c.BuildDir, "flake.nix")
+	if err := os.WriteFile(overlayPath, []byte(overlayFlake), 0o644); err != nil {
+		return fmt.Errorf("write overlay flake: %w", err)
+	}
+	// Symlink entrypoint.sh up from synced nixhome so ThinBuildArgv's
+	// `cp /opt/nixhome/entrypoint.sh` keeps working when mounting the overlay
+	// dir at /opt/nixhome instead of the raw nixhome.
+	entrypointLink := filepath.Join(c.BuildDir, "entrypoint.sh")
+	_ = os.Remove(entrypointLink)
+	if err := os.Symlink(filepath.Join("nixhome", "entrypoint.sh"), entrypointLink); err != nil {
+		return fmt.Errorf("symlink entrypoint.sh: %w", err)
+	}
+
+	// What we hand ThinBuildArgv is the OVERLAY dir (.devcell), mounted at
+	// /opt/nixhome inside the builder. home-manager target becomes
+	// `devcell-local` (matches GenerateFlakeNix's homeConfigurations output).
+	nixhomeRef := runner.DockerHostPath(c.BuildDir)
+	homeManagerTarget := "local"
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	coreImage := runner.NixCoreImage
+	tag := runner.ResolveBuildTag(imageOverride, runner.UserImageTagThin())
+	volumeName := runner.ThinStoreVolume()
+	containerName := "devcell-thin-builder"
+
+	// ── Ensure core image exists ────────────────────────────────────────────
+	if !runner.ImageExists(ctx, coreImage) {
+		pullLabel := fmt.Sprintf("Pulling core image %s", coreImage)
+		sp := ux.NewProgressSpinner(pullLabel)
+		if err := runner.PullImage(ctx, coreImage, ux.Verbose); err != nil {
+			sp.Fail(pullLabel + " failed")
+			return fmt.Errorf("pull core image: %w", err)
+		}
+		sp.Success(pullLabel)
+	}
+
+	// ── Volume management ──────────────────────────────────────────────────
+	// Docker auto-populates named volumes from the image on first mount when
+	// the volume is empty. Don't pre-create — let docker run create it
+	// implicitly so auto-populate fires correctly.
+	if forceRecreateVolume {
+		_ = exec.CommandContext(ctx, "docker", "volume", "rm", "-f", volumeName).Run()
+	}
+
+	// ── Build thin image ────────────────────────────────────────────────────
+	explicitStack := stackOverride != "" || cellCfg.Cell.StackExplicit()
+	buildLabel := runner.BuildLabel("Building thin image", stack, explicitStack)
+	sp := ux.NewProgressSpinner(buildLabel)
+
+	_ = exec.CommandContext(ctx, "docker", "rm", "-f", containerName).Run()
+
+	// CELL-41: pass the real user-facing stack name + modules CSV so the
+	// container's metadata.json reports them truthfully. The HM target stays
+	// "local" — that's a flake-output naming detail, not user content.
+	modulesCSV := strings.Join(cellCfg.Cell.Modules, ",")
+	// CELL-293: bake the host's already-built `cell` binary into every
+	// produced devcell image. Resolved to an absolute path so the runner's
+	// docker bind mount succeeds. Empty (skip COPY) when the binary can't
+	// be located — local dev `go run` flow without a built binary.
+	cellBinaryPath := resolveCellBinaryPath()
+	argv := runner.ThinBuildArgvFull(coreImage, containerName, volumeName, nixhomeRef, tag, homeManagerTarget, runner.DetectArch(), stack, modulesCSV, cellBinaryPath)
+
+	var buf bytes.Buffer
+	var out io.Writer = &buf
+	if ux.Verbose {
+		out = os.Stdout
+	}
+
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.Stdout = out
+	cmd.Stderr = out
+	if err := cmd.Run(); err != nil {
+		sp.Fail(buildLabel + " failed")
+		if !ux.Verbose && buf.Len() > 0 {
+			fmt.Fprint(os.Stderr, buf.String())
+		}
+		return fmt.Errorf("thin build: %w", err)
+	}
+
+	successLabel := buildLabel
+	if size := runner.LocalImageSize(ctx, tag); size > 0 {
+		successLabel = fmt.Sprintf("%s — %s", buildLabel, runner.HumanBytes(size))
+	}
+	sp.Success(successLabel)
+	return nil
+}
+
+// resolveCellBinaryPath returns the absolute filesystem path of the running
+// cell binary so the thin builder can bake it into every produced image.
+// Tries os.Executable() first (works for installed binaries); falls back to
+// `bin/cell` in cwd (CI's `task cell:build` output). Returns "" when no
+// binary can be located — runner skips the COPY in that case.
+func resolveCellBinaryPath() string {
+	if exe, err := os.Executable(); err == nil {
+		if abs, err := filepath.Abs(exe); err == nil {
+			if _, err := os.Stat(abs); err == nil {
+				return abs
+			}
+		}
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		candidate := filepath.Join(cwd, "bin", "cell")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	return ""
+}
+
 // printBuildDebugSummary prints the post-build debug block: image ID +
 // created timestamp + size + total layers + new/cached split. Surfaces the
 // "did my rebuild actually produce a new image, or is the cache stale?"
-// question that motivated the feature (DIMM-216 debugging session).
+// question that motivated the feature (CELL-86 debugging session).
 func printBuildDebugSummary(ctx context.Context, tag string, layers runner.LayerStats) {
 	info, err := runner.InspectImageDebug(ctx, tag)
 	if err != nil {

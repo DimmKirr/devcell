@@ -1,8 +1,8 @@
-FROM ghcr.io/dimmkirr/devcell:core-local
+FROM ghcr.io/devcell-sh/devcell:core-local
 
 # Build metadata — propagated to nix activation script (base.nix writeMetadata).
 ARG GIT_COMMIT=unknown
-ARG DEVCELL_BASE_IMAGE="ghcr.io/dimmkirr/devcell:core-local"
+ARG DEVCELL_BASE_IMAGE="ghcr.io/devcell-sh/devcell:core-local"
 ARG DEVCELL_STACK="ultimate"
 ARG DEVCELL_MODULES=""
 

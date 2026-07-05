@@ -3,11 +3,17 @@
 package container_test
 
 import (
+	"archive/tar"
 	"context"
+	"encoding/base64"
+	"encoding/binary"
 	"fmt"
 	goimage "image"
 	"image/png"
+	"io"
 	"log"
+	"math"
+	"math/cmplx"
 	"os"
 	osexec "os/exec"
 	"path/filepath"
@@ -313,7 +319,9 @@ func skipIfNoGUI(t *testing.T, c testcontainers.Container) {
 }
 
 // probeGUI skips the test if the image lacks GUI support.
-// Checks DEVCELL_GUI_ENABLED in the image config via docker inspect (no container needed).
+// Checks DEVCELL_PROFILE in the image config — desktop stacks (ultimate,
+// electronics) include GUI tools. DEVCELL_GUI_ENABLED is a runtime flag
+// set by runner.go, never baked into the image, so we match on profile.
 func probeGUI(t *testing.T) {
 	t.Helper()
 	img := image()
@@ -322,8 +330,17 @@ func probeGUI(t *testing.T) {
 	if err != nil {
 		t.Skipf("skipping: cannot inspect image %s: %v", img, err)
 	}
-	if !strings.Contains(string(out), "DEVCELL_GUI_ENABLED=true") {
-		t.Skip("skipping: image lacks GUI support (DEVCELL_GUI_ENABLED not set)")
+	envs := string(out)
+	guiProfiles := []string{"devcell-ultimate", "devcell-electronics"}
+	hasGUI := false
+	for _, p := range guiProfiles {
+		if strings.Contains(envs, "DEVCELL_PROFILE="+p) {
+			hasGUI = true
+			break
+		}
+	}
+	if !hasGUI {
+		t.Skip("skipping: image profile does not include desktop/GUI support")
 	}
 }
 
@@ -362,6 +379,11 @@ func startDesktopGUIContainer(t *testing.T) testcontainers.Container {
 			"grep -qi 170C /proc/net/tcp6 /proc/net/tcp 2>/dev/null && grep -qi ' 0A ' /proc/net/tcp6 /proc/net/tcp 2>/dev/null"}).
 			WithStartupTimeout(60 * time.Second),
 	}
+	if isThinVariant() {
+		req.Mounts = testcontainers.Mounts(
+			testcontainers.VolumeMount(thinVolumeName(), "/nix"),
+		)
+	}
 	c, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: req,
 		Started:          true,
@@ -385,6 +407,7 @@ func startRdpContainer(t *testing.T) testcontainers.Container {
 			"HOST_USER":           hostUser,
 			"APP_NAME":            "test",
 			"DEVCELL_GUI_ENABLED": "true",
+			"DEVCELL_DEBUG":       "true",
 		},
 		User: "0",
 		Cmd:  []string{"tail", "-f", "/dev/null"},
@@ -392,6 +415,11 @@ func startRdpContainer(t *testing.T) testcontainers.Container {
 		WaitingFor: wait.ForExec([]string{"sh", "-c",
 			"grep -qi 0D3D /proc/net/tcp6 /proc/net/tcp 2>/dev/null && grep -qi ' 0A ' /proc/net/tcp6 /proc/net/tcp 2>/dev/null"}).
 			WithStartupTimeout(90 * time.Second),
+	}
+	if isThinVariant() {
+		req.Mounts = testcontainers.Mounts(
+			testcontainers.VolumeMount(thinVolumeName(), "/nix"),
+		)
 	}
 	c, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: req,
@@ -856,7 +884,7 @@ func TestRdp_ClipboardSync(t *testing.T) {
 // resulting FreeRDP window is always 1920x1080 — demonstrating that no real
 // resolution negotiation happens.
 //
-// Once DIMM-28 (Xvnc replacement) lands, the assertion should be inverted:
+// Once CELL-168 (Xvnc replacement) lands, the assertion should be inverted:
 // the FreeRDP window should match the /size: request. When this test starts
 // failing, that is the signal the fix is in.
 func TestRdp_ClientResolutionRequest(t *testing.T) {
@@ -923,7 +951,7 @@ func TestRdp_ClientResolutionRequest(t *testing.T) {
 
 			if actualW != wantWidth || actualH != wantHeight {
 				t.Errorf("expected %dx%d (Xvfb fixed framebuffer), got %dx%d — "+
-					"has DIMM-28 (Xvnc replacement) landed? If yes, flip this assertion to actual==requested.",
+					"has CELL-168 (Xvnc replacement) landed? If yes, flip this assertion to actual==requested.",
 					wantWidth, wantHeight, actualW, actualH)
 			}
 		})
@@ -1050,4 +1078,461 @@ func TestVnc_DockerPortByName(t *testing.T) {
 	} else {
 		t.Logf("PASS: 'docker port %s 5900' -> %s (matches MappedPort)", name, hostPort)
 	}
+}
+
+// TestRdp_AudioPlayback verifies the server-side PulseAudio pipeline works:
+// xrdp-sink is loaded and audio flows through the NullSink loopback.
+// This does NOT test the end-to-end RDP rdpsnd channel — see
+// TestRdp_AudioRedirection for that.
+//
+// Pipeline: paplay (sine WAV) → PulseAudio NullSink → NullSink.monitor → parec → WAV → FFT
+// Verifies PulseAudio starts with xrdp-sink loaded (CELL-73 fix) and audio flows.
+func TestRdp_AudioPlayback(t *testing.T) {
+	probeGUI(t)
+	c := startRdpContainer(t)
+
+	// PulseAudio runs as the session user; docker exec runs as root.
+	// All audio commands must use gosu to switch to the PA owner.
+	paRun := "gosu " + hostUser + " env PULSE_SERVER=unix:/tmp/pulse-runtime/pulse/native XDG_RUNTIME_DIR=/tmp/pulse-runtime"
+
+	// Guard: need paplay, parec, and pactl for this test.
+	for _, tool := range []string{"paplay", "parec", "pactl"} {
+		if _, code := exec(t, c, []string{"sh", "-c", "command -v " + tool}); code != 0 {
+			t.Skipf("skipping: %s not on PATH", tool)
+		}
+	}
+
+	// Generate a 5-second 440 Hz sine wave as a WAV file and copy into container.
+	wavData := generateSineWAV(440.0, 44100, 5, 2)
+	if err := c.CopyToContainer(context.Background(), wavData, "/tmp/sine440.wav", 0o644); err != nil {
+		t.Fatalf("copy sine440.wav into container: %v", err)
+	}
+
+	// Verify PulseAudio is running and xrdp_sink exists.
+	sinksOut, _ := exec(t, c, []string{"sh", "-c", paRun + " pactl list sinks short 2>/dev/null"})
+	if !strings.Contains(sinksOut, "xrdp-sink") {
+		paLog, _ := exec(t, c, []string{"sh", "-c", "cat /var/log/pulseaudio.log 2>/dev/null | tail -30"})
+		t.Fatalf("FAIL: xrdp-sink not found in PulseAudio sinks — module-xrdp-sink not loaded\nSinks: %s\nPulseAudio log:\n%s", sinksOut, paLog)
+	}
+	t.Logf("PulseAudio sinks:\n%s", sinksOut)
+
+	// Set NullSink as default so paplay routes there (xrdp-sink's transport
+	// isn't active without a real RDP client session).
+	exec(t, c, []string{"sh", "-c", paRun + " pactl set-default-sink NullSink 2>/dev/null; true"})
+
+	// Play the sine wave through PulseAudio (routed to NullSink).
+	exec(t, c, []string{"sh", "-c", paRun + " paplay /tmp/sine440.wav &"})
+	time.Sleep(1 * time.Second)
+
+	// Capture 3 seconds of audio from NullSink's monitor source.
+	captureOut, captureCode := exec(t, c, []string{"sh", "-c",
+		paRun + " timeout 3 parec --device=NullSink.monitor --format=s16le --rate=44100 --channels=2 " +
+			"--file-format=wav /tmp/out.wav 2>&1; echo EXIT=$?"})
+	t.Logf("parec output: %s (exec code %d)", captureOut, captureCode)
+
+	// Stop playback.
+	exec(t, c, []string{"sh", "-c", "pkill -f 'paplay.*sine440' 2>/dev/null; true"})
+
+	// Verify capture file exists.
+	lsOut, _ := exec(t, c, []string{"sh", "-c", "ls -la /tmp/out.wav 2>&1"})
+	t.Logf("capture file: %s", lsOut)
+	if strings.Contains(lsOut, "No such file") {
+		t.Fatal("FAIL: parec did not produce /tmp/out.wav")
+	}
+
+	// Copy the captured WAV out of the container for analysis.
+	wavPath := filepath.Join(t.TempDir(), "out.wav")
+	wavB64, _ := exec(t, c, []string{"sh", "-c", "base64 /tmp/out.wav"})
+	wavData, err := base64.StdEncoding.DecodeString(strings.TrimSpace(wavB64))
+	if err != nil {
+		t.Fatalf("FAIL: decode base64 of captured WAV: %v", err)
+	}
+	if err := os.WriteFile(wavPath, wavData, 0644); err != nil {
+		t.Fatalf("FAIL: write captured WAV: %v", err)
+	}
+	t.Logf("Captured WAV: %d bytes", len(wavData))
+
+	// Analyze: the captured audio must not be silent and must contain ~440 Hz.
+	dominant, rms, err := analyzeWavFrequency(wavPath, 44100)
+	if err != nil {
+		t.Fatalf("FAIL: could not analyze captured audio: %v", err)
+	}
+	t.Logf("Captured audio: dominant=%.1f Hz, RMS=%.6f", dominant, rms)
+
+	if rms < 0.001 {
+		t.Fatal("FAIL: captured audio is silent — rdpsnd not delivering audio to client")
+	}
+	if math.Abs(dominant-440.0) > 44.0 {
+		t.Errorf("FAIL: dominant frequency %.1f Hz, expected ~440 Hz (±10%%)", dominant)
+	} else {
+		t.Logf("PASS: RDP audio playback working — captured %.1f Hz sine (RMS=%.4f)", dominant, rms)
+	}
+}
+
+// TestRdp_AudioRedirection verifies end-to-end RDP audio: a 440 Hz sine wave
+// played on the server reaches the FreeRDP client via the rdpsnd channel.
+// Subtests isolate each pipeline hop to pinpoint where audio breaks.
+//
+// Pipeline: paplay → PA xrdp-sink → module-xrdp-sink → xrdp rdpsnd
+//           → xfreerdp /sound:sys:pulse → client PA → ClientSink
+func TestRdp_AudioRedirection(t *testing.T) {
+	probeGUI(t)
+	c := startRdpContainer(t)
+	skipIfNoXfreerdp(t, c)
+
+	paRun := "gosu " + hostUser + " env PULSE_SERVER=unix:/tmp/pulse-runtime/pulse/native XDG_RUNTIME_DIR=/tmp/pulse-runtime"
+
+	for _, tool := range []string{"paplay", "parec", "pactl"} {
+		if _, code := exec(t, c, []string{"sh", "-c", "command -v " + tool}); code != 0 {
+			t.Skipf("skipping: %s not on PATH", tool)
+		}
+	}
+
+	sinksOut, _ := exec(t, c, []string{"sh", "-c", paRun + " pactl list sinks short 2>/dev/null"})
+	if !strings.Contains(sinksOut, "xrdp-sink") {
+		t.Skip("skipping: xrdp-sink not loaded — module-xrdp-sink not available")
+	}
+	t.Logf("Server PA sinks:\n%s", sinksOut)
+
+	exec(t, c, []string{"sh", "-c", paRun + " pactl set-default-sink xrdp-sink 2>/dev/null; true"})
+
+	// --- Client-side setup ---
+
+	exec(t, c, []string{"sh", "-c", "Xvfb :98 -screen 0 1024x768x24 2>/dev/null &"})
+	time.Sleep(1 * time.Second)
+	t.Cleanup(func() {
+		exec(t, c, []string{"sh", "-c", "pkill -f 'Xvfb :98' 2>/dev/null; true"})
+	})
+
+	clientPADir := "/tmp/pa-client"
+	clientPAScript := `#!/bin/sh
+mkdir -p ` + clientPADir + `
+export XDG_RUNTIME_DIR=` + clientPADir + `
+pulseaudio --daemonize=yes --exit-idle-time=-1 --disable-shm=true -n \
+  --load="module-native-protocol-unix auth-anonymous=1 socket=` + clientPADir + `/native" \
+  --load="module-null-sink sink_name=ClientSink" \
+  --load="module-always-sink"
+`
+	if err := c.CopyToContainer(context.Background(), []byte(clientPAScript), "/tmp/start-client-pa.sh", 0o755); err != nil {
+		t.Fatalf("copy client PA script: %v", err)
+	}
+	paStartOut, paStartCode := exec(t, c, []string{"sh", "-c",
+		"gosu " + hostUser + " /tmp/start-client-pa.sh 2>&1"})
+	t.Logf("client PA start: exit=%d output=%s", paStartCode, paStartOut)
+	time.Sleep(2 * time.Second)
+	t.Cleanup(func() {
+		exec(t, c, []string{"sh", "-c",
+			"gosu " + hostUser + " env PULSE_SERVER=unix:" + clientPADir + "/native pulseaudio --kill 2>/dev/null; true"})
+	})
+
+	clientPA := "gosu " + hostUser + " env PULSE_SERVER=unix:" + clientPADir + "/native"
+
+	clientSinks, code := exec(t, c, []string{"sh", "-c", clientPA + " pactl list sinks short 2>&1"})
+	if code != 0 || !strings.Contains(clientSinks, "ClientSink") {
+		psOut, _ := exec(t, c, []string{"sh", "-c", "ps aux | grep pulse"})
+		lsOut, _ := exec(t, c, []string{"sh", "-c", "ls -la " + clientPADir + "/"})
+		t.Fatalf("client PulseAudio not running or ClientSink missing:\nsinks: %s\nps: %s\nls: %s", clientSinks, psOut, lsOut)
+	}
+	t.Logf("Client PA sinks:\n%s", clientSinks)
+
+	// Launch xfreerdp as the session user (not root) — PulseAudio's
+	// pa_context_new() returns NULL for root, breaking rdpsnd-pulse.
+	exec(t, c, []string{"sh", "-c",
+		"gosu " + hostUser + " env DISPLAY=:98 PULSE_SERVER=unix:" + clientPADir + "/native " +
+			"xfreerdp /v:127.0.0.1:3389 /u:" + hostUser + " /p:rdp /cert:ignore " +
+			"/sound:sys:pulse /log-level:DEBUG >/tmp/freerdp-stdout.log 2>/tmp/freerdp-debug.log &"})
+	t.Cleanup(func() {
+		exec(t, c, []string{"sh", "-c", "pkill -f 'xfreerdp.*127.0.0.1:3389' 2>/dev/null; true"})
+	})
+	time.Sleep(10 * time.Second)
+
+	vncOut, _ := exec(t, c, []string{"sh", "-c",
+		"grep '170C' /proc/net/tcp6 /proc/net/tcp 2>/dev/null | grep -c ' 01 '"})
+	vncCount, _ := strconv.Atoi(strings.TrimSpace(vncOut))
+	if vncCount == 0 {
+		t.Fatal("xfreerdp did not establish RDP session (no VNC connection)")
+	}
+	t.Logf("RDP session established (%d VNC connections)", vncCount)
+
+	// Copy sine wave and start playback on server PA (routed to xrdp-sink).
+	wavData := generateSineWAV(440.0, 44100, 5, 2)
+	if err := c.CopyToContainer(context.Background(), wavData, "/tmp/sine440.wav", 0o644); err != nil {
+		t.Fatalf("copy sine440.wav into container: %v", err)
+	}
+	exec(t, c, []string{"sh", "-c", paRun + " paplay /tmp/sine440.wav &"})
+	time.Sleep(2 * time.Second)
+
+	// --- Subtests: isolate each pipeline hop ---
+
+	t.Run("1_server_xrdp_sink_receives_audio", func(t *testing.T) {
+		sinks, _ := exec(t, c, []string{"sh", "-c", paRun + " pactl list sinks short 2>/dev/null"})
+		t.Logf("Server sinks during playback:\n%s", sinks)
+		for _, line := range strings.Split(sinks, "\n") {
+			if strings.Contains(line, "xrdp-sink") {
+				if strings.Contains(line, "RUNNING") {
+					t.Logf("PASS: xrdp-sink is RUNNING — PulseAudio is routing audio to it")
+					return
+				}
+				t.Errorf("xrdp-sink state is not RUNNING (got: %s) — paplay may not be routing to xrdp-sink", strings.TrimSpace(line))
+				return
+			}
+		}
+		t.Error("xrdp-sink not found in sink list during playback")
+	})
+
+	t.Run("2_chansrv_rdpsnd_negotiated", func(t *testing.T) {
+		chLog, _ := exec(t, c, []string{"sh", "-c",
+			"cat /tmp/xrdp-chansrv.*.log 2>/dev/null | grep -iv FUSE"})
+		t.Logf("chansrv log (filtered):\n%s", lastNLines(chLog, 40))
+
+		hasFormat := strings.Contains(chLog, "sound_process_output_format")
+		hasTraining := strings.Contains(chLog, "sound_process_training")
+		if hasFormat && hasTraining {
+			t.Logf("PASS: chansrv negotiated rdpsnd formats and completed training")
+		} else {
+			t.Errorf("chansrv missing rdpsnd negotiation (format=%v training=%v)", hasFormat, hasTraining)
+		}
+	})
+
+	t.Run("3_freerdp_rdpsnd_active", func(t *testing.T) {
+		debugLog, _ := exec(t, c, []string{"sh", "-c", "cat /tmp/freerdp-debug.log 2>/dev/null"})
+		t.Logf("FreeRDP debug log (last 80 lines):\n%s", lastNLines(debugLog, 80))
+
+		hasRdpsnd := strings.Contains(strings.ToLower(debugLog), "rdpsnd") ||
+			strings.Contains(strings.ToLower(debugLog), "sound")
+		hasAudioData := strings.Contains(debugLog, "SNDC_WAVE") ||
+			strings.Contains(debugLog, "WaveInfo") ||
+			strings.Contains(debugLog, "rdpsnd_recv_pdu")
+		if hasRdpsnd {
+			t.Logf("FreeRDP log mentions rdpsnd channel")
+		} else {
+			t.Error("FreeRDP debug log has no rdpsnd references — channel not loaded by client")
+		}
+		if hasAudioData {
+			t.Logf("PASS: FreeRDP is receiving audio data PDUs (SNDC_WAVE/WaveInfo)")
+		} else {
+			t.Error("FreeRDP debug log has no audio data PDUs — xrdp may not be sending audio frames")
+		}
+	})
+
+	t.Run("4_client_sink_receives_audio", func(t *testing.T) {
+		sinks, _ := exec(t, c, []string{"sh", "-c", clientPA + " pactl list sinks short 2>/dev/null"})
+		t.Logf("Client sinks during playback:\n%s", sinks)
+		for _, line := range strings.Split(sinks, "\n") {
+			if strings.Contains(line, "ClientSink") {
+				if strings.Contains(line, "RUNNING") {
+					t.Logf("PASS: ClientSink is RUNNING — FreeRDP is pushing audio to client PA")
+					return
+				}
+				t.Errorf("ClientSink state is not RUNNING (got: %s) — FreeRDP not delivering audio to client PA", strings.TrimSpace(line))
+				return
+			}
+		}
+		t.Error("ClientSink not found in client PA sink list")
+	})
+
+	t.Run("5_client_captures_440hz", func(t *testing.T) {
+		captureOut, _ := exec(t, c, []string{"sh", "-c",
+			clientPA + " timeout 3 parec --device=ClientSink.monitor " +
+				"--format=s16le --rate=44100 --channels=2 --file-format=wav /tmp/client-out.wav 2>&1; echo EXIT=$?"})
+		t.Logf("client parec output: %s", captureOut)
+
+		exec(t, c, []string{"sh", "-c", "pkill -f 'paplay.*sine440' 2>/dev/null; true"})
+
+		lsOut, _ := exec(t, c, []string{"sh", "-c", "ls -la /tmp/client-out.wav 2>&1"})
+		t.Logf("client capture file: %s", lsOut)
+		if strings.Contains(lsOut, "No such file") {
+			t.Fatal("parec did not produce /tmp/client-out.wav")
+		}
+
+		wavPath := filepath.Join(t.TempDir(), "client-out.wav")
+		wavB64, _ := exec(t, c, []string{"sh", "-c", "base64 /tmp/client-out.wav"})
+		capturedWav, err := base64.StdEncoding.DecodeString(strings.TrimSpace(wavB64))
+		if err != nil {
+			t.Fatalf("decode base64 of captured WAV: %v", err)
+		}
+		if err := os.WriteFile(wavPath, capturedWav, 0644); err != nil {
+			t.Fatalf("write captured WAV: %v", err)
+		}
+		t.Logf("Captured WAV: %d bytes", len(capturedWav))
+
+		dominant, rms, err := analyzeWavFrequency(wavPath, 44100)
+		if err != nil {
+			t.Fatalf("could not analyze captured audio: %v", err)
+		}
+		t.Logf("Client captured audio: dominant=%.1f Hz, RMS=%.6f", dominant, rms)
+
+		if rms < 0.001 {
+			t.Fatal("client captured audio is silent — rdpsnd channel not delivering audio")
+		}
+		if math.Abs(dominant-440.0) > 44.0 {
+			t.Errorf("dominant frequency %.1f Hz, expected ~440 Hz (±10%%)", dominant)
+		} else {
+			t.Logf("PASS: end-to-end RDP audio — client captured %.1f Hz sine (RMS=%.4f)", dominant, rms)
+		}
+	})
+}
+
+// generateSineWAV returns a 16-bit stereo PCM WAV at the given frequency.
+func generateSineWAV(freq float64, sampleRate, durationSec, channels int) []byte {
+	numSamples := sampleRate * durationSec
+	dataSize := numSamples * channels * 2
+	fileSize := 36 + dataSize
+
+	buf := make([]byte, 44+dataSize)
+	copy(buf[0:4], "RIFF")
+	binary.LittleEndian.PutUint32(buf[4:8], uint32(fileSize))
+	copy(buf[8:12], "WAVE")
+	copy(buf[12:16], "fmt ")
+	binary.LittleEndian.PutUint32(buf[16:20], 16)
+	binary.LittleEndian.PutUint16(buf[20:22], 1) // PCM
+	binary.LittleEndian.PutUint16(buf[22:24], uint16(channels))
+	binary.LittleEndian.PutUint32(buf[24:28], uint32(sampleRate))
+	binary.LittleEndian.PutUint32(buf[28:32], uint32(sampleRate*channels*2))
+	binary.LittleEndian.PutUint16(buf[32:34], uint16(channels*2))
+	binary.LittleEndian.PutUint16(buf[34:36], 16)
+	copy(buf[36:40], "data")
+	binary.LittleEndian.PutUint32(buf[40:44], uint32(dataSize))
+
+	off := 44
+	for i := 0; i < numSamples; i++ {
+		v := math.Sin(2.0 * math.Pi * freq * float64(i) / float64(sampleRate))
+		s := int16(v * 32000)
+		for ch := 0; ch < channels; ch++ {
+			binary.LittleEndian.PutUint16(buf[off:off+2], uint16(s))
+			off += 2
+		}
+	}
+	return buf
+}
+
+// copyFromContainer copies a file from the container to a local path.
+func copyFromContainer(t *testing.T, c testcontainers.Container, containerPath, localPath string) {
+	t.Helper()
+	ctx := context.Background()
+	reader, err := c.CopyFileFromContainer(ctx, containerPath)
+	if err != nil {
+		t.Fatalf("copy %s from container: %v", containerPath, err)
+	}
+	defer reader.Close()
+
+	// CopyFileFromContainer returns a tar stream; extract the single file.
+	data, err := extractTarFile(reader)
+	if err != nil {
+		t.Fatalf("extract %s from tar: %v", containerPath, err)
+	}
+	if err := os.WriteFile(localPath, data, 0644); err != nil {
+		t.Fatalf("write %s: %v", localPath, err)
+	}
+}
+
+// extractTarFile reads the first file from a tar archive stream.
+func extractTarFile(r io.Reader) ([]byte, error) {
+	tr := tar.NewReader(r)
+	_, err := tr.Next()
+	if err != nil {
+		return nil, fmt.Errorf("tar next: %w", err)
+	}
+	return io.ReadAll(tr)
+}
+
+// analyzeWavFrequency reads a 16-bit PCM WAV file, computes RMS amplitude and
+// the dominant frequency via FFT (zero-padded DFT on the left channel).
+func analyzeWavFrequency(path string, sampleRate int) (dominantHz float64, rms float64, err error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	// Minimal WAV parsing: skip 44-byte header, read s16le samples.
+	if len(data) < 45 {
+		return 0, 0, fmt.Errorf("WAV file too small (%d bytes)", len(data))
+	}
+	if string(data[:4]) != "RIFF" {
+		return 0, 0, fmt.Errorf("not a WAV file (magic: %q)", string(data[:4]))
+	}
+
+	// Extract PCM data after 44-byte header (assumes standard WAV header).
+	pcm := data[44:]
+	// 2 channels × 2 bytes/sample = 4 bytes per frame; take left channel only.
+	numFrames := len(pcm) / 4
+	if numFrames < 256 {
+		return 0, 0, fmt.Errorf("too few audio frames (%d)", numFrames)
+	}
+
+	// Use a power-of-2 FFT size for simpler DFT.
+	fftSize := 1
+	for fftSize < numFrames && fftSize < 65536 {
+		fftSize <<= 1
+	}
+	if fftSize > numFrames {
+		fftSize >>= 1
+	}
+
+	samples := make([]float64, fftSize)
+	var sumSq float64
+	for i := 0; i < fftSize; i++ {
+		off := i * 4 // left channel of stereo s16le
+		s := int16(binary.LittleEndian.Uint16(pcm[off : off+2]))
+		v := float64(s) / 32768.0
+		samples[i] = v
+		sumSq += v * v
+	}
+	rms = math.Sqrt(sumSq / float64(fftSize))
+
+	// Simple DFT (Cooley-Tukey radix-2 FFT).
+	spectrum := fft(samples)
+
+	// Find peak in the first half (positive frequencies only).
+	maxMag := 0.0
+	maxBin := 0
+	for i := 1; i < fftSize/2; i++ {
+		mag := cmplx.Abs(spectrum[i])
+		if mag > maxMag {
+			maxMag = mag
+			maxBin = i
+		}
+	}
+	dominantHz = float64(maxBin) * float64(sampleRate) / float64(fftSize)
+	return dominantHz, rms, nil
+}
+
+// fft computes an in-place radix-2 Cooley-Tukey FFT.
+func fft(x []float64) []complex128 {
+	n := len(x)
+	if n&(n-1) != 0 {
+		panic("fft: length must be power of 2")
+	}
+
+	c := make([]complex128, n)
+	for i, v := range x {
+		c[i] = complex(v, 0)
+	}
+
+	// Bit-reversal permutation.
+	j := 0
+	for i := 1; i < n; i++ {
+		bit := n >> 1
+		for ; j&bit != 0; bit >>= 1 {
+			j ^= bit
+		}
+		j ^= bit
+		if i < j {
+			c[i], c[j] = c[j], c[i]
+		}
+	}
+
+	// Cooley-Tukey butterfly.
+	for size := 2; size <= n; size <<= 1 {
+		half := size / 2
+		w := -2.0 * math.Pi / float64(size)
+		for i := 0; i < n; i += size {
+			for k := 0; k < half; k++ {
+				t := cmplx.Rect(1, w*float64(k)) * c[i+k+half]
+				c[i+k+half] = c[i+k] - t
+				c[i+k] = c[i+k] + t
+			}
+		}
+	}
+	return c
 }

@@ -753,6 +753,60 @@ func TestCellSection_ResolvedStack_Base(t *testing.T) {
 	}
 }
 
+// --- StackExplicit (CELL-43) ---
+
+func TestCellSection_StackExplicit_FalseWhenUnset(t *testing.T) {
+	c := cfg.CellSection{}
+	if c.StackExplicit() {
+		t.Error("empty Stack must report not explicit")
+	}
+}
+
+func TestCellSection_StackExplicit_TrueWhenSet(t *testing.T) {
+	c := cfg.CellSection{Stack: "ultimate"}
+	if !c.StackExplicit() {
+		t.Error("non-empty Stack must report explicit")
+	}
+}
+
+// --- DescribeModulesSource (CELL-48) ---
+
+func TestDescribeModulesSource_Default(t *testing.T) {
+	c := cfg.CellSection{}
+	got := c.DescribeModulesSource()
+	want := "default (base stack, no extra modules)"
+	if got != want {
+		t.Errorf("default: want %q, got %q", want, got)
+	}
+}
+
+func TestDescribeModulesSource_StackOnly(t *testing.T) {
+	c := cfg.CellSection{Stack: "go"}
+	got := c.DescribeModulesSource()
+	want := "stack=go"
+	if got != want {
+		t.Errorf("stack-only: want %q, got %q", want, got)
+	}
+}
+
+func TestDescribeModulesSource_ModulesOnly(t *testing.T) {
+	c := cfg.CellSection{Modules: []string{"a", "b"}}
+	got := c.DescribeModulesSource()
+	want := "modules=[a,b]"
+	if got != want {
+		t.Errorf("modules-only: want %q, got %q", want, got)
+	}
+}
+
+func TestDescribeModulesSource_Merged(t *testing.T) {
+	c := cfg.CellSection{Stack: "go", Modules: []string{"a", "b"}}
+	got := c.DescribeModulesSource()
+	want := "stack=go + modules=[a,b] (merged)"
+	if got != want {
+		t.Errorf("merged: want %q, got %q", want, got)
+	}
+}
+
 // --- Stack/Modules merge ---
 
 func TestMerge_StackProjectWins(t *testing.T) {
@@ -773,12 +827,18 @@ func TestMerge_StackGlobalKeptWhenProjectEmpty(t *testing.T) {
 	}
 }
 
-func TestMerge_ModulesProjectReplaces(t *testing.T) {
+// Modules merge: UNION with dedup, global order preserved.
+// Project's explicit empty list ([]) clears global as escape hatch.
+// See CELL-67 for rationale.
+
+func TestMerge_ModulesProjectUnionsWithGlobal(t *testing.T) {
 	global := cfg.CellConfig{Cell: cfg.CellSection{Modules: []string{"a"}}}
 	project := cfg.CellConfig{Cell: cfg.CellSection{Modules: []string{"b", "c"}}}
 	merged := cfg.Merge(global, project)
-	if len(merged.Cell.Modules) != 2 || merged.Cell.Modules[0] != "b" || merged.Cell.Modules[1] != "c" {
-		t.Errorf("want [b c], got %v", merged.Cell.Modules)
+	got := merged.Cell.Modules
+	want := []string{"a", "b", "c"}
+	if !equalStrings(got, want) {
+		t.Errorf("want %v, got %v", want, got)
 	}
 }
 
@@ -786,8 +846,47 @@ func TestMerge_ModulesGlobalKeptWhenProjectNil(t *testing.T) {
 	global := cfg.CellConfig{Cell: cfg.CellSection{Modules: []string{"a"}}}
 	project := cfg.CellConfig{}
 	merged := cfg.Merge(global, project)
-	if len(merged.Cell.Modules) != 1 || merged.Cell.Modules[0] != "a" {
+	if !equalStrings(merged.Cell.Modules, []string{"a"}) {
 		t.Errorf("want [a], got %v", merged.Cell.Modules)
+	}
+}
+
+func TestMerge_ModulesProjectOnlyWhenGlobalNil(t *testing.T) {
+	global := cfg.CellConfig{}
+	project := cfg.CellConfig{Cell: cfg.CellSection{Modules: []string{"x", "y"}}}
+	merged := cfg.Merge(global, project)
+	if !equalStrings(merged.Cell.Modules, []string{"x", "y"}) {
+		t.Errorf("want [x y], got %v", merged.Cell.Modules)
+	}
+}
+
+func TestMerge_ModulesBothNil(t *testing.T) {
+	global := cfg.CellConfig{}
+	project := cfg.CellConfig{}
+	merged := cfg.Merge(global, project)
+	if len(merged.Cell.Modules) != 0 {
+		t.Errorf("want empty, got %v", merged.Cell.Modules)
+	}
+}
+
+func TestMerge_ModulesDedupPreservesGlobalOrder(t *testing.T) {
+	// Project re-lists items already in global → dedup, but global order wins.
+	global := cfg.CellConfig{Cell: cfg.CellSection{Modules: []string{"kicad", "yahoo-finance"}}}
+	project := cfg.CellConfig{Cell: cfg.CellSection{Modules: []string{"yahoo-finance", "kicad"}}}
+	merged := cfg.Merge(global, project)
+	want := []string{"kicad", "yahoo-finance"}
+	if !equalStrings(merged.Cell.Modules, want) {
+		t.Errorf("want %v (global order preserved), got %v", want, merged.Cell.Modules)
+	}
+}
+
+func TestMerge_ModulesDedupWithOverlapAppendsNewItems(t *testing.T) {
+	global := cfg.CellConfig{Cell: cfg.CellSection{Modules: []string{"a", "b"}}}
+	project := cfg.CellConfig{Cell: cfg.CellSection{Modules: []string{"b", "c"}}}
+	merged := cfg.Merge(global, project)
+	want := []string{"a", "b", "c"}
+	if !equalStrings(merged.Cell.Modules, want) {
+		t.Errorf("want %v, got %v", want, merged.Cell.Modules)
 	}
 }
 
@@ -798,6 +897,27 @@ func TestMerge_ModulesProjectEmptyArrayClearsGlobal(t *testing.T) {
 	if len(merged.Cell.Modules) != 0 {
 		t.Errorf("explicit empty modules should clear global, got %v", merged.Cell.Modules)
 	}
+}
+
+func TestMerge_ModulesGlobalEmptyProjectHas(t *testing.T) {
+	global := cfg.CellConfig{Cell: cfg.CellSection{Modules: []string{}}}
+	project := cfg.CellConfig{Cell: cfg.CellSection{Modules: []string{"a"}}}
+	merged := cfg.Merge(global, project)
+	if !equalStrings(merged.Cell.Modules, []string{"a"}) {
+		t.Errorf("want [a], got %v", merged.Cell.Modules)
+	}
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func TestMerge_StackAndModulesFromLayeredTOML(t *testing.T) {
@@ -816,8 +936,9 @@ modules = ["electronics"]
 	if c.Cell.Stack != "go" {
 		t.Errorf("stack: want go, got %q", c.Cell.Stack)
 	}
-	if len(c.Cell.Modules) != 1 || c.Cell.Modules[0] != "electronics" {
-		t.Errorf("modules: want [electronics], got %v", c.Cell.Modules)
+	// Modules UNION (CELL-67): global [desktop] + project [electronics] → [desktop, electronics]
+	if !equalStrings(c.Cell.Modules, []string{"desktop", "electronics"}) {
+		t.Errorf("modules: want [desktop electronics], got %v", c.Cell.Modules)
 	}
 }
 
@@ -862,7 +983,10 @@ func TestValidateStack_EmptyIsValid(t *testing.T) {
 
 func TestKnownStacks_ReturnsExpectedList(t *testing.T) {
 	stacks := cfg.KnownStacks()
-	want := []string{"base", "go", "node", "python", "fullstack", "electronics", "ultimate"}
+	// CELL-292: `core` prepended as the smallest first-class stack (just
+	// home-manager + one tiny package). Modules 2.0 (CELL-63): `dev`
+	// between base and the legacy stacks.
+	want := []string{"core", "base", "dev", "go", "node", "python", "fullstack", "electronics", "ultimate"}
 	if len(stacks) != len(want) {
 		t.Fatalf("want %d stacks, got %d: %v", len(want), len(stacks), stacks)
 	}
@@ -1278,5 +1402,80 @@ func TestMerge_AwsGlobalKeptWhenProjectUnset(t *testing.T) {
 	merged := cfg.Merge(global, project)
 	if merged.Aws.ReadOnly == nil || *merged.Aws.ReadOnly {
 		t.Error("global aws.read_only=false should be kept when project unset")
+	}
+}
+
+// --- [stealth] section ---
+
+func TestLoadFile_StealthSection(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[stealth]
+arch = "arm"
+platform = "Linux"
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Stealth.Arch != "arm" {
+		t.Errorf("stealth.arch: want arm, got %q", c.Stealth.Arch)
+	}
+	if c.Stealth.Platform != "Linux" {
+		t.Errorf("stealth.platform: want Linux, got %q", c.Stealth.Platform)
+	}
+}
+
+func TestStealthSection_ResolvedArch_DefaultFromRuntime(t *testing.T) {
+	s := cfg.StealthSection{}
+	arch := s.ResolvedArch()
+	// Default must detect from runtime — on arm64 host → "arm", on amd64 → "x86"
+	if arch != "arm" && arch != "x86" {
+		t.Errorf("ResolvedArch() default should be arm or x86, got %q", arch)
+	}
+}
+
+func TestStealthSection_ResolvedArch_ExplicitOverride(t *testing.T) {
+	s := cfg.StealthSection{Arch: "x86"}
+	if got := s.ResolvedArch(); got != "x86" {
+		t.Errorf("ResolvedArch() with explicit x86: want x86, got %q", got)
+	}
+}
+
+func TestStealthSection_ResolvedPlatform_Default(t *testing.T) {
+	s := cfg.StealthSection{}
+	if got := s.ResolvedPlatform(); got != "Linux" {
+		t.Errorf("ResolvedPlatform() default: want Linux, got %q", got)
+	}
+}
+
+func TestStealthSection_ResolvedPlatform_ExplicitOverride(t *testing.T) {
+	s := cfg.StealthSection{Platform: "macOS"}
+	if got := s.ResolvedPlatform(); got != "macOS" {
+		t.Errorf("ResolvedPlatform() explicit: want macOS, got %q", got)
+	}
+}
+
+func TestStealthSection_ResolvedUserAgent_ContainsArch(t *testing.T) {
+	s := cfg.StealthSection{}
+	ua := s.ResolvedUserAgent()
+	if ua == "" {
+		t.Fatal("ResolvedUserAgent() should return a non-empty default Chrome UA string")
+	}
+	// Default on arm64 host: UA should contain the platform indicator
+	if !strings.Contains(ua, "Chrome/") {
+		t.Errorf("ResolvedUserAgent() should contain Chrome/ version, got %q", ua)
+	}
+}
+
+func TestMerge_StealthProjectWins(t *testing.T) {
+	global := cfg.CellConfig{Stealth: cfg.StealthSection{Arch: "x86", Platform: "Linux"}}
+	project := cfg.CellConfig{Stealth: cfg.StealthSection{Arch: "arm", Platform: "macOS"}}
+	merged := cfg.Merge(global, project)
+	if merged.Stealth.Arch != "arm" {
+		t.Errorf("stealth.arch: project should win, got %q", merged.Stealth.Arch)
+	}
+	if merged.Stealth.Platform != "macOS" {
+		t.Errorf("stealth.platform: project should win, got %q", merged.Stealth.Platform)
 	}
 }

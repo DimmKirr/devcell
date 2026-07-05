@@ -66,13 +66,58 @@
 
     # Map of stack name → module list
     stacks = {
+      "devcell-core" = [./stacks/core.nix];          # CELL-292: smallest viable (home-manager + 1 pkg)
       "devcell-base" = [./stacks/base.nix];
+      "devcell-dev" = [./stacks/dev.nix];           # Modules 2.0 default seed
       "devcell-go" = [./stacks/go.nix];
       "devcell-node" = [./stacks/node.nix];
       "devcell-python" = [./stacks/python.nix];
       "devcell-fullstack" = [./stacks/fullstack.nix];
       "devcell-electronics" = [./stacks/electronics.nix];
       "devcell-ultimate" = [./stacks/ultimate.nix];
+    };
+
+    # Modules 2.0 catalog — flat metadata keyed by module name (CELL-65).
+    # CLI reads this with: nix eval .#devcellModules --json
+    # Source of truth: each module's `options.devcell.modules.<name>.meta`
+    # attribute; this attrset mirrors them statically so CLI can read without
+    # evaluating the full home-manager module system.
+    devcellModules = {
+      android        = { description = "Android dev: ADB+fastboot (all arch), Android SDK + emulator + apktool + jadx (x86_64 only)"; mcpServers = []; sizeMb = 2500; };
+      apple          = { description = "Swift toolchain for CGO and Apple-platform cross-compilation"; mcpServers = []; sizeMb = 900; };
+      build          = { description = "C/C++ build toolchain: clang/cmake/make/llvm/lld"; mcpServers = []; sizeMb = 1500; };
+      desktop        = { description = "GUI desktop: Fluxbox WM, Xvfb display, VNC + RDP servers, PulseAudio, screenshot tools"; mcpServers = []; sizeMb = 1200; };
+      electronics    = { description = "KiCad EDA, SPICE simulation, ESP32/Arduino dev, hardware sim, PCB MCP"; mcpServers = ["kicad-mcp"]; sizeMb = 800; };
+      financial      = { description = "Yahoo Finance, SEC EDGAR, FRED — market data, filings, economic time series"; mcpServers = ["yahoo-finance" "edgartools" "mcp-fredapi"]; sizeMb = 500; };
+      go             = { description = "Go toolchain: mise-managed runtime + golangci-lint, gopls, gotools"; mcpServers = []; sizeMb = 350; };
+      graphics       = { description = "Vector graphics (Inkscape), raster (GIMP), Draw.io headless; MCP for Inkscape + GIMP"; mcpServers = ["inkscape-mcp" "gimp-mcp"]; sizeMb = 900; };
+      infra          = { description = "IaC + Cloud: Terraform/OpenTofu, AWS CLI v2, Helm, Packer, Porter, MCPs for AWS API/CloudWatch/OpenTofu/Notion"; mcpServers = ["aws-api" "cloudwatch" "opentofu" "notion-api"]; sizeMb = 1200; };
+      news           = { description = "Inoreader RSS — feeds, articles, search, tagging"; mcpServers = ["inoreader"]; sizeMb = 50; };
+      nixos          = { description = "Nix dev tooling: nix-tree, nix-diff, nixfmt, deadnix, statix, nom"; mcpServers = []; sizeMb = 30; };
+      node           = { description = "Node.js runtime (mise) + Hugo static site generator"; mcpServers = []; sizeMb = 200; };
+      plex           = { description = "Plex Media Server control via MCP — needs PLEX_URL + PLEX_TOKEN"; mcpServers = ["plex"]; sizeMb = 80; };
+      postgresql     = { description = "Local PostgreSQL 17 — auto-started in entrypoint, default db created"; mcpServers = []; sizeMb = 60; };
+      project-management = { description = "Hubstaff time tracking, n8n workflows, Linear (HTTP), Atlassian Jira/Confluence (HTTP)"; mcpServers = ["hubstaff-mcp" "n8n" "linear-server" "atlassian"]; sizeMb = 250; };
+      publishing     = { description = "Document publishing: LaTeX + Pandoc + Typst + Marp slides + Biber bibliography"; mcpServers = []; sizeMb = 1700; };
+      python         = { description = "Python runtime (mise) + uv fast package manager"; mcpServers = []; sizeMb = 250; };
+      qa-tools       = { description = "MailSlurp — create inboxes, read/list/clear emails programmatically for QA"; mcpServers = ["mailslurp"]; sizeMb = 60; };
+      scraping       = { description = "Patchright stealth browser MCP — anti-bot Chromium for Cloudflare/Kasada-grade sites"; mcpServers = ["playwright"]; sizeMb = 700; };
+      security       = { description = "Vuln scanners + fuzzers + recon + RE + forensics (nuclei, nmap, sqlmap, ghidra, ...)"; mcpServers = []; sizeMb = 3500; };
+      travel         = { description = "Google Maps (geocoding, routing, places) + TripIt (trips, itineraries)"; mcpServers = ["google-maps" "tripit"]; sizeMb = 100; };
+    };
+
+    # Modules 2.0 profiles — named compositions (CELL-63).
+    # CLI: nix eval .#devcellProfiles --json
+    devcellProfiles = {
+      base = [];
+      dev = ["scraping" "infra"];
+      ultimate = [
+        # from fullstack
+        "build" "go" "apple" "infra" "node" "project-management" "python" "qa-tools" "scraping"
+        # ultimate additions
+        "android" "desktop" "electronics" "graphics" "news" "nixos"
+        "postgresql" "publishing" "security" "travel" "plex"
+      ];
     };
 
     # Generate homeConfigurations for x86_64-linux and aarch64-linux.
@@ -130,6 +175,12 @@
       {}
       stacks;
   in {
+    # Modules 2.0 catalog + profiles (CELL-65, CELL-63).
+    # CLI reads these with:
+    #   nix eval .#devcellModules --json   # full catalog with metadata
+    #   nix eval .#devcellProfiles --json  # named compositions
+    inherit devcellModules devcellProfiles;
+
     # Expose building blocks so user wrapper flakes can compose custom stacks:
     #   devcell.lib.mkHome "x86_64-linux" [ devcell.stacks.go ]
     lib = { inherit mkHome; };
@@ -151,10 +202,12 @@
       graphics = [./modules/graphics.nix];
       infra = [./modules/infra.nix];
       llm = [./modules/llm];
+      media = [./modules/media];                     # bundles plex
       mise = [./modules/mise.nix];
       news = [./modules/news.nix];
       nixos = [./modules/nixos.nix];
       node = [./modules/node.nix];
+      plex = [./modules/media/plex.nix];
       postgresql = [./modules/postgresql.nix];
       project-management = [./modules/project-management.nix];
       python = [./modules/python.nix];

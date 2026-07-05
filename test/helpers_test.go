@@ -11,6 +11,8 @@ import (
 	"os"
 	osexec "os/exec"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -43,8 +45,116 @@ var (
 	runDirOnce sync.Once
 )
 
+// minFreeDiskGB is the minimum free Docker VM disk needed for integration tests.
+// Thin images are ~1.5GB + volume; pure/impure need ~30GB for image builds.
+func minFreeDiskGB() int {
+	if isThinVariant() {
+		return 5
+	}
+	return 35
+}
+
+// checkDiskSpace probes the Docker VM filesystem via `docker run alpine df`
+// and returns an error if available space is below minFreeDiskGB.
+func checkDiskSpace() error {
+	out, err := osexec.Command("docker", "run", "--rm", "alpine", "df", "-B1", "/").Output()
+	if err != nil {
+		log.Printf("warning: disk space check failed: %v (continuing anyway)", err)
+		return nil
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) < 2 {
+		log.Printf("warning: unexpected df output: %s", string(out))
+		return nil
+	}
+	fields := strings.Fields(lines[1])
+	if len(fields) < 4 {
+		log.Printf("warning: cannot parse df output: %s", lines[1])
+		return nil
+	}
+	availBytes, err := strconv.ParseInt(fields[3], 10, 64)
+	if err != nil {
+		log.Printf("warning: cannot parse available bytes: %s", fields[3])
+		return nil
+	}
+	totalBytes, _ := strconv.ParseInt(fields[1], 10, 64)
+	usedBytes, _ := strconv.ParseInt(fields[2], 10, 64)
+	availGB := float64(availBytes) / (1024 * 1024 * 1024)
+	totalGB := float64(totalBytes) / (1024 * 1024 * 1024)
+	usedGB := float64(usedBytes) / (1024 * 1024 * 1024)
+	log.Printf("Docker VM disk: %.1f GB total, %.1f GB used, %.1f GB available", totalGB, usedGB, availGB)
+
+	// Show docker system df summary breakdown
+	dfOut, err := osexec.Command("docker", "system", "df").Output()
+	if err == nil {
+		for _, line := range strings.Split(strings.TrimSpace(string(dfOut)), "\n") {
+			log.Printf("  %s", line)
+		}
+	}
+
+	// Show containers holding images (these block prune)
+	psOut, err := osexec.Command("docker", "ps", "--format", "{{.Names}}\t{{.Image}}\t{{.Size}}\t{{.Status}}").Output()
+	if err == nil {
+		containers := strings.Split(strings.TrimSpace(string(psOut)), "\n")
+		if len(containers) > 0 && containers[0] != "" {
+			log.Printf("  Running containers (block image/volume prune):")
+			for _, c := range containers {
+				log.Printf("    %s", c)
+			}
+		}
+	}
+
+	// Show per-volume sizes
+	volOut, err := osexec.Command("docker", "system", "df", "-v").Output()
+	if err == nil {
+		inVolumes := false
+		for _, line := range strings.Split(string(volOut), "\n") {
+			trimmed := strings.TrimSpace(line)
+			if strings.Contains(line, "Local Volumes") {
+				inVolumes = true
+				log.Printf("  Volumes:")
+				continue
+			}
+			if inVolumes && strings.Contains(line, "Build cache") {
+				break
+			}
+			if inVolumes && trimmed != "" && !strings.HasPrefix(trimmed, "VOLUME") {
+				log.Printf("    %s", trimmed)
+			}
+		}
+	}
+
+	if availGB < float64(minFreeDiskGB()) {
+		return fmt.Errorf("insufficient Docker VM disk: %.1f GB available, need %d GB\n"+
+			"  To free space:\n"+
+			"  1. Stop unused containers: docker stop <name>\n"+
+			"  2. Then prune: docker system prune -a --volumes -f\n"+
+			"  3. Or increase Docker Desktop VM disk: Settings → Resources → Virtual disk limit",
+			availGB, minFreeDiskGB())
+	}
+	return nil
+}
+
 // TestMain cleans up locally-built test images after all tests complete.
+//
+// Long-test bucketing: when DEVCELL_TEST_BUILD_THIN=1, builds the ultimate-thin
+// image ONCE before any test runs and exports its tag via DEVCELL_TEST_THIN_IMAGE
+// so every thin-variant test reuses the same fresh image. Without that env var,
+// tests fall back to a preexisting `devcell-user:ultimate-thin` or skip cleanly.
+// This keeps the convention: short tests never trigger a build; long tests opt
+// in via env var or `testing.Short()` gates.
 func TestMain(m *testing.M) {
+	if err := checkDiskSpace(); err != nil {
+		log.Fatalf("disk space check failed: %v", err)
+	}
+	if os.Getenv("DEVCELL_TEST_BUILD_THIN") == "1" {
+		tag, err := buildLocalImage("ultimate-thin", "devcell-user")
+		if err != nil {
+			log.Fatalf("DEVCELL_TEST_BUILD_THIN=1: build failed: %v", err)
+		}
+		log.Printf("DEVCELL_TEST_BUILD_THIN=1: built %s, exporting DEVCELL_TEST_THIN_IMAGE", tag)
+		os.Setenv("DEVCELL_TEST_THIN_IMAGE", tag)
+	}
 	code := m.Run()
 	if ultimateTag != "" {
 		osexec.Command("docker", "rmi", ultimateTag).Run()
@@ -74,15 +184,23 @@ func shortSHA() string {
 }
 
 // buildLocalImage builds a bake target with a unique tag and returns the tag.
+// THICK image path — produces a Dockerfile-built (impure) image. Use
+// buildThinImage for thin variants where nix store lives on a volume.
+//
+// Pins PLATFORMS to the host arch because `docker buildx bake --load` can't
+// import multi-platform manifests (docker-bake.hcl defaults to amd64+arm64).
 func buildLocalImage(target, tagPrefix string) (string, error) {
 	tag := fmt.Sprintf("%s:%s-%s", tagPrefix, shortSHA(), time.Now().Format("20060102T150405"))
-	log.Printf("Building %s image: %s", target, tag)
+	hostPlatform := "linux/" + runtime.GOARCH // GOARCH already uses Docker's vocabulary (amd64, arm64)
+	log.Printf("Building %s image: %s (platform=%s)", target, tag, hostPlatform)
 	cmd := osexec.Command("docker", "buildx", "bake",
 		"--file", "docker-bake.hcl",
 		"--load",
 		"--set", fmt.Sprintf("%s.tags=%s", target, tag),
+		"--set", fmt.Sprintf("%s.platform=%s", target, hostPlatform),
 		target)
 	cmd.Dir = ".."
+	cmd.Env = append(os.Environ(), "PLATFORMS="+hostPlatform)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
@@ -91,17 +209,94 @@ func buildLocalImage(target, tagPrefix string) (string, error) {
 	return tag, nil
 }
 
-// Local tag conventions (DIMM-219):
-//   - `task image:impure:build:ultimate` → ghcr.io/dimmkirr/devcell:ultimate-local
+// buildThinImage invokes `cell build --thin --stack <stack> --image <tag>` to
+// produce a thin image (nix store on /nix volume). Builds `bin/cell-test` on
+// demand if not present. Returns the tag handed to --image. Honest E2E of the
+// user-facing thin-build path; reuses the shared `devcell-nix-store` volume
+// for incremental builds (~minutes when the store already has overlap).
+func buildThinImage(stack string) (string, error) {
+	cellBin, err := ensureCellBinary()
+	if err != nil {
+		return "", err
+	}
+	tag := fmt.Sprintf("devcell-user:%s-thin-%s", stack, shortSHA())
+	log.Printf("Building thin image: stack=%s, tag=%s", stack, tag)
+	cmd := osexec.Command(cellBin, "build", "--thin", "--stack", stack, "--image", tag, "--debug")
+	cmd.Dir = ".."
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("cell build --thin --stack %s --image %s: %w", stack, tag, err)
+	}
+	return tag, nil
+}
+
+// ensureCellBinary builds ../bin/cell-test ONCE per test process and returns
+// its absolute path. Always rebuilds on first call (no stale-cache silent
+// failures when iterating on cmd/* code); cached via sync.Once across tests
+// in the same `go test` run.
+func ensureCellBinary() (string, error) {
+	cellBinOnce.Do(func() {
+		// Write under TempDir to dodge race with cell-test binary held open by
+		// other long-running processes (we keep multiple devcell shells alive
+		// during dev). Per-run binary is fresh + isolated.
+		tmp, err := os.MkdirTemp("", "cell-test-bin-")
+		if err != nil {
+			cellBinErr = fmt.Errorf("mkdir tmp: %w", err)
+			return
+		}
+		cellBin := filepath.Join(tmp, "cell-test")
+		log.Printf("Building cell binary at %s", cellBin)
+		build := osexec.Command("go", "build", "-o", cellBin, "./cmd")
+		build.Dir = ".."
+		build.Env = append(os.Environ(), "CGO_ENABLED=0")
+		build.Stdout = os.Stdout
+		build.Stderr = os.Stderr
+		if err := build.Run(); err != nil {
+			cellBinErr = fmt.Errorf("build cell binary: %w", err)
+			return
+		}
+		cellBinPath = cellBin
+	})
+	return cellBinPath, cellBinErr
+}
+
+var (
+	cellBinOnce sync.Once
+	cellBinPath string
+	cellBinErr  error
+)
+
+// Local tag conventions (CELL-108):
+//   - `task image:impure:build:ultimate` → ghcr.io/devcell-sh/devcell:ultimate-local
 //   - `task image:pure:build:ultimate`   → devcell-user:ultimate-pure
 const (
-	localImpureUltimateTag = "ghcr.io/dimmkirr/devcell:ultimate-local"
+	localImpureUltimateTag = "ghcr.io/devcell-sh/devcell:ultimate-local"
 	localPureUltimateTag   = "devcell-user:ultimate-pure"
+	localThinUltimateTag   = "devcell-user:ultimate-thin"
+	defaultThinVolumeName  = "devcell-nix-store"
 )
+
+// thinVolumeName returns the Docker volume to mount at /nix for thin-variant
+// tests. Reads BOTH:
+//   - DEVCELL_NIX_VOLUME (the canonical production env var also honoured by
+//     `runner.ThinStoreVolume` — set by tests that drive `cell build` and
+//     need build + run to target the same volume), preferred.
+//   - DEVCELL_TEST_VOLUME_NAME (legacy test-only override), fallback.
+// Either lets a test isolate to a unique volume with t.Cleanup-based removal.
+func thinVolumeName() string {
+	if v := os.Getenv("DEVCELL_NIX_VOLUME"); v != "" {
+		return v
+	}
+	if v := os.Getenv("DEVCELL_TEST_VOLUME_NAME"); v != "" {
+		return v
+	}
+	return defaultThinVolumeName
+}
 
 // imageTagForVariant resolves the test image tag for a given variant
 // without touching docker — pure function so the priority order is
-// table-testable (DIMM-219).
+// table-testable (CELL-108).
 //
 // Returns (tag, skipReason). Caller semantics:
 //   - tag != "" → use it directly.
@@ -110,6 +305,14 @@ const (
 //   - tag == "" && skipReason != "" → caller should t.Skip(skipReason) or panic.
 func imageTagForVariant(variant, pureEnv, impureEnv string, exists func(string) bool) (tag, skipReason string) {
 	switch variant {
+	case "thin":
+		if env := os.Getenv("DEVCELL_TEST_THIN_IMAGE"); env != "" {
+			return env, ""
+		}
+		if exists(localThinUltimateTag) {
+			return localThinUltimateTag, ""
+		}
+		return "", "thin variant requested but local `" + localThinUltimateTag + "` is not available; run `cell build --thin` to enable"
 	case "pure":
 		if pureEnv != "" {
 			return pureEnv, ""
@@ -504,6 +707,11 @@ func testdataImage() string {
 	return testdataTag
 }
 
+// isThinVariant returns true when running integration tests against the thin image.
+func isThinVariant() bool {
+	return os.Getenv("DEVCELL_TEST_VARIANT") == "thin"
+}
+
 func startContainer(t *testing.T, env map[string]string) testcontainers.Container {
 	t.Helper()
 	ctx := context.Background()
@@ -515,6 +723,13 @@ func startContainer(t *testing.T, env map[string]string) testcontainers.Containe
 		Cmd:   []string{"tail", "-f", "/dev/null"},
 		WaitingFor: wait.ForExec([]string{"pgrep", "tail"}).
 			WithStartupTimeout(30 * 1e9),
+	}
+
+	// Thin variant: mount the nix store volume
+	if isThinVariant() {
+		req.Mounts = testcontainers.Mounts(
+			testcontainers.VolumeMount(thinVolumeName(), "/nix"),
+		)
 	}
 
 	c, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
@@ -538,4 +753,12 @@ func exec(t *testing.T, c testcontainers.Container, cmd []string) (string, int) 
 	var stdout bytes.Buffer
 	stdcopy.StdCopy(&stdout, io.Discard, reader)
 	return strings.TrimSpace(stdout.String()), code
+}
+
+func lastNLines(s string, n int) string {
+	lines := strings.Split(s, "\n")
+	if len(lines) <= n {
+		return s
+	}
+	return strings.Join(lines[len(lines)-n:], "\n")
 }

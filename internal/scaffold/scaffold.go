@@ -132,7 +132,7 @@ func GenerateFlakeNix(stack string, modules []string, ver string, withNixhome bo
 	if stack == "" {
 		stack = "base"
 	}
-	inputURL := fmt.Sprintf(`"github:DimmKirr/devcell/%s?dir=nixhome"`, ver)
+	inputURL := fmt.Sprintf(`"%s"`, runner.UpstreamFlakeRef(ver))
 	if withNixhome {
 		inputURL = `"path:./nixhome"`
 	}
@@ -142,6 +142,18 @@ func GenerateFlakeNix(stack string, modules []string, ver string, withNixhome bo
 	moduleExpr := fmt.Sprintf("devcell.stacks.%s", stack)
 	for _, m := range modules {
 		moduleExpr += fmt.Sprintf(" ++ devcell.modules.%s", m)
+	}
+
+	// Modules 2.0 (CELL-65): each module file declares
+	// `options.devcell.modules.<name>.enable = mkEnableOption ...` and gates its
+	// config on it. Importing the file alone is not enough — we must ALSO set
+	// .enable = true. Append an inline configuration list-element for that.
+	if len(modules) > 0 {
+		var enableLines []string
+		for _, m := range modules {
+			enableLines = append(enableLines, fmt.Sprintf("devcell.modules.%s.enable = true;", m))
+		}
+		moduleExpr += fmt.Sprintf(" ++ [ { %s } ]", strings.Join(enableLines, " "))
 	}
 
 	return fmt.Sprintf(`{
@@ -233,6 +245,7 @@ SHELL ["/bin/bash", "-c"]
 RUN which uv && cd /opt/python-tools && uv sync || true
 SHELL ["/bin/sh", "-c"]
 ENV PATH="/opt/python-tools/.venv/bin:${PATH}"
+
 `, baseImage, baseImage, stack, modulesStr, nixhomeCopy)
 }
 
@@ -411,7 +424,35 @@ func NixhomeSource(configDir string) string {
 // nixhome's inputs — prevents stale lock from pinning different nixpkgs
 // than the base image, which would cause a full re-download.
 // Writes .devcell-source to track the origin.
+//
+// srcPath accepts either:
+//   - a local filesystem path (copied as-is via CopyDir)
+//   - a github flake ref like `github:owner/repo/ref?dir=subdir` — cloned via
+//     git (host-side; no nix dependency), then the subdir is treated as the
+//     source. This lets the thin builder mount a populated nixhome even when
+//     the user has no local checkout (CELL-38 clean-machine path).
 func SyncNixhome(srcPath, configDir string) error {
+	if strings.HasPrefix(srcPath, "github:") {
+		materialized, cleanup, err := materializeGithubFlakeRef(srcPath)
+		if err != nil {
+			return fmt.Errorf("materialize %s: %w", srcPath, err)
+		}
+		defer cleanup()
+		// Recurse with the materialized local path; record the original ref
+		// as origin in .devcell-source for change detection (see line below).
+		if err := syncNixhomeFromLocal(materialized, configDir, srcPath); err != nil {
+			return err
+		}
+		return nil
+	}
+	return syncNixhomeFromLocal(srcPath, configDir, srcPath)
+}
+
+// syncNixhomeFromLocal does the actual cp + .devcell-source + git-init work.
+// origin is the value recorded in .devcell-source — for direct local syncs
+// it equals srcPath, but for github materializations origin is the original
+// `github:...` ref (so change detection sees the ref, not the temp dir).
+func syncNixhomeFromLocal(srcPath, configDir, origin string) error {
 	if _, err := os.Stat(srcPath); err != nil {
 		return fmt.Errorf("nixhome source %s: %w", srcPath, err)
 	}
@@ -423,16 +464,11 @@ func SyncNixhome(srcPath, configDir string) error {
 	if err := CopyDir(srcPath, dest); err != nil {
 		return err
 	}
-	// Record source origin for change detection.
-	if err := os.WriteFile(filepath.Join(dest, NixhomeSourceFile), []byte(srcPath+"\n"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dest, NixhomeSourceFile), []byte(origin+"\n"), 0644); err != nil {
 		return err
 	}
-	ux.Debugf("SyncNixhome: copied %s → %s", srcPath, dest)
+	ux.Debugf("SyncNixhome: copied %s → %s (origin: %s)", srcPath, dest, origin)
 
-	// Nix path: flakes filter sources via git ls-files, walking up to find
-	// the nearest .git. If the dest is inside a gitignored directory (e.g.
-	// .devcell/), nix sees no files. Create a standalone git context so nix
-	// treats the synced copy as its own repo with all files tracked.
 	if err := exec.Command("git", "init", "-q", dest).Run(); err != nil {
 		return fmt.Errorf("git init synced nixhome: %w", err)
 	}
@@ -441,6 +477,42 @@ func SyncNixhome(srcPath, configDir string) error {
 	}
 	ux.Debugf("SyncNixhome: git init + add in %s (nix flake visibility fix)", dest)
 	return nil
+}
+
+// materializeGithubFlakeRef runs `git clone --depth 1 --branch <ref>` to fetch
+// the github repo into a temp dir, then returns the abs path to the subdir
+// (e.g. nixhome/) referenced by `?dir=...`. Cleanup removes the temp clone.
+//
+// Host-side fetch — no nix dependency. Mirrors what nix would have done with
+// `nix flake metadata` materialization but works on machines without nix
+// (the thin-mode promise).
+func materializeGithubFlakeRef(ref string) (string, func(), error) {
+	parsed, err := ParseGithubFlakeRef(ref)
+	if err != nil {
+		return "", func() {}, err
+	}
+	tmpDir, err := os.MkdirTemp("", "devcell-nixhome-clone-")
+	if err != nil {
+		return "", func() {}, fmt.Errorf("mkdir tmp: %w", err)
+	}
+	cleanup := func() { _ = os.RemoveAll(tmpDir) }
+
+	ux.Debugf("Cloning %s @ %s → %s", parsed.CloneURL(), parsed.Ref, tmpDir)
+	cmd := exec.Command("git", "clone", "--depth", "1", "--branch", parsed.Ref, parsed.CloneURL(), tmpDir)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		cleanup()
+		return "", func() {}, fmt.Errorf("git clone %s @ %s: %w\n%s", parsed.CloneURL(), parsed.Ref, err, output)
+	}
+
+	src := tmpDir
+	if parsed.Subdir != "" {
+		src = filepath.Join(tmpDir, parsed.Subdir)
+		if _, err := os.Stat(src); err != nil {
+			cleanup()
+			return "", func() {}, fmt.Errorf("subdir %q not found in %s: %w", parsed.Subdir, parsed.CloneURL(), err)
+		}
+	}
+	return src, cleanup, nil
 }
 
 // CopyDir recursively copies src directory to dst.
@@ -552,7 +624,7 @@ func doScaffold(dir string, modelsSnippet string, nixhomePath string, force bool
 // cell init.
 //
 // Cache optimization: when the user picks a known stack, we try to use the
-// pre-built stack image (ghcr.io/dimmkirr/devcell:latest-<stack>) as the FROM
+// pre-built stack image (ghcr.io/devcell-sh/devcell:latest-<stack>) as the FROM
 // line. This lets Docker/nix reuse the existing /nix/store paths from that
 // image — only the delta is downloaded. If the pre-built image isn't available
 // (not yet pushed, network error), we fall back to the core image.
@@ -602,7 +674,7 @@ func resolveBaseImage(stack string) string {
 	// Explicit override wins — user knows what they want.
 	if tag := os.Getenv("DEVCELL_BASE_IMAGE"); tag != "" {
 		if stack != "base" && cfg.ValidateStack(stack) == nil {
-			ux.Debugf("Stack cache candidate: %s (skipped — DEVCELL_BASE_IMAGE override)", runner.StackImageTagDebian(stack))
+			ux.Debugf("Stack cache candidate: %s (skipped — DEVCELL_BASE_IMAGE override)", runner.StackImageTagImpure(stack))
 		}
 		ux.Debugf("FROM image: %s (DEVCELL_BASE_IMAGE override)", tag)
 		return tag
@@ -611,7 +683,7 @@ func resolveBaseImage(stack string) string {
 	// Try pre-built stack image for nix store cache reuse.
 	// "base" stack doesn't benefit — it's tiny and core already has nix.
 	if stack != "base" && cfg.ValidateStack(stack) == nil {
-		stackTag := runner.StackImageTagDebian(stack)
+		stackTag := runner.StackImageTagImpure(stack)
 
 		// Check local first, then try pull.
 		ctx := context.Background()

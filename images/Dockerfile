@@ -9,7 +9,7 @@ ARG NIX_CACHE_IMAGE=public.ecr.aws/docker/library/debian:trixie-slim
 # Stage: builder
 # Compile the cell CLI binary from repo source (CI context = repo root).
 ###############################################################################
-FROM public.ecr.aws/docker/library/golang:1.25-alpine AS builder
+FROM public.ecr.aws/docker/library/golang:1.26-alpine AS builder
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -170,6 +170,33 @@ WORKDIR /
 
 ENTRYPOINT ["tini", "--", "/usr/local/bin/entrypoint.sh"]
 CMD ["tail", "-f", "/dev/null"]
+
+###############################################################################
+# Stage: dev
+# devcell-dev profile: Modules 2.0 default seed (scraping + infra) — ~3 GB.
+# Patchright stealth browser + IaC MCPs. Smallest stack that demos value in
+# session 1. Bumped to default in `cell init` post-Modules-2.0.
+###############################################################################
+FROM core AS dev
+
+ARG USER_UID=1000
+ARG USER_GID=1000
+COPY --chown=${USER_UID}:${USER_GID} nixhome/ /opt/nixhome/
+RUN ARCH=$(uname -m) && \
+    [ "$ARCH" = "aarch64" ] && ARCH_SUFFIX="-aarch64" || ARCH_SUFFIX="" && \
+    home-manager switch --flake "/opt/nixhome#devcell-dev${ARCH_SUFFIX}" && \
+    cd "$HOME" && MISE_DATA_DIR=/opt/mise MISE_YES=1 mise install && \
+    for tool_dir in /opt/mise/installs/*/; do \
+      tool=$(basename "$tool_dir"); \
+      version_dir=$(ls -1d "${tool_dir}"*/ 2>/dev/null | head -1); \
+      if [ -n "$version_dir" ]; then ln -sfT "$version_dir" "/opt/mise/$tool"; fi; \
+    done && \
+    mkdir -p /opt/devcell/.local/share/mise && \
+    ln -sfn /opt/mise/installs /opt/devcell/.local/share/mise/installs && \
+    MISE_DATA_DIR=/opt/devcell/.local/share/mise mise reshim && \
+    { nix-collect-garbage -d; nix-store --optimise; true; }
+
+ENV DEVCELL_PROFILE=devcell-dev
 
 ###############################################################################
 # Stage: go

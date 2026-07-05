@@ -1,10 +1,16 @@
 # .devcell.toml — project-level DevCell overrides (merged on top of ~/.config/devcell/devcell.toml)
 
 # [cell]
-# Stack override for this project (one of: base, go, node, python, fullstack, electronics, ultimate)
-# stack = "base"
-# Extra modules to compose on top of stack (from nixhome/modules/)
-# modules = ["desktop", "infra", "electronics", "financial", "graphics", "news", "nixos", "travel"]
+# Base stack — `base` (minimal), `dev` (default, ~3 GB: patchright + opentofu),
+# or `ultimate` (~15 GB, every module enabled). Legacy: go/node/python/fullstack/electronics.
+# stack = "dev"
+#
+# Add modules from the catalog (run `cell modules list` to see them):
+#   electronics, graphics, financial, travel, project-management, news, qa-tools,
+#   security, publishing, postgresql, plex, android, apple, build, go, node, python, nixos
+# Modules merge UNION with global ~/.config/devcell/devcell.toml — set explicit empty (modules = []) to clear global.
+# modules = ["electronics"]
+#
 # gui = true
 # timezone = "Europe/Prague"
 

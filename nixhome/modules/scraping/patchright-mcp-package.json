@@ -4,5 +4,9 @@
   "private": true,
   "dependencies": {
     "patchright-mcp": "0.0.68"
+  },
+  "overrides": {
+    "patchright": "1.60.2",
+    "patchright-core": "1.60.2"
   }
 }

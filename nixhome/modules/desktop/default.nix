@@ -21,11 +21,26 @@
 #   libwxgtk3.2-1, libwxgtk-webview3.2-1 → pkgs.wxGTK32 (pname="wxwidgets" 3.2.x)
 {pkgs, lib, config, ...}:
 let
+  modCfg = config.devcell.modules.desktop;
   # Import theme — palette (c), fonts (f), and generated fluxbox cfg.
   theme = import ./themes/main/theme.nix { inherit lib pkgs; };
   inherit (theme) c f cfg init xresources wallpaper pixmaps;
 in
 {
+  options.devcell.modules.desktop = {
+    enable = lib.mkEnableOption "X11/VNC/RDP desktop environment (Fluxbox + Xvfb + PulseAudio)";
+    meta = lib.mkOption {
+      type = lib.types.attrs;
+      readOnly = true;
+      default = {
+        description = "GUI desktop: Fluxbox WM, Xvfb display, VNC + RDP servers, PulseAudio, screenshot tools";
+        mcpServers = [ ];
+        sizeMb = 1200;
+      };
+    };
+  };
+
+  config = lib.mkIf modCfg.enable {
   # LD_LIBRARY_PATH for non-nix binaries (Chromium, Electron, downloaded tools).
   # NIX_LD_LIBRARY_PATH points at /opt/devcell/.nix-ld-libs — a merged directory
   # with symlinks to every .so* from the profile closure (glibc excluded).
@@ -76,6 +91,8 @@ in
   home.packages = with pkgs; [
     # Audio — PulseAudio with null sink for headless audio (Chromium AudioContext)
     pulseaudio # (use: pulseaudio --start --exit-idle-time=-1)
+    pulseaudio-module-xrdp # RDP audio redirection — routes PulseAudio → xrdp rdpsnd channel
+    (lib.lowPrio sox) # audio Swiss Army knife; lowPrio avoids /bin/play collision with gotools
 
     # VNC/RDP server stack — used by entrypoint.sh when DEVCELL_GUI_ENABLED=true
     x11vnc # VNC server for X11
@@ -272,10 +289,14 @@ in
     # SingletonLock and silently prints "Opening in existing browser session." with no
     # visible window. `--new-window` makes the IPC request a fresh window every click
     # (and falls back to a normal cold start when chromium isn't running).
-    menu = ''
+    menu = let
+      hasPkg = name: lib.any (p: (p.pname or "") == name) config.home.packages;
+      optEntry = cond: entry: lib.optionalString cond entry;
+    in ''
       [begin] ([*.] devcell)
         [submenu] (Applications)
-          [exec] (Chromium) {chromium --new-window}
+          ${optEntry (hasPkg "chromium") "[exec] (Chromium) {chromium --new-window}"}
+          ${optEntry (hasPkg "kicad-small" || hasPkg "kicad") "[exec] (KiCad) {kicad}"}
         [end]
         [exec] (Kitty) {${pkgs.kitty}/bin/kitty}
         [exec] (XTerm) {${pkgs.xterm}/bin/xterm}
@@ -401,4 +422,5 @@ in
       source = ../fragments/50-gui.sh;
     };
   } // pixmaps;
+  };
 }

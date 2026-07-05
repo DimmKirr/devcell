@@ -183,8 +183,11 @@
     sandbox = false
     filter-syscalls = false
     sandbox-fallback = true
-    max-substitution-jobs = 128
-    http-connections = 128
+    # 128 concurrent downloads caused cache.nixos.org throttling (CELL-293)
+    # — symptoms were "curl error: Failed sending data to the peer" + HTTP 416.
+    # 16 is the upstream default; stays under the CDN's throttle threshold.
+    max-substitution-jobs = 16
+    http-connections = 16
     trusted-users = root *
     # Empty = build as the invoking user (no privilege drop to nixbld<N>
     # build users). The pure image is a single-user filesystem (devcell @
@@ -257,7 +260,7 @@
     # path must produce it here at image-build time.
     cp ${metadataJson} $out/etc/devcell/metadata.json
 
-    # Stage /etc/devcell/tool-versions (DIMM-214).
+    # Stage /etc/devcell/tool-versions (CELL-85).
     # mise.nix's home.activation.writeToolVersions writes this at home-manager
     # switch time, but pure (nix2container) builds skip activation scripts —
     # only home.file content is materialized via `cp -aL home-files/. ...`.
@@ -347,7 +350,7 @@
     EOF
     chmod 0440 $out/etc/sudoers
 
-    # /etc/pam.d/sudo — permissive PAM stub (DIMM-216).
+    # /etc/pam.d/sudo — permissive PAM stub (CELL-86).
     # The sudoers policy plugin (`${pkgs.sudo}/libexec/sudo/sudoers.so`) is
     # built with PAM linkage and calls pam_start("sudo", ...) at load time —
     # the `pkgs.sudo` derivation's override `{ withPam = false; }` strips PAM
@@ -397,8 +400,11 @@
     sandbox = false
     filter-syscalls = false
     sandbox-fallback = true
-    max-substitution-jobs = 128
-    http-connections = 128
+    # 128 concurrent downloads caused cache.nixos.org throttling (CELL-293)
+    # — symptoms were "curl error: Failed sending data to the peer" + HTTP 416.
+    # 16 is the upstream default; stays under the CDN's throttle threshold.
+    max-substitution-jobs = 16
+    http-connections = 16
     trusted-users = root *
     # Empty = build as the invoking user (no privilege drop to nixbld<N>
     # build users). The pure image is a single-user filesystem (devcell @
@@ -768,52 +774,17 @@ in
     name = "devcell-user";
     inherit tag;
 
-    # Wall-clock timestamp. nix2container stamps this into the IMAGE
-    # manifest only — layer blobs are content-addressed by their actual
-    # bytes, so changing `created` does NOT trigger layer rebuilds. Only
-    # the (tiny) manifest derivation re-runs.
     created = buildDate;
 
-    # Auto-pack with conservative layer count for Docker overlay2 compatibility.
-    #
-    # Docker's overlay2 driver caps stacked layers at ~127. With 20 hand-curated
-    # explicit layers above (each `nix2container.buildLayer` produces exactly one
-    # OCI layer; copyToRoot merges into the customizationLayer), total OCI
-    # layers = 20 + maxLayers. At maxLayers=125 we hit 144-145 → `docker load`
-    # fails with "max depth exceeded" mid-image.
-    #
-    # 50 gives total = 70 OCI layers with a 57-layer safety margin under the
-    # 127 cap — survives adding ~50 more explicit layers without breaking the
-    # build. Tradeoff: each auto-packed sub-layer is ~100-150 MB (vs ~50-70 MB
-    # at maxLayers=100), so an edit to base.nix that re-packs the customization
-    # layer re-emits ~150-450 MB instead of ~50-200 MB. The explicit layers
-    # above (which capture the high-churn hot paths per the file's own comments)
-    # absorb most of the dedup-critical content already, so the auto-pack
-    # granularity loss is acceptable.
     maxLayers = 50;
 
-    # Explicit groupings — heaviest first so they sit lower in the stack and
-    # benefit from cross-image dedup.
     layers = explicitLayers;
 
-    # Pre-populate /nix/var/nix/db with the closure so in-container `nix` works
-    # immediately (recognizes pre-existing store paths, knows what's GC-rooted).
-    # Without this, `nix-store --query --requisites /nix/store/...` returns
-    # "path is not valid" and `nix profile install` fails.
     initializeNixDatabase = includeNix;
 
     copyToRoot = [
       systemTools
       homeRoot
-      # /usr/bin/env shim — upstream nixpkgs derivation that ships a single
-      # `usr/bin/env -> <coreutils>/bin/env` symlink. Without it, every
-      # external script with the canonical `#!/usr/bin/env <interp>` shebang
-      # (Python, Node, Ruby, sh, bash, ...) fails with `bad interpreter:
-      # No such file or directory` because nix2container builds from scratch
-      # and never materializes `/usr/bin/`. The Debian-based impure image
-      # inherits `/usr/bin/env` from the apt coreutils; the pure path needs
-      # this shim to reach parity. `/bin/sh` already works via bashInteractive
-      # in systemTools, so dockerTools.binSh is intentionally not included.
       pkgs.dockerTools.usrBinEnv
     ];
 
@@ -885,6 +856,11 @@ in
         # config to be visible to every process.
         "FONTCONFIG_FILE=${pkgs.fontconfig.out}/etc/fonts/fonts.conf"
         "FONTCONFIG_PATH=/opt/devcell/.config/fontconfig"
+        # Mise shared installs (mise ≥2026.3.9) — baked tool installs are
+        # resolved read-only from this dir; user installs in
+        # ~/.local/share/mise take precedence. Replaces the cross-bind
+        # symlink design (CELL-75). Ignored by mise if the dir is absent.
+        "MISE_SHARED_INSTALL_DIRS=/opt/devcell/.local/share/mise/installs"
         # Mesa / GLX software rendering — chromium (with sandbox) and any
         # GL-using app fails to find a renderer without these. /opt/devcell/.mesa-dri
         # is a stable symlink to pkgs.mesa's DRI drivers (created in homeRoot).
@@ -906,6 +882,7 @@ in
         "org.opencontainers.image.version"  = stackName;
         "devcell.stack" = stackName;
         "devcell.built-with" = "nix2container";
+        "devcell.build-mode" = "full";
       };
     };
   }

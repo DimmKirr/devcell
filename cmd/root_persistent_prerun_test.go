@@ -20,11 +20,11 @@ func TestPersistentPreRun_SetsRunnerStackFromConfig(t *testing.T) {
 	// Save + restore globals so we don't bleed into other tests.
 	origStack := runner.Stack
 	origModules := runner.Modules
-	origPerSession := runner.PerSessionImage
+	origPerSession := runner.PerCellImage
 	t.Cleanup(func() {
 		runner.Stack = origStack
 		runner.Modules = origModules
-		runner.PerSessionImage = origPerSession
+		runner.PerCellImage = origPerSession
 	})
 
 	// Build a temp project with .devcell.toml stack="ultimate".

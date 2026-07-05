@@ -1,14 +1,13 @@
 package runner
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 )
 
 // DefaultNixhomeGitRef is the github branch/tag used when no local nixhome is
 // available and the cell binary doesn't carry a release version (v0.0.0 / dev
-// builds). Set to feature/wip while DIMM-198 lives off main; flip back to
+// builds). Set to feature/wip while CELL-195 lives off main; flip back to
 // "main" when the pure path lands.
 const DefaultNixhomeGitRef = "feature/wip"
 
@@ -89,14 +88,10 @@ func ResolvePureNixhomeRef(inputs PureNixhomeInputs) PureNixhomeRef {
 		}
 	}
 
-	// 3. Remote github fallback — mirrors scaffold.go:130-140 and
-	//    scaffold.ResolveNixhome's v0.0.0 → main coercion.
-	ref := inputs.Version
-	if ref == "" || ref == "v0.0.0" {
-		ref = DefaultNixhomeGitRef
-	}
+	// 3. Remote github fallback — delegates to the single source of truth
+	//    in upstream.go (v0.0.0 → DefaultNixhomeGitRef coercion).
 	return PureNixhomeRef{
-		FlakeRef: fmt.Sprintf("github:DimmKirr/devcell/%s?dir=nixhome", ref),
+		FlakeRef: UpstreamFlakeRef(inputs.Version),
 		Remote:   true,
 	}
 }

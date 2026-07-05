@@ -3,6 +3,7 @@ package cfg
 import (
 	"fmt"
 	"os"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -11,7 +12,7 @@ import (
 
 // DefaultRegistry is the default container registry for devcell images.
 // Must match runner.DefaultRegistry.
-const DefaultRegistry = "public.ecr.aws/w1l3v2k8/devcell"
+const DefaultRegistry = "ghcr.io/devcell-sh/devcell"
 
 // CellSection holds [cell] config.
 type CellSection struct {
@@ -27,9 +28,23 @@ type CellSection struct {
 	VagrantProvider string   `toml:"vagrant_provider"`  // vagrant provider: "utm" (default) or "libvirt"
 	VagrantBox      string   `toml:"vagrant_box"`       // vagrant box name override (default: "utm/bookworm")
 	DockerPrivileged  bool     `toml:"docker_privileged"`   // run container with --privileged; default: false
-	PerSessionImage   *bool    `toml:"per_session_image"`   // tag user image per tmux session instead of per stack; default: false
-	Hostname          string   `toml:"hostname"`            // override container hostname; default: computed "cell-<basename>-<cellID>"; env: DEVCELL_HOSTNAME
+	PerCellImage   *bool    `toml:"per_cell_image"`   // tag user image per cell instead of per stack; default: false
+	Hostname          string   `toml:"hostname"`            // override container hostname; default: computed "cell-<basename>-<bunk>"; env: DEVCELL_HOSTNAME
 	MacAddress        string   `toml:"mac_address"`         // MAC for the container's NIC (XX:XX:XX:XX:XX:XX); pinned across restarts for infra-side identity persistence. Honored on user-defined bridge networks (devcell uses --network devcell-network). Empty → docker auto-assigns a random MAC per launch.
+	Thin              *bool    `toml:"thin"`                // thin image mode; default: true; disable with thin=false or DEVCELL_THIN=0
+}
+
+// ResolvedThin returns the effective thin setting: default ON, disabled by env/toml.
+func (c CellSection) ResolvedThin() bool {
+	if v := os.Getenv("DEVCELL_THIN"); v == "0" {
+		return false
+	} else if v == "1" {
+		return true
+	}
+	if c.Thin != nil {
+		return *c.Thin
+	}
+	return true
 }
 
 // ResolvedRegistry returns the effective registry: env > toml > default.
@@ -51,12 +66,12 @@ func (c CellSection) ResolvedGUI() bool {
 	return *c.GUI
 }
 
-// ResolvedPerSessionImage returns true only when explicitly enabled.
-func (c CellSection) ResolvedPerSessionImage() bool {
-	if c.PerSessionImage == nil {
+// ResolvedPerCellImage returns true only when explicitly enabled.
+func (c CellSection) ResolvedPerCellImage() bool {
+	if c.PerCellImage == nil {
 		return false
 	}
-	return *c.PerSessionImage
+	return *c.PerCellImage
 }
 
 // ResolvedStack returns Stack if set, else "base".
@@ -67,9 +82,41 @@ func (c CellSection) ResolvedStack() string {
 	return "base"
 }
 
+// StackExplicit reports whether the user opted into a specific stack via TOML
+// (`[cell] stack = "..."`). Drives the build progress label — when false, the
+// "stack=..." qualifier is suppressed (CELL-43). CLI/env overrides are
+// handled at the call site by OR'ing the override into this flag.
+func (c CellSection) StackExplicit() bool {
+	return c.Stack != ""
+}
+
+// DescribeModulesSource classifies how the effective module set is sourced —
+// stack-only, explicit-modules-only, both merged, or default — so the cell
+// startup banner can tell the user at a glance what's about to load
+// (CELL-48).
+//
+//	default (base stack, no extra modules)  // neither set
+//	stack=<name>                            // only stack
+//	modules=[a,b,c]                         // only explicit modules
+//	stack=<name> + modules=[a,b,c] (merged) // both
+func (c CellSection) DescribeModulesSource() string {
+	hasStack := c.Stack != ""
+	hasMods := len(c.Modules) > 0
+	switch {
+	case !hasStack && !hasMods:
+		return "default (base stack, no extra modules)"
+	case hasStack && !hasMods:
+		return fmt.Sprintf("stack=%s", c.Stack)
+	case !hasStack && hasMods:
+		return fmt.Sprintf("modules=[%s]", strings.Join(c.Modules, ","))
+	default:
+		return fmt.Sprintf("stack=%s + modules=[%s] (merged)", c.Stack, strings.Join(c.Modules, ","))
+	}
+}
+
 // ResolvedHostname returns the effective container hostname.
 // Precedence: DEVCELL_HOSTNAME env > [cell] hostname in TOML > computed default
-// (typically "cell-<basename>-<cellID>" assembled by config.Load).
+// (typically "cell-<basename>-<bunk>" assembled by config.Load).
 func (c CellSection) ResolvedHostname(computed string) string {
 	if v := os.Getenv("DEVCELL_HOSTNAME"); v != "" {
 		return v
@@ -193,6 +240,54 @@ func (o OpSection) ResolvedDocuments() []string {
 	return out
 }
 
+// StealthSection holds [stealth] config for browser fingerprint spoofing.
+type StealthSection struct {
+	Arch     string `toml:"arch"`
+	Platform string `toml:"platform"`
+}
+
+// ResolvedArch returns the stealth architecture: explicit > host-detected.
+// Maps runtime.GOARCH to Chrome's getHighEntropyValues().architecture values.
+func (s StealthSection) ResolvedArch() string {
+	if s.Arch != "" {
+		return s.Arch
+	}
+	switch runtime.GOARCH {
+	case "arm64", "arm":
+		return "arm"
+	default:
+		return "x86"
+	}
+}
+
+// ResolvedPlatform returns the stealth platform: explicit > "Linux" default.
+func (s StealthSection) ResolvedPlatform() string {
+	if s.Platform != "" {
+		return s.Platform
+	}
+	return "Linux"
+}
+
+// ResolvedUserAgent builds a Chrome UA string matching the stealth identity.
+func (s StealthSection) ResolvedUserAgent() string {
+	arch := s.ResolvedArch()
+	platform := s.ResolvedPlatform()
+	var platformUA string
+	switch platform {
+	case "macOS":
+		platformUA = "Macintosh; Intel Mac OS X 10_15_7"
+	case "Windows":
+		platformUA = "Windows NT 10.0; Win64; x64"
+	default:
+		if arch == "arm" {
+			platformUA = "X11; Linux aarch64"
+		} else {
+			platformUA = "X11; Linux x86_64"
+		}
+	}
+	return "Mozilla/5.0 (" + platformUA + ") AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"
+}
+
 // AwsSection holds [aws] config for AWS credential scoping.
 type AwsSection struct {
 	ReadOnly *bool `toml:"read_only"` // default: true (nil = not set → true)
@@ -209,11 +304,12 @@ func (a AwsSection) ResolvedReadOnly() bool {
 // CellConfig is the merged configuration from all TOML layers.
 type CellConfig struct {
 	Cell     CellSection
-	LLM      LLMSection   `toml:"llm"`
-	Git      GitSection   `toml:"git"`
-	Ports    PortsSection `toml:"ports"`
-	Op       OpSection    `toml:"op"`
-	Aws      AwsSection   `toml:"aws"`
+	LLM      LLMSection     `toml:"llm"`
+	Git      GitSection     `toml:"git"`
+	Ports    PortsSection   `toml:"ports"`
+	Op       OpSection      `toml:"op"`
+	Aws      AwsSection     `toml:"aws"`
+	Stealth  StealthSection `toml:"stealth"`
 	Env      map[string]string
 	Mise     map[string]string `toml:"mise"` // [mise] — keys map to MISE_<UPPER_KEY> env vars
 	Volumes  []VolumeMount
@@ -237,8 +333,33 @@ func LoadFile(path string) (CellConfig, error) {
 	return c, nil
 }
 
+// unionDedupStrings returns a + b with duplicates removed, preserving the
+// order of `a` followed by items in `b` not already in `a`.
+func unionDedupStrings(a, b []string) []string {
+	if len(a) == 0 && len(b) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(a)+len(b))
+	out := make([]string, 0, len(a)+len(b))
+	for _, v := range a {
+		if !seen[v] {
+			seen[v] = true
+			out = append(out, v)
+		}
+	}
+	for _, v := range b {
+		if !seen[v] {
+			seen[v] = true
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 // Merge returns a new CellConfig with project overriding global for scalars;
-// Env maps and Volumes slices are accumulated (project wins on key conflict).
+// slices accumulate (Volumes, Ports.Forward, Op documents, [cell].modules).
+// For [cell].modules: explicit empty list in project ([]) clears global as
+// escape hatch; otherwise project values are unioned with global, deduped.
 func Merge(global, project CellConfig) CellConfig {
 	out := CellConfig{
 		Cell: global.Cell,
@@ -279,15 +400,19 @@ func Merge(global, project CellConfig) CellConfig {
 	if project.Cell.Stack != "" {
 		out.Cell.Stack = project.Cell.Stack
 	}
-	// Modules: project replaces entirely when non-nil (explicit [] clears global)
-	if project.Cell.Modules != nil {
-		out.Cell.Modules = project.Cell.Modules
+	// Modules: union global+project with dedup, preserving global order.
+	// Explicit empty list in project (modules = []) clears global as escape hatch.
+	// See CELL-67 for rationale.
+	if project.Cell.Modules != nil && len(project.Cell.Modules) == 0 {
+		out.Cell.Modules = []string{}
+	} else {
+		out.Cell.Modules = unionDedupStrings(global.Cell.Modules, project.Cell.Modules)
 	}
 	if project.Cell.DockerPrivileged {
 		out.Cell.DockerPrivileged = true
 	}
-	if project.Cell.PerSessionImage != nil {
-		out.Cell.PerSessionImage = project.Cell.PerSessionImage
+	if project.Cell.PerCellImage != nil {
+		out.Cell.PerCellImage = project.Cell.PerCellImage
 	}
 	if project.Cell.Hostname != "" {
 		out.Cell.Hostname = project.Cell.Hostname
@@ -327,6 +452,15 @@ func Merge(global, project CellConfig) CellConfig {
 	out.Aws = global.Aws
 	if project.Aws.ReadOnly != nil {
 		out.Aws.ReadOnly = project.Aws.ReadOnly
+	}
+
+	// Stealth: project wins when non-empty
+	out.Stealth = global.Stealth
+	if project.Stealth.Arch != "" {
+		out.Stealth.Arch = project.Stealth.Arch
+	}
+	if project.Stealth.Platform != "" {
+		out.Stealth.Platform = project.Stealth.Platform
 	}
 
 	// Op documents: accumulate from both Documents and legacy Items, deduped.
@@ -392,7 +526,7 @@ func ApplyEnv(c *CellConfig, getenv func(string) string) {
 	}
 	if v := getenv("DEVCELL_PER_SESSION_IMAGE"); v == "true" || v == "1" {
 		b := true
-		c.Cell.PerSessionImage = &b
+		c.Cell.PerCellImage = &b
 	}
 }
 
@@ -413,19 +547,25 @@ func LoadFromOS(configDir, cwd string) CellConfig {
 }
 
 // Known stack names (must match nixhome/stacks/*.nix without devcell- prefix).
-var knownStacks = []string{"base", "go", "node", "python", "fullstack", "electronics", "ultimate"}
+// `core` is the smallest stack — just home-manager + one tiny package — and
+// is what the cache-roundtrip test fixture builds against to validate the
+// nix-store cache pipeline without the runtime cost of `base`.
+// `dev` is the Modules 2.0 seed (CELL-63): base + scraping + infra (~3 GB).
+var knownStacks = []string{"core", "base", "dev", "go", "node", "python", "fullstack", "electronics", "ultimate"}
 
 // stackSizes maps stack names to approximate compressed download sizes.
 // Measured from GHCR manifests (base, ultimate) and estimated for others
-// using nix download × 2.6 ratio. Updated 2026-03-30.
+// using nix download × 2.6 ratio. Updated 2026-06-18.
 var stackSizes = map[string]string{
+	"core":        "~0.1 GB",
 	"base":        "~0.5 GB",
+	"dev":         "~3 GB",
 	"go":          "~3.6 GB",
 	"node":        "~2.3 GB",
 	"python":      "~2.3 GB",
 	"fullstack":   "~4.2 GB",
 	"electronics": "~4.9 GB",
-	"ultimate":    "~7.6 GB",
+	"ultimate":    "~15 GB",
 }
 
 // KnownStacks returns the list of valid stack names.

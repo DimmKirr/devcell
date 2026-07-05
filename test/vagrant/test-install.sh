@@ -41,7 +41,9 @@ echo "Homebrew: $(brew --version | head -1)"
 
 # ---------- 3. Install devcell ----------
 echo "--- Installing devcell (cask devcell-dev@${CELL_VERSION}) ---"
-brew install --cask "DimmKirr/tap/devcell-dev@${CELL_VERSION}"
+brew tap devcell-sh/tap
+brew trust devcell-sh/tap
+brew install --cask "devcell-sh/tap/devcell-dev@${CELL_VERSION}"
 
 CELL_BIN="$(brew --prefix)/bin/cell"
 if [ ! -x "$CELL_BIN" ]; then

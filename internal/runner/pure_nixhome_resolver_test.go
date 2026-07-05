@@ -108,7 +108,7 @@ func TestResolvePureNixhomeRef_EmptyVersionCoercesToDefaultRef(t *testing.T) {
 // caught by CI. Update this when the pure path lands on main.
 func TestDefaultNixhomeGitRef_IsFeatureWip(t *testing.T) {
 	if runner.DefaultNixhomeGitRef != "feature/wip" {
-		t.Errorf("DefaultNixhomeGitRef = %q; want \"feature/wip\" (flip to \"main\" when DIMM-198 lands)",
+		t.Errorf("DefaultNixhomeGitRef = %q; want \"feature/wip\" (flip to \"main\" when CELL-195 lands)",
 			runner.DefaultNixhomeGitRef)
 	}
 }

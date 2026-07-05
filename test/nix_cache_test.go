@@ -1,4 +1,4 @@
-// nix_cache_test.go — TDD tests for DIMM-118: nix store pre-seeding with DB
+// nix_cache_test.go — TDD tests for CELL-163: nix store pre-seeding with DB
 //
 // L1: Dockerfile/bake syntax validation (no Docker needed)
 // L2: Integration — nix DB recognized after copy (needs Docker)

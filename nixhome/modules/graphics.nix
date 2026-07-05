@@ -1,15 +1,15 @@
-# graphics.nix — Graphics tools: Draw.io headless export, Inkscape editor + MCP servers
+# graphics.nix — Graphics tools: Draw.io, Inkscape, GIMP + MCP servers
 {
   pkgs,
   lib,
   config,
   ...
 }: let
+  cfg = config.devcell.modules.graphics;
   bin = config.devcell.managedMcp.nixBinPrefix;
 
   # inkscape-mcp: Python MCP server exposing Inkscape CLI and DOM operations.
   # Source: https://github.com/grumpydevorg/inkscape-mcps
-  # TODO: pin to specific commit; run: nix-prefetch-github grumpydevorg inkscape-mcps
   inkscape-mcp = pkgs.python3Packages.buildPythonApplication {
     pname = "inkscape-mcp";
     version = "0.1.0";
@@ -33,25 +33,64 @@
     ];
     doCheck = false;
   };
-in {
-  home.packages = with pkgs; [
-    drawio-headless  # Draw.io headless CLI for .drawio → PNG/SVG/PDF export (use: drawio)
-    inkscape         # vector graphics editor (use: inkscape)
-    inkscape-mcp     # Inkscape MCP server for Claude
-    potrace          # bitmap → SVG tracer; ships mkbitmap preprocessor (use: potrace, mkbitmap)
-  ];
 
-  devcell.managedMcp.servers."inkscape-mcp" = {
-    command = "${bin}/inkscape-mcp";
-    args = [];
-    env = {
-      INKS_INKSCAPE_BIN = "${pkgs.inkscape}/bin/inkscape";
-      # Sandbox root = MCP server's cwd at spawn time = project root.
-      # Resolves to the absolute project path via Path("./").resolve(), giving
-      # the agent read/write access to any SVG anywhere in the project tree
-      # while still blocking traversal outside it (and blocking the upstream
-      # default "inkspace" which would litter cwd with a scratch directory).
-      INKS_WORKSPACE = "./";
+  # gimp-mcp: Python MCP server bridging GIMP 3.2 with AI assistants.
+  # 56 tool commands covering every major GIMP operation.
+  # Source: https://github.com/maorcc/gimp-mcp (119 stars)
+  gimp-mcp = pkgs.python3Packages.buildPythonApplication {
+    pname = "gimp-mcp";
+    version = "0.1.0";
+    src = pkgs.fetchFromGitHub {
+      owner = "maorcc";
+      repo = "gimp-mcp";
+      rev = "09bfb2d3e5ca8efdc50c8d0b8c9cdf590ce422c6";
+      hash = "sha256-fmsaDarIQJ9buQjsEYjEet1yCPlQp1w7ZYSYoN//LK0=";
+    };
+    pyproject = true;
+    build-system = [pkgs.python3Packages.setuptools];
+    dependencies = with pkgs.python3Packages; [
+      mcp      # Model Context Protocol SDK
+      fastmcp  # MCP framework
+    ];
+    doCheck = false;
+  };
+in {
+  options.devcell.modules.graphics = {
+    enable = lib.mkEnableOption "Draw.io + Inkscape + GIMP + their MCP servers";
+    meta = lib.mkOption {
+      type = lib.types.attrs;
+      readOnly = true;
+      default = {
+        description = "Vector graphics (Inkscape), raster (GIMP), Draw.io headless; MCP for Inkscape + GIMP";
+        mcpServers = [ "inkscape-mcp" "gimp-mcp" ];
+        sizeMb = 900;
+      };
+    };
+  };
+
+  config = lib.mkIf cfg.enable {
+    home.packages = with pkgs; [
+      drawio-headless  # Draw.io headless CLI for .drawio → PNG/SVG/PDF export (use: drawio)
+      gimp             # GNU Image Manipulation Program 3.2 (use: gimp)
+      gimp-mcp         # GIMP MCP server — 56 AI-driven image editing commands
+      inkscape         # vector graphics editor (use: inkscape)
+      inkscape-mcp     # Inkscape MCP server for Claude
+      potrace          # bitmap → SVG tracer; ships mkbitmap preprocessor (use: potrace, mkbitmap)
+    ];
+
+    devcell.managedMcp.servers."inkscape-mcp" = {
+      command = "${bin}/inkscape-mcp";
+      args = [];
+      env = {
+        INKS_INKSCAPE_BIN = "${pkgs.inkscape}/bin/inkscape";
+        INKS_WORKSPACE = "./";
+      };
+    };
+
+    devcell.managedMcp.servers."gimp-mcp" = {
+      command = "${bin}/gimp-mcp";
+      args = [];
+      env = {};
     };
   };
 }

@@ -18,7 +18,7 @@ func TestStripCellFlags_BoolFlagStripped(t *testing.T) {
 }
 
 // --impure is the canonical opt-in to the legacy Dockerfile (impure) build path
-// after the DIMM-213 vocabulary rename. Like --pure (silent no-op), it must
+// after the CELL-165 vocabulary rename. Like --pure (silent no-op), it must
 // not leak through to the inner binary.
 func TestStripCellFlags_ImpureBoolFlagStripped(t *testing.T) {
 	got := stripCellFlags([]string{"--impure", "claude", "--resume"})
@@ -29,7 +29,7 @@ func TestStripCellFlags_ImpureBoolFlagStripped(t *testing.T) {
 }
 
 // --debian is retained as a deprecated alias for --impure for one release
-// (post DIMM-213). Must still strip from forwarded args so existing scripts
+// (post CELL-165). Must still strip from forwarded args so existing scripts
 // don't leak it to the inner agent and trip "zsh: bad option".
 func TestStripCellFlags_DebianAliasStillStripped(t *testing.T) {
 	got := stripCellFlags([]string{"--debian", "claude", "--resume"})

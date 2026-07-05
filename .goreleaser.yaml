@@ -31,7 +31,7 @@ archives:
 
 release:
   github:
-    owner: DimmKirr
+    owner: devcell-sh
     name: devcell
   draft: true
   replace_existing_draft: true
@@ -66,16 +66,16 @@ checksum:
 homebrew_casks:
   - name: devcell
     repository:
-      owner: DimmKirr
+      owner: devcell-sh
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     directory: Casks
     url:
-      template: "https://github.com/DimmKirr/devcell/releases/download/{{ .Tag }}/{{ .ArtifactName }}"
+      template: "https://github.com/devcell-sh/devcell/releases/download/{{ .Tag }}/{{ .ArtifactName }}"
     commit_author:
       name: Dmitry Kireev
       email: dmitry@atd.sh
-    homepage: "https://github.com/DimmKirr/devcell"
+    homepage: "https://github.com/devcell-sh/devcell"
     description: "Run AI coding agents in a consistent Docker dev environment"
     conflicts:
       - cask: devcell-dev
@@ -83,16 +83,16 @@ homebrew_casks:
 
   - name: "devcell@{{ .Version }}"
     repository:
-      owner: DimmKirr
+      owner: devcell-sh
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     directory: Casks
     url:
-      template: "https://github.com/DimmKirr/devcell/releases/download/{{ .Tag }}/{{ .ArtifactName }}"
+      template: "https://github.com/devcell-sh/devcell/releases/download/{{ .Tag }}/{{ .ArtifactName }}"
     commit_author:
       name: Dmitry Kireev
       email: dmitry@atd.sh
-    homepage: "https://github.com/DimmKirr/devcell"
+    homepage: "https://github.com/devcell-sh/devcell"
     description: "Run AI coding agents in a consistent Docker dev environment"
     conflicts:
       - cask: devcell-dev

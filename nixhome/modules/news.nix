@@ -1,5 +1,6 @@
-# news.nix — RSS/News tools
-{pkgs, config, ...}: let
+# news.nix — RSS/News tools (Inoreader)
+{pkgs, config, lib, ...}: let
+  cfg = config.devcell.modules.news;
   bin = config.devcell.managedMcp.nixBinPrefix;
   # inoreader-mcp: Inoreader RSS MCP — 19 tools (feeds, articles, search, tagging, analytics)
   # https://github.com/justmytwospence/inoreader-mcp
@@ -16,20 +17,35 @@
     nodejs = pkgs.nodejs_22;
   };
 in {
-  home.packages = [
-    inoreaderMcp # Inoreader RSS MCP server (use: inoreader-mcp)
-  ];
+  options.devcell.modules.news = {
+    enable = lib.mkEnableOption "Inoreader RSS MCP";
+    meta = lib.mkOption {
+      type = lib.types.attrs;
+      readOnly = true;
+      default = {
+        description = "Inoreader RSS — feeds, articles, search, tagging";
+        mcpServers = [ "inoreader" ];
+        sizeMb = 50;
+      };
+    };
+  };
 
-  # Inoreader — 19 tools: feeds, articles, search, tagging, batch ops, feed health analysis.
-  # Requires INOREADER_CLIENT_ID, INOREADER_CLIENT_SECRET env vars at runtime.
-  # Get credentials: https://www.inoreader.com/developers/ → create app → redirect URI: http://localhost:3333/callback
-  # Auth: use setup_auth tool to complete OAuth flow. Tokens stored in ~/.config/inoreader-mcp/tokens.json
-  devcell.managedMcp.servers."inoreader" = {
-    command = "${bin}/inoreader-mcp";
-    args = [];
-    env = {
-      INOREADER_CLIENT_ID = "\${INOREADER_CLIENT_ID}";
-      INOREADER_CLIENT_SECRET = "\${INOREADER_CLIENT_SECRET}";
+  config = lib.mkIf cfg.enable {
+    home.packages = [
+      inoreaderMcp # Inoreader RSS MCP server (use: inoreader-mcp)
+    ];
+
+    # Inoreader — 19 tools: feeds, articles, search, tagging, batch ops, feed health analysis.
+    # Requires INOREADER_CLIENT_ID, INOREADER_CLIENT_SECRET env vars at runtime.
+    # Get credentials: https://www.inoreader.com/developers/ → create app → redirect URI: http://localhost:3333/callback
+    # Auth: use setup_auth tool to complete OAuth flow. Tokens stored in ~/.config/inoreader-mcp/tokens.json
+    devcell.managedMcp.servers."inoreader" = {
+      command = "${bin}/inoreader-mcp";
+      args = [];
+      env = {
+        INOREADER_CLIENT_ID = "\${INOREADER_CLIENT_ID}";
+        INOREADER_CLIENT_SECRET = "\${INOREADER_CLIENT_SECRET}";
+      };
     };
   };
 }

@@ -2,9 +2,13 @@ package op
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
+	"strings"
 )
+
+var execCommand = exec.Command
 
 // field is the structure of a single field in `op item get --format json` output.
 type field struct {
@@ -28,9 +32,9 @@ func ResolveItems(items []string) (map[string]string, []error) {
 	env := make(map[string]string)
 	var errs []error
 	for _, name := range items {
-		out, err := exec.Command("op", "item", "get", name, "--format", "json", "--reveal", "--cache").Output()
+		out, err := execCommand("op", "item", "get", name, "--format", "json", "--reveal", "--cache").Output()
 		if err != nil {
-			errs = append(errs, fmt.Errorf("op item get %s: %w", name, err))
+			errs = append(errs, opError(name, err))
 			continue
 		}
 		var it item
@@ -45,4 +49,13 @@ func ResolveItems(items []string) (map[string]string, []error) {
 		}
 	}
 	return env, errs
+}
+
+func opError(name string, err error) error {
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && len(exitErr.Stderr) > 0 {
+		stderr := strings.TrimSpace(string(exitErr.Stderr))
+		return fmt.Errorf("op item get %s: %s (exit %d)", name, stderr, exitErr.ExitCode())
+	}
+	return fmt.Errorf("op item get %s: %w", name, err)
 }

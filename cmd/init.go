@@ -25,7 +25,7 @@ func init() {
 	initCmd.Flags().String("nixhome", "", "nixhome source: local path or git URL (default: upstream repo)")
 	initCmd.Flags().String("local-nixhome", "", "deprecated: use --nixhome instead")
 	_ = initCmd.Flags().MarkHidden("local-nixhome")
-	initCmd.Flags().String("stack", "", "stack name (base, go, node, python, fullstack, electronics, ultimate)")
+	initCmd.Flags().String("stack", "", "stack name (base, dev [seed, ~3 GB], ultimate [~15 GB]; legacy: go, node, python, fullstack, electronics)")
 	initCmd.Flags().StringSlice("modules", nil, "explicit module list (comma-separated, e.g. go,infra,electronics)")
 }
 

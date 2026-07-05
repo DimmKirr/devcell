@@ -71,13 +71,13 @@ func TestScenarioC_NoTmux(t *testing.T) {
 	}
 }
 
-// Scenario D: CELL_ID=99 overrides TMUX_PANE
+// Scenario D: DEVCELL_BUNK=99 overrides TMUX_PANE
 func TestScenarioD_ExplicitCellID(t *testing.T) {
-	argv := buildBehaviourArgv("/tmp/myproject", []string{"CELL_ID", "99", "TMUX_PANE", "%3"},
+	argv := buildBehaviourArgv("/tmp/myproject", []string{"DEVCELL_BUNK", "99", "TMUX_PANE", "%3"},
 		"claude", nil, nil, cfg.CellConfig{})
 	name := findFlagVal(argv, "--name")
 	if !strings.Contains(name, "99") {
-		t.Errorf("expected CellID=99 in container name, got %q", name)
+		t.Errorf("expected Bunk=99 in container name, got %q", name)
 	}
 }
 

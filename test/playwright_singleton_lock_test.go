@@ -1,4 +1,4 @@
-// playwright_singleton_lock_test.go — DIMM-222 actual root cause.
+// playwright_singleton_lock_test.go — CELL-62 actual root cause.
 //
 // When patchright Chromium SIGTRAPs or is SIGKILL'd mid-session, the three
 // singleton-coordination files it created in its user-data-dir are left
@@ -38,7 +38,7 @@ func TestMcp_ChromiumSingletonSweep_HelperPresent_DIMM222(t *testing.T) {
 	out, code := exec(t, c, []string{"sh", "-c",
 		"cat $(command -v patchright-mcp-cell) | grep -c chromium-singleton-sweep"})
 	if code != 0 {
-		t.Fatalf("FAIL DIMM-222: patchright-mcp-cell wrapper does not reference chromium-singleton-sweep (grep exit=%d, out=%q) — per-launch sweep not wired", code, out)
+		t.Fatalf("FAIL CELL-62: patchright-mcp-cell wrapper does not reference chromium-singleton-sweep (grep exit=%d, out=%q) — per-launch sweep not wired", code, out)
 	}
 	t.Logf("PASS: wrapper references chromium-singleton-sweep (%s matches)", strings.TrimSpace(out))
 }
@@ -88,17 +88,17 @@ echo "orphan-after: $(ls -la $ORPHAN 2>&1 || echo '  (removed)')"
 	for _, f := range []string{"SingletonLock", "SingletonCookie", "SingletonSocket"} {
 		_, c2 := exec(t, c, []string{"test", "-h", "/tmp/dimm222-stale/" + f})
 		if c2 == 0 {
-			t.Errorf("FAIL DIMM-222: /tmp/dimm222-stale/%s still exists after sweep — stale lock not removed", f)
+			t.Errorf("FAIL CELL-62: /tmp/dimm222-stale/%s still exists after sweep — stale lock not removed", f)
 		}
 	}
 	_, c2 := exec(t, c, []string{"test", "-d", "/tmp/.org.chromium.Chromium.STALE"})
 	if c2 == 0 {
-		t.Errorf("FAIL DIMM-222: orphan /tmp/.org.chromium.Chromium.STALE/ still exists — orphan tmp dir not cleaned")
+		t.Errorf("FAIL CELL-62: orphan /tmp/.org.chromium.Chromium.STALE/ still exists — orphan tmp dir not cleaned")
 	}
 
 	// The sweep must have logged the action to stderr.
 	if !strings.Contains(out, "removed stale Singleton") {
-		t.Errorf("FAIL DIMM-222: expected 'removed stale Singleton' log line from sweep, got: %s", out)
+		t.Errorf("FAIL CELL-62: expected 'removed stale Singleton' log line from sweep, got: %s", out)
 	}
 }
 
@@ -164,10 +164,10 @@ kill "$LIVE_PID" 2>/dev/null || true
 	for _, f := range []string{"SingletonLock", "SingletonCookie", "SingletonSocket"} {
 		_, c2 := exec(t, c, []string{"test", "-h", "/tmp/dimm222-live/" + f})
 		if c2 != 0 {
-			t.Errorf("FAIL DIMM-222: /tmp/dimm222-live/%s was removed by sweep — live chrome lock destroyed (regression in comm-check)", f)
+			t.Errorf("FAIL CELL-62: /tmp/dimm222-live/%s was removed by sweep — live chrome lock destroyed (regression in comm-check)", f)
 		}
 	}
 	if strings.Contains(out, "removed stale Singleton") {
-		t.Errorf("FAIL DIMM-222: sweep logged removal for a live chrome PID — comm-check guard is broken")
+		t.Errorf("FAIL CELL-62: sweep logged removal for a live chrome PID — comm-check guard is broken")
 	}
 }

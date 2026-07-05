@@ -1,11 +1,11 @@
 package container_test
 
-// variant_test.go — DIMM-219 image variant discovery for tests.
+// variant_test.go — CELL-108 image variant discovery for tests.
 //
 // CI publishes the impure (Debian-based) image as v0.0.0-${arch}-ultimate;
 // the pure (nix2container) image is produced locally by `task image:pure:build:ultimate`
 // as `devcell-user:ultimate-pure` but never auto-discovered by the test
-// suite — so pure-variant regressions ship undetected (see DIMM-214 PATH
+// suite — so pure-variant regressions ship undetected (see CELL-85 PATH
 // failures that differ between variants on the same code).
 //
 // This file adds:
@@ -14,7 +14,7 @@ package container_test
 //   - DEVCELL_TEST_VARIANT dispatch in `image()` so a single env flip routes
 //     all tests to the pure image
 //
-// Path (a) of the DIMM-219 plan: test code only. CI matrix extension to
+// Path (a) of the CELL-108 plan: test code only. CI matrix extension to
 // actually exercise the pure leg on every push is a follow-up.
 
 import (
@@ -61,8 +61,8 @@ func TestVariant_ImageTagForVariant(t *testing.T) {
 		{
 			name: "impure: local ultimate-local tag present",
 			variant:    "impure",
-			existsTags: []string{"ghcr.io/dimmkirr/devcell:ultimate-local"},
-			wantTag:    "ghcr.io/dimmkirr/devcell:ultimate-local",
+			existsTags: []string{"ghcr.io/devcell-sh/devcell:ultimate-local"},
+			wantTag:    "ghcr.io/devcell-sh/devcell:ultimate-local",
 		},
 		{
 			name:    "impure: no env, no local — empty tag (caller falls back to scratch bake)",

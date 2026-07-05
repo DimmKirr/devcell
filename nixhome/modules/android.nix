@@ -9,7 +9,8 @@
 #
 # NOTE on emulator: Running the Android emulator requires KVM (/dev/kvm).
 # On Linux hosts, pass --device /dev/kvm to docker run.
-{pkgs, lib, ...}: let
+{pkgs, config, lib, ...}: let
+  cfg = config.devcell.modules.android;
   isX86Linux = pkgs.stdenv.hostPlatform.system == "x86_64-linux";
 
   # Android SDK composition via androidenv.
@@ -32,19 +33,34 @@
     ];
   };
 in {
-  home.packages =
-    [ pkgs.android-tools ]  # adb + fastboot, compiled from source (all platforms)
-    ++ lib.optionals isX86Linux [
-      androidSdk.androidsdk  # full SDK + build-tools + emulator (x86_64 only)
-      pkgs.apktool           # APK decompile/recompile (reverse engineering / QA)
-      pkgs.jadx              # DEX/APK decompiler to readable Java/Kotlin
-    ];
+  options.devcell.modules.android = {
+    enable = lib.mkEnableOption "Android SDK + ADB + build-tools + apktool + jadx (x86_64 SDK only on aarch64)";
+    meta = lib.mkOption {
+      type = lib.types.attrs;
+      readOnly = true;
+      default = {
+        description = "Android dev: ADB+fastboot (all arch), Android SDK + emulator + apktool + jadx (x86_64 only)";
+        mcpServers = [ ];
+        sizeMb = 2500;  # x86_64 with full SDK; aarch64 ~50 MB (adb only)
+      };
+    };
+  };
 
-  # ANDROID_HOME is the canonical SDK root; ANDROID_SDK_ROOT is the legacy alias.
-  # Both are needed because different tools check different vars.
-  # Only set on x86_64-linux where the SDK is actually installed.
-  home.sessionVariables = lib.mkIf isX86Linux {
-    ANDROID_HOME = "${androidSdk.androidsdk}/libexec/android-sdk";
-    ANDROID_SDK_ROOT = "${androidSdk.androidsdk}/libexec/android-sdk";
+  config = lib.mkIf cfg.enable {
+    home.packages =
+      [ pkgs.android-tools ]  # adb + fastboot, compiled from source (all platforms)
+      ++ lib.optionals isX86Linux [
+        androidSdk.androidsdk  # full SDK + build-tools + emulator (x86_64 only)
+        pkgs.apktool           # APK decompile/recompile (reverse engineering / QA)
+        pkgs.jadx              # DEX/APK decompiler to readable Java/Kotlin
+      ];
+
+    # ANDROID_HOME is the canonical SDK root; ANDROID_SDK_ROOT is the legacy alias.
+    # Both are needed because different tools check different vars.
+    # Only set on x86_64-linux where the SDK is actually installed.
+    home.sessionVariables = lib.mkIf isX86Linux {
+      ANDROID_HOME = "${androidSdk.androidsdk}/libexec/android-sdk";
+      ANDROID_SDK_ROOT = "${androidSdk.androidsdk}/libexec/android-sdk";
+    };
   };
 }

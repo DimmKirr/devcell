@@ -10,7 +10,7 @@ import (
 
 // PreflightNixBuilder extracts the macOS-needs-linux-builder check out of
 // BuildImagePure's body so cmd/root.go can call it standalone to decide
-// whether the host can usefully run a pure nix build. DIMM-248.
+// whether the host can usefully run a pure nix build. CELL-92.
 //
 // Returning a non-nil error means "do not invoke BuildImagePure on this
 // host"; the caller treats this the same as "no nix on host" and falls

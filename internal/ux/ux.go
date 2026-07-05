@@ -55,11 +55,12 @@ func prefix(style lipgloss.Style, text string) string {
 // ProgressSpinner displays an animated spinner with a message.
 // In plain-text mode it falls back to simple log lines.
 type ProgressSpinner struct {
-	msg    string
-	start  time.Time
-	mu     sync.Mutex
-	done   chan struct{}
-	active bool
+	msg     string
+	start   time.Time
+	mu      sync.Mutex
+	done    chan struct{}
+	stopped chan struct{} // closed by run() before returning — lets stop() wait deterministically
+	active  bool
 }
 
 // NewProgressSpinner creates and starts a spinner, or logs the message if in plain-text mode.
@@ -67,10 +68,11 @@ func NewProgressSpinner(message string) *ProgressSpinner {
 	ps := &ProgressSpinner{msg: message, start: time.Now()}
 	if !LogPlainText {
 		ps.done = make(chan struct{})
+		ps.stopped = make(chan struct{})
 		ps.active = true
 		go ps.run()
 	} else {
-		fmt.Printf(" %s %s\n", prefix(StyleInfo, "→"), message)
+		fmt.Printf("\r %s %s\r\n", prefix(StyleInfo, "→"), message)
 	}
 	return ps
 }
@@ -78,13 +80,30 @@ func NewProgressSpinner(message string) *ProgressSpinner {
 var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
 func (ps *ProgressSpinner) run() {
+	defer close(ps.stopped) // signal stop() that the clear is complete
 	ticker := time.NewTicker(80 * time.Millisecond)
 	defer ticker.Stop()
 	i := 0
+	hasTicked := false
 	for {
 		select {
 		case <-ps.done:
-			fmt.Print("\r\033[K") // clear the spinner line
+			if hasTicked {
+				// `\x1b[u` (DECRC) restores the cursor to the position
+				// saved by the LAST tick — column 0 of the spinner's
+				// row. Then `\r\x1b[K` clears that row. This is the
+				// "ghost row" fix: external output (e.g. a child
+				// process writing to the TTY) may have advanced the
+				// cursor between our last tick and now; without
+				// restore, the clear hits the wrong row and the
+				// spinner frame survives.
+				fmt.Print("\x1b[u\r\x1b[K")
+			}
+			// If we never ticked, NOTHING was drawn — emit nothing.
+			// Crucially, do NOT emit `\x1b[u` here: with no prior `\x1b[s`,
+			// some terminals (Terminal.app, iTerm2) jump cursor to home
+			// (1,1) and the next write trashes the banner. xterm treats
+			// it as a no-op, but we can't assume xterm.
 			return
 		case <-ticker.C:
 			ps.mu.Lock()
@@ -92,11 +111,18 @@ func (ps *ProgressSpinner) run() {
 			elapsed := time.Since(ps.start).Round(time.Millisecond)
 			ps.mu.Unlock()
 			frame := spinnerFrames[i%len(spinnerFrames)]
-			fmt.Printf("\r\033[K %s %s %s",
+			// Sequence: `\r` (col 0 of current row), `\x1b[s` (DECSC
+			// save absolute position HERE so done-handler restore is
+			// valid), `\x1b[K` (clear cursor→EOL), then the frame.
+			// Each tick overrides the previous save with the same
+			// row, col 0 — so the latest save always points at the
+			// spinner's row.
+			fmt.Printf("\r\x1b[s\x1b[K %s %s %s",
 				StyleInfo.Render(frame),
 				msg,
 				StyleMuted.Render(elapsed.String()),
 			)
+			hasTicked = true
 			i++
 		}
 	}
@@ -108,7 +134,7 @@ func (ps *ProgressSpinner) UpdateText(message string) *ProgressSpinner {
 	ps.msg = message
 	ps.mu.Unlock()
 	if !ps.active {
-		fmt.Printf(" %s %s\n", prefix(StyleInfo, "→"), message)
+		fmt.Printf("\r %s %s\r\n", prefix(StyleInfo, "→"), message)
 	}
 	return ps
 }
@@ -117,7 +143,7 @@ func (ps *ProgressSpinner) UpdateText(message string) *ProgressSpinner {
 func (ps *ProgressSpinner) Success(message string) *ProgressSpinner {
 	ps.stop()
 	elapsed := time.Since(ps.start).Round(time.Millisecond)
-	fmt.Printf(" %s %s %s\n", prefix(StyleSuccess, "✓"), message, StyleMuted.Render(elapsed.String()))
+	fmt.Printf("\r %s %s %s\r\n", prefix(StyleSuccess, "✓"), message, StyleMuted.Render(elapsed.String()))
 	return ps
 }
 
@@ -128,19 +154,25 @@ func (ps *ProgressSpinner) Stop() {
 
 func (ps *ProgressSpinner) stop() {
 	ps.mu.Lock()
-	defer ps.mu.Unlock()
-	if ps.active {
-		close(ps.done)
-		ps.active = false
-		// Small sleep to let the goroutine clear the line before we return.
-		time.Sleep(10 * time.Millisecond)
+	if !ps.active {
+		ps.mu.Unlock()
+		return
 	}
+	close(ps.done)
+	ps.active = false
+	ps.mu.Unlock()
+	// Wait DETERMINISTICALLY for the run() goroutine to write its
+	// `\r\033[K` clear and return. The previous sleep(10ms) was a guess
+	// that lost the race when the runtime delayed the goroutine longer,
+	// leaving a "ghost row" of the last spinner frame visible above the
+	// permanent success line. CELL-264 observed this on every boot.
+	<-ps.stopped
 }
 
 // Fail stops the spinner and prints a failure message.
 func (ps *ProgressSpinner) Fail(message string) *ProgressSpinner {
 	ps.stop()
-	fmt.Printf(" %s %s\n", prefix(StyleError, "✗"), message)
+	fmt.Printf("\r %s %s\r\n", prefix(StyleError, "✗"), message)
 	return ps
 }
 
@@ -267,16 +299,23 @@ func Println(message string) {
 }
 
 // Info prints an info-styled message.
+//
+// Lines use \r\n rather than \n because cell-open writes rows AFTER
+// `docker run -it` has put the host TTY into raw mode (ONLCR cleared).
+// In raw mode a bare \n moves the cursor down one row but leaves the
+// column where it was, producing a staircase. \r\n is correct in both
+// raw and cooked modes (cooked mode's ONLCR only translates lone \n;
+// an explicit CR passes through unchanged).
 func Info(message string) {
-	fmt.Printf(" %s %s\n", prefix(StyleInfo, "→"), message)
+	fmt.Printf("\r %s %s\r\n", prefix(StyleInfo, "→"), message)
 }
 
 // Warn prints a warning-styled message.
 func Warn(message string) {
-	fmt.Printf(" %s %s\n", prefix(StyleWarning, "WARN"), message)
+	fmt.Printf("\r %s %s\r\n", prefix(StyleWarning, "WARN"), message)
 }
 
 // SuccessMsg prints a success-styled message (standalone, not spinner).
 func SuccessMsg(message string) {
-	fmt.Printf(" %s %s\n", prefix(StyleSuccess, "✓"), message)
+	fmt.Printf("\r %s %s\r\n", prefix(StyleSuccess, "✓"), message)
 }

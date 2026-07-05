@@ -2,11 +2,15 @@ package serve
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
+	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/DimmKirr/devcell/internal/version"
@@ -27,6 +31,15 @@ type Server struct {
 	logPrompts   bool   // when true, handlers log full prompt + response bodies
 	systemPrompt string // when non-empty, passed as --append-system-prompt to claude
 	jobStore     *JobStore
+
+	workspaceEnabled bool
+	workspaceMock    bool
+	workspaceHost    string
+
+	tlsEnabled bool
+	tlsCertDER []byte
+	httpAddr   string
+	debug      bool
 }
 
 // NewServer creates a Server. Use port=0 to let the OS pick a free port.
@@ -79,6 +92,24 @@ func (s *Server) SetSystemPrompt(p string) {
 	s.systemPrompt = p
 }
 
+func (s *Server) SetWorkspace(enabled, mock bool, host string) {
+	s.workspaceEnabled = enabled
+	s.workspaceMock = mock
+	s.workspaceHost = host
+}
+
+func (s *Server) SetTLS(v bool) {
+	s.tlsEnabled = v
+}
+
+func (s *Server) SetDebug(v bool) {
+	s.debug = v
+}
+
+func (s *Server) HTTPAddr() string {
+	return s.httpAddr
+}
+
 func execLookPath(name string) (string, error) {
 	return exec.LookPath(name)
 }
@@ -103,6 +134,57 @@ func (s *Server) Start(ctx context.Context) (addr string, errCh chan error) {
 		httpSwagger.URL("/api/openapi.json"),
 	))
 
+	var tlsCert *tls.Certificate
+	if s.tlsEnabled {
+		var extraHosts []string
+		if s.workspaceHost != "" {
+			h := s.workspaceHost
+			if idx := strings.LastIndex(h, ":"); idx != -1 {
+				h = h[:idx]
+			}
+			extraHosts = append(extraHosts, h)
+		}
+		c, certErr := GenerateSelfSignedCert(extraHosts...)
+		if certErr != nil {
+			errCh = make(chan error, 1)
+			errCh <- fmt.Errorf("generate TLS cert: %w", certErr)
+			return "", errCh
+		}
+		tlsCert = &c
+		s.tlsCertDER = c.Certificate[0]
+	}
+
+	if s.workspaceEnabled {
+		var enum CellEnumerator
+		if s.workspaceMock {
+			enum = NewMockEnumerator()
+		} else {
+			var enumerators []CellEnumerator
+			de, err := NewDockerEnumerator()
+			if err != nil {
+				log.Printf("workspace: docker unavailable: %v (remote registration still works)", err)
+			} else {
+				enumerators = append(enumerators, de)
+			}
+			enum = NewCompositeEnumerator(enumerators...)
+		}
+		{
+			var wsOpts []WorkspaceOpt
+			if s.tlsCertDER != nil {
+				wsOpts = append(wsOpts, WithCertDER(s.tlsCertDER))
+			}
+			ws := WorkspaceRoutes(enum, s.workspaceHost, wsOpts...)
+			mux.Handle("/{$}", ws)
+			mux.Handle("/cert", ws)
+			mux.Handle("/api/", ws)
+			mux.Handle("/RDWeb/", ws)
+			mux.Handle("/webfeed.aspx", ws)
+			mux.Handle("/rdp/", ws)
+			mux.Handle("/icons/", ws)
+			mux.Handle("/preview/", ws)
+		}
+	}
+
 	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", s.port))
 	if err != nil {
 		errCh = make(chan error, 1)
@@ -110,12 +192,46 @@ func (s *Server) Start(ctx context.Context) (addr string, errCh chan error) {
 		return "", errCh
 	}
 
-	srv := &http.Server{Handler: LoggingMiddleware(mux)}
+	if tlsCert != nil {
+		ln = tls.NewListener(ln, &tls.Config{Certificates: []tls.Certificate{*tlsCert}})
+	}
+
+	var handler http.Handler = LoggingMiddleware(mux)
+	if s.debug {
+		handler = DebugLoggingMiddleware(mux)
+	}
+	srv := &http.Server{Handler: handler}
 	errCh = make(chan error, 1)
 
 	go func() {
 		errCh <- srv.Serve(ln)
 	}()
+
+	// When TLS is enabled, start a plain HTTP listener on port-1 so
+	// clients can download the self-signed cert without TLS bootstrapping.
+	if s.tlsEnabled && s.tlsCertDER != nil {
+		httpPort := s.port - 1
+		if s.port == 0 {
+			httpPort = 0
+		}
+		httpAddr := fmt.Sprintf(":%d", httpPort)
+		httpLn, httpErr := net.Listen("tcp", httpAddr)
+		if httpErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: HTTP listener on %s failed: %v\n", httpAddr, httpErr)
+		} else {
+			s.httpAddr = httpLn.Addr().String()
+			httpSrv := &http.Server{Handler: handler}
+			go func() {
+				httpSrv.Serve(httpLn)
+			}()
+			go func() {
+				<-ctx.Done()
+				shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				httpSrv.Shutdown(shutdownCtx)
+			}()
+		}
+	}
 
 	go func() {
 		<-ctx.Done()

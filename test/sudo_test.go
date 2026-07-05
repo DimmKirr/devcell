@@ -1,4 +1,4 @@
-// sudo_test.go — DIMM-216: sudo works in pure (nix2container) images.
+// sudo_test.go — CELL-86: sudo works in pure (nix2container) images.
 //
 // Background: `pkgs.sudo.override { withPam = false; }` strips PAM linkage
 // from the main sudo binary but does NOT propagate to the sudoers.so policy
@@ -28,7 +28,7 @@ import (
 // TestSudo_ImageNixStagesPamStub asserts the pure-image build stages a
 // /etc/pam.d/sudo PAM stub that lets the sudoers.so plugin's pam_start
 // succeed. Without this stub, the plugin aborts before any sudo policy
-// check can run (DIMM-216).
+// check can run (CELL-86).
 func TestSudo_ImageNixStagesPamStub(t *testing.T) {
 	imgNix := readNixhomeFile(t, "packages/image.nix")
 
@@ -155,7 +155,7 @@ func TestSudo_DockerfileSetsNixSSLEnv(t *testing.T) {
 // L2 — Container behavior (requires docker; skip otherwise)
 // ---------------------------------------------------------------------------
 
-// TestSudo_WorksInFreshCell pins the user-visible bug. Pre-DIMM-216, this
+// TestSudo_WorksInFreshCell pins the user-visible bug. Pre-CELL-86, this
 // fails with "unable to initialize PAM: Critical error - immediate abort"
 // before sudo even reads /etc/sudoers. With the PAM stub in place, the
 // sudoers plugin proceeds to its policy check, sees NOPASSWD:ALL for the
@@ -168,7 +168,7 @@ func TestSudo_WorksInFreshCell(t *testing.T) {
 
 	out, code := exec(t, c, []string{"sudo", "whoami"})
 	if code != 0 {
-		t.Fatalf("`sudo whoami` failed (exit=%d) — DIMM-216 PAM stub not in image: %s", code, out)
+		t.Fatalf("`sudo whoami` failed (exit=%d) — CELL-86 PAM stub not in image: %s", code, out)
 	}
 	if strings.TrimSpace(out) != "root" {
 		t.Fatalf("`sudo whoami` returned %q, want \"root\"", strings.TrimSpace(out))
@@ -176,7 +176,7 @@ func TestSudo_WorksInFreshCell(t *testing.T) {
 }
 
 // TestSudo_NoPamInitErrorOnPlainSudo specifically asserts that the
-// pre-DIMM-216 error message no longer appears anywhere in sudo's output.
+// pre-CELL-86 error message no longer appears anywhere in sudo's output.
 // Catches regressions where the stub is present but malformed.
 func TestSudo_NoPamInitErrorOnPlainSudo(t *testing.T) {
 	if testing.Short() {
@@ -192,7 +192,7 @@ func TestSudo_NoPamInitErrorOnPlainSudo(t *testing.T) {
 	}
 	for _, msg := range pamErrors {
 		if strings.Contains(out, msg) {
-			t.Fatalf("sudo emitted pre-DIMM-216 PAM error %q: %s", msg, out)
+			t.Fatalf("sudo emitted pre-CELL-86 PAM error %q: %s", msg, out)
 		}
 	}
 }

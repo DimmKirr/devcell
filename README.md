@@ -9,7 +9,7 @@ DevCell is a containerized sandbox for AI coding agents. Run Claude Code, Codex,
 **Prerequisites:** [Docker Desktop](https://www.docker.com/products/docker-desktop/) or Docker Engine.
 
 ```bash
-brew install DimmKirr/tap/devcell
+brew install devcell-sh/tap/devcell
 cd your-project
 cell claude
 ```
@@ -25,12 +25,12 @@ On first run, `cell` creates `.devcell.toml` and `.devcell/` in your project dir
 - **Remote desktop** - VNC and RDP into the container to watch or interact with GUI apps
 - **1Password secrets** - list document names in `.devcell.toml`; fields are injected as env vars into the container at runtime, written to a RAM-only tmpfs, gone when the container stops
 - **Docker or VM engine** - default: Docker container. Add `--macos` to provision a Debian ARM64 VM via Vagrant + UTM instead — same nixhome toolchain, same commands, no Docker Desktop required
-- **7 image stacks** - from minimal (`base`) to everything-included (`ultimate`)
+- **3 primary stacks** — `base` (minimal), `dev` (default seed, ~3 GB: stealth browser + IaC MCPs), `ultimate` (everything, ~15 GB). Legacy: go/node/python/fullstack/electronics. See [MIGRATION.md](./MIGRATION.md).
 - **Model ranking** - `cell models` shows cloud models (Anthropic, OpenAI, Google via OpenRouter) and local ollama models ranked by SWE-Bench score and speed, side by side
 
 ## Stacks
 
-Seven stacks, published to `public.ecr.aws/w1l3v2k8/devcell`. Multi-arch: linux/amd64, linux/arm64.
+Published to `ghcr.io/devcell-sh/devcell`. Multi-arch: linux/amd64, linux/arm64. Modules 2.0 introduces a `dev` seed stack and reshapes `ultimate` to enable every catalog module (see [MIGRATION.md](./MIGRATION.md)). Legacy stacks (go, node, python, fullstack, electronics) still build.
 
 | Stack | What's inside |
 |---|---|
@@ -137,11 +137,14 @@ Start simple, go deeper when you need to.
 
 ### Building images
 
+Local development uses `cell build` — `task image:*` is for CI/release only.
+
 ```bash
-task image:build              # Build base + ultimate (bake matrix)
-task image:build:user-local   # Layer user config on top
-cell build                    # Rebuild from host
-cell build --update           # Update nix flake inputs + rebuild
+cell build                    # Rebuild the local cell image from this checkout
+cell build --update           # Bump nix flake inputs + rebuild
+cell build --thin             # Incremental, mounts nix store on a Docker volume
+task image:pure:build         # CI/release: build pure base + ultimate
+task image:impure:build       # [DEPRECATED] legacy Dockerfile path, kept one release
 ```
 
 ### Testing
@@ -167,6 +170,18 @@ task nix:validate    # Syntax check + attribute resolution across all stacks
 ```
 
 </details>
+
+## Terminology
+
+| Term | What it means |
+|---|---|
+| **cell** | A named, persistent identity. A boundary. One shared `$HOME` (`~/.devcell/<cellName>/`), one network, one secrets scope. Examples: `DIMM`, `work`, `personal`, `main` (default). May host many projects. May be running or stopped. |
+| **project** | A host directory with code. Mounted into a container. |
+| **container** | The running docker instance for one (cell, project) pair. Ephemeral. The cell is the boundary; the container is the runtime. |
+| **stack** | The image variant a container is built from (`base`, `dev`, `ultimate`). |
+| **module** | A toggleable Nix capability composed into a stack (see [MIGRATION.md](./MIGRATION.md)). |
+
+**One-line model:** *a cell is the boundary; many projects live inside it; each project at a time spawns one container.*
 
 ## License
 

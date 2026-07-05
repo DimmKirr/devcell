@@ -14,7 +14,7 @@ import (
 // after a confirmation prompt. All host-specific branching lives in the
 // builders so unit tests can pin behavior without invoking real commands.
 //
-// See DIMM-200 for the design rationale.
+// See CELL-101 for the design rationale.
 
 // PruneOpts describes a `cell build prune` invocation.
 type PruneOpts struct {
@@ -262,7 +262,7 @@ func ConfirmDestructive(out io.Writer, in io.Reader, skipYes bool, isTTY bool, w
 //	   Target: <host-specific-detail>
 //	   Continue? [y/N]
 //
-// The exact list and target line are mode-specific, per DIMM-200.
+// The exact list and target line are mode-specific, per CELL-101.
 func BuildPrunePrompt(opts PruneOpts) string {
 	host := opts.LinuxBuilderHost
 	if host == "" {

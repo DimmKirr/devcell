@@ -1,6 +1,7 @@
 # node.nix — Node.js runtime
 # Runtime managed by mise; npm tools packaged via buildNpmPackage.
-{pkgs, ...}: let
+{pkgs, config, lib, ...}: let
+  cfg = config.devcell.modules.node;
   # slidev: presentation slides from Markdown.
   # https://github.com/slidevjs/slidev (pnpm monorepo — requires pnpm_10)
   slidevSrc = pkgs.fetchFromGitHub {
@@ -30,17 +31,33 @@
     '';
   };
 in {
+  # imports must stay top-level
   imports = [./mise.nix];
 
-  devcell.mise.tools.node = "24.13.1";
-  devcell.mise.defaultNpmPackages = ["yarn" "npm"];
+  options.devcell.modules.node = {
+    enable = lib.mkEnableOption "Node.js 24 (mise-managed) + Hugo";
+    meta = lib.mkOption {
+      type = lib.types.attrs;
+      readOnly = true;
+      default = {
+        description = "Node.js runtime (mise) + Hugo static site generator";
+        mcpServers = [ ];
+        sizeMb = 200;
+      };
+    };
+  };
 
-  home.packages = [
-    pkgs.hugo  # static site generator (use: hugo server)
-    # slidev disabled — its `pnpm -r build` recursively builds the
-    # demo/starter workspace, whose internal `slidev build` SIGHUPs at ~70s in
-    # the nix2container linux-builder VM. Re-enable once buildPhase is filtered
-    # to `pnpm --filter './packages/*' build` (skips demo/ workspaces).
-    # slidev     # presentation slides from Markdown (use: slidev)
-  ];
+  config = lib.mkIf cfg.enable {
+    devcell.mise.tools.node = "24.13.1";
+    devcell.mise.defaultNpmPackages = ["yarn" "npm"];
+
+    home.packages = [
+      pkgs.hugo  # static site generator (use: hugo server)
+      # slidev disabled — its `pnpm -r build` recursively builds the
+      # demo/starter workspace, whose internal `slidev build` SIGHUPs at ~70s in
+      # the nix2container linux-builder VM. Re-enable once buildPhase is filtered
+      # to `pnpm --filter './packages/*' build` (skips demo/ workspaces).
+      # slidev     # presentation slides from Markdown (use: slidev)
+    ];
+  };
 }

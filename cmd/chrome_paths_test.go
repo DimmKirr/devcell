@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// DIMM-208 — fingerprint.json moved from $CellHome/playwright-fingerprint.json
+// CELL-74 — fingerprint.json moved from $CellHome/playwright-fingerprint.json
 // to $CellHome/.playwright/fingerprint.json. These tests pin the new path and
 // the auto-mkdir behavior that lets first-run callers write without manual
 // `mkdir -p`.

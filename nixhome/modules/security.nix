@@ -1,5 +1,6 @@
 # security.nix — web security scanning and vulnerability discovery tools
 {pkgs, config, lib, ...}: let
+  cfg = config.devcell.modules.security;
   bin = config.devcell.managedMcp.nixBinPrefix;
 
   # ── hexstrike-ai: Security audit MCP server — 150+ tools ──────────────────
@@ -66,6 +67,20 @@
     };
   };
 in {
+  options.devcell.modules.security = {
+    enable = lib.mkEnableOption "150+ web/binary security scanning tools (nuclei, nikto, sqlmap, ghidra, radare2, ...)";
+    meta = lib.mkOption {
+      type = lib.types.attrs;
+      readOnly = true;
+      default = {
+        description = "Vuln scanners + fuzzers + recon + RE + forensics (nuclei, nmap, sqlmap, ghidra, ...)";
+        mcpServers = [ ];  # hexstrike-ai disabled upstream
+        sizeMb = 3500;
+      };
+    };
+  };
+
+  config = lib.mkIf cfg.enable {
   home.packages = with pkgs; [
     # vulnerability scanners
     nuclei            # template-based vuln scanner (use: nuclei -u https://target.com)
@@ -115,9 +130,9 @@ in {
     # technology fingerprinting (Go library + update-fingerprints tool)
     wappalyzergo      # Wappalyzer Go impl (use: update-fingerprints)
 
-    # MCP security audit server
-    hexstrikeMcp      # hexstrike-ai MCP wrapper (use: hexstrike-mcp)
-    hexstrikeServer   # hexstrike-ai Flask server (use: hexstrike-server)
+    # MCP security audit server — disabled, source build broken upstream
+    # hexstrikeMcp      # hexstrike-ai MCP wrapper (use: hexstrike-mcp)
+    # hexstrikeServer   # hexstrike-ai Flask server (use: hexstrike-server)
   ];
 
   # ── Wordlist symlinks for hexstrike/ffuf/gobuster ────────────────────────
@@ -127,6 +142,11 @@ in {
   #   home-manager switch --flake /opt/nixhome#devcell-ultimate
   home.activation.wordlistSymlinks = lib.hm.dag.entryAfter ["writeBoundary"] ''
     export PATH="/usr/bin:/bin:$PATH"
+    # nixos/nix:latest has /usr/share as a symlink into the nix store
+    if [ -L /usr/share ]; then
+      $DRY_RUN_CMD sudo rm /usr/share
+      $DRY_RUN_CMD sudo mkdir -p /usr/share
+    fi
     $DRY_RUN_CMD sudo mkdir -p /usr/share/wordlists
     # seclists symlinks — only created if seclists is installed
     if [ -d "${pkgs.dirb}/share/dirb/wordlists" ]; then
@@ -136,8 +156,9 @@ in {
 
   # HexStrike AI — 150+ security audit tools via MCP.
   # Two-process: Flask API + MCP stdio client, started together by the wrapper.
-  devcell.managedMcp.servers."hexstrike-ai" = {
-    command = "${bin}/hexstrike-mcp";
-    args = [];
+  # devcell.managedMcp.servers."hexstrike-ai" = {
+  #   command = "${bin}/hexstrike-mcp";
+  #   args = [];
+  # };
   };
 }

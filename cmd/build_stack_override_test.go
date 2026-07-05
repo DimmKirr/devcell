@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// DIMM-246: --stack flag and DEVCELL_STACK env both override the TOML-resolved
+// CELL-93: --stack flag and DEVCELL_STACK env both override the TOML-resolved
 // stack. Precedence: flag > env > "" (empty = use TOML/default at caller).
 
 func TestResolveStackOverride_EmptyWhenUnset(t *testing.T) {

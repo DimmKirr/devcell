@@ -1,5 +1,6 @@
 # travel.nix — Travel and geospatial tools
-{pkgs, config, ...}: let
+{pkgs, config, lib, ...}: let
+  cfg = config.devcell.modules.travel;
   bin = config.devcell.managedMcp.nixBinPrefix;
   py = pkgs.python312Packages;
 
@@ -43,23 +44,38 @@
     doCheck = false;
   };
 in {
-  home.packages = [
-    mcpGoogleMap # Google Maps MCP server (use: mcp-google-map)
-    tripitMcp # TripIt MCP server (use: tripit-mcp)
-  ];
-
-  # Google Maps — 17 tools: geocoding, routing, places, elevation, air quality.
-  # Requires GOOGLE_MAPS_API_KEY env var at runtime.
-  devcell.managedMcp.servers."google-maps" = {
-    command = "${bin}/mcp-google-map";
-    args = ["--stdio"];
-    env.GOOGLE_MAPS_API_KEY = "\${GOOGLE_MAPS_API_KEY}";
+  options.devcell.modules.travel = {
+    enable = lib.mkEnableOption "Google Maps + TripIt MCP servers";
+    meta = lib.mkOption {
+      type = lib.types.attrs;
+      readOnly = true;
+      default = {
+        description = "Google Maps (geocoding, routing, places) + TripIt (trips, itineraries)";
+        mcpServers = [ "google-maps" "tripit" ];
+        sizeMb = 100;
+      };
+    };
   };
 
-  # TripIt — list_trips, get_trip with date filtering.
-  # Requires TRIPIT_USERNAME, TRIPIT_PASSWORD, TRIPIT_CLIENT_ID, TRIPIT_CLIENT_SECRET env vars at runtime.
-  devcell.managedMcp.servers."tripit" = {
-    command = "${bin}/tripit-mcp";
-    args = [];
+  config = lib.mkIf cfg.enable {
+    home.packages = [
+      mcpGoogleMap # Google Maps MCP server (use: mcp-google-map)
+      tripitMcp # TripIt MCP server (use: tripit-mcp)
+    ];
+
+    # Google Maps — 17 tools: geocoding, routing, places, elevation, air quality.
+    # Requires GOOGLE_MAPS_API_KEY env var at runtime.
+    devcell.managedMcp.servers."google-maps" = {
+      command = "${bin}/mcp-google-map";
+      args = ["--stdio"];
+      env.GOOGLE_MAPS_API_KEY = "\${GOOGLE_MAPS_API_KEY}";
+    };
+
+    # TripIt — list_trips, get_trip with date filtering.
+    # Requires TRIPIT_USERNAME, TRIPIT_PASSWORD, TRIPIT_CLIENT_ID, TRIPIT_CLIENT_SECRET env vars at runtime.
+    devcell.managedMcp.servers."tripit" = {
+      command = "${bin}/tripit-mcp";
+      args = [];
+    };
   };
 }

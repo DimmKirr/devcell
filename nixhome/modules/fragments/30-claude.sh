@@ -2,6 +2,14 @@
 # 30-claude.sh — Claude Code merge logic (nix-generated entrypoint fragment)
 # Sourced by entrypoint.sh; has access to: $HOME, $HOST_USER, $USER, $DEVCELL_HOME, log()
 
+notify claude.starting
+
+# Trigger auto-compact at 75% of the context window instead of the near-limit
+# default — works around the no-trigger-at-100% bug (anthropics/claude-code#63015).
+# Sourced into entrypoint.sh, so the exec'd agent process inherits it. Note:
+# an `env` block in ~/.claude/settings.json takes precedence over this.
+export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=75
+
 merge_claude_settings() {
     local template_file="$1" target_file="$2"
     [ -f "$template_file" ] || return 1
@@ -165,3 +173,5 @@ else
 fi
 
 [ -f "$HOME/.claude.json" ] && chown "$HOST_USER" "$HOME/.claude.json"
+
+notify claude.ready

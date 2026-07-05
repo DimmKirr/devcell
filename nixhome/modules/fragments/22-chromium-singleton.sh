@@ -1,5 +1,5 @@
 #!/bin/bash
-# 22-chromium-singleton.sh — clear stale Chromium singleton lock files (DIMM-208).
+# 22-chromium-singleton.sh — clear stale Chromium singleton lock files (CELL-74).
 # Sourced by entrypoint.sh as root, BEFORE the gosu drop to HOST_USER.
 #
 # WHY
@@ -22,9 +22,11 @@
 # recorded in a SingletonLock from a previous container generation is
 # DEFINITIVELY dead. Unconditional `find -delete` is safe.
 #
-# This fragment exists specifically because Phase 2 of DIMM-208 unifies
+# This fragment exists specifically because Phase 2 of CELL-74 unifies
 # interactive chromium + MCP automation onto a single per-app profile;
 # without singleton cleanup, that sharing produces fragile boot behaviour.
+
+notify chromium.starting
 
 # Profile root may not exist on first launch — find tolerates this.
 if [ -d "$HOME/.chrome" ]; then
@@ -44,8 +46,10 @@ fi
 # in the user-data-dir points at. The above find only touches user-data-dirs.
 # These accumulate across container restarts on a persistent $HOME mount; PID
 # namespace isolation makes any orphan from a previous generation definitely
-# dead, so unconditional sweep is safe (DIMM-222).
+# dead, so unconditional sweep is safe (CELL-62).
 if [ -d "$HOME/tmp" ]; then
     find "$HOME/tmp" -maxdepth 1 -type d -name '.org.chromium.Chromium.*' \
         -exec rm -rf {} + 2>/dev/null || true
 fi
+
+notify chromium.ready

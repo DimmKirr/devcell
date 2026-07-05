@@ -15,7 +15,7 @@ func TestCodex_OllamaFlag_InjectsFlags(t *testing.T) {
 
 	cmd := exec.Command(binaryPath, "codex", "--ollama", "--dry-run")
 	cmd.Dir = home
-	cmd.Env = append(os.Environ(), "CELL_ID=1", "HOME="+home)
+	cmd.Env = append(os.Environ(), "DEVCELL_BUNK=1", "HOME="+home)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("codex --ollama --dry-run failed: %v\noutput: %s", err, out)
@@ -39,7 +39,7 @@ func TestCodex_OllamaFlag_Stripped(t *testing.T) {
 
 	cmd := exec.Command(binaryPath, "codex", "--ollama", "--dry-run")
 	cmd.Dir = home
-	cmd.Env = append(os.Environ(), "CELL_ID=1", "HOME="+home)
+	cmd.Env = append(os.Environ(), "DEVCELL_BUNK=1", "HOME="+home)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("codex --ollama --dry-run failed: %v\noutput: %s", err, out)
@@ -60,7 +60,7 @@ func TestCodex_NoOllama_NoOSSFlags(t *testing.T) {
 
 	cmd := exec.Command(binaryPath, "codex", "--dry-run")
 	cmd.Dir = home
-	cmd.Env = append(os.Environ(), "CELL_ID=1", "HOME="+home)
+	cmd.Env = append(os.Environ(), "DEVCELL_BUNK=1", "HOME="+home)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("codex --dry-run failed: %v\noutput: %s", err, out)
@@ -91,7 +91,7 @@ use_ollama = true
 
 	cmd := exec.Command(binaryPath, "codex", "--dry-run")
 	cmd.Dir = home
-	cmd.Env = append(os.Environ(), "CELL_ID=1", "HOME="+home)
+	cmd.Env = append(os.Environ(), "DEVCELL_BUNK=1", "HOME="+home)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("codex --dry-run failed: %v\noutput: %s", err, out)
@@ -127,7 +127,7 @@ default = "qwen2.5-coder:32b"
 
 	cmd := exec.Command(binaryPath, "codex", "--dry-run")
 	cmd.Dir = home
-	cmd.Env = append(os.Environ(), "CELL_ID=1", "HOME="+home)
+	cmd.Env = append(os.Environ(), "DEVCELL_BUNK=1", "HOME="+home)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("codex --dry-run failed: %v\noutput: %s", err, out)

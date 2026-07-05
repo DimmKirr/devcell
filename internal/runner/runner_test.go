@@ -14,7 +14,7 @@ import (
 func baseConfig() config.Config {
 	return config.Load("/home/bob/myproject", func(k string) string {
 		m := map[string]string{
-			"CELL_ID": "3",
+			"DEVCELL_BUNK": "3",
 			"HOME":    "/home/bob",
 			"USER":    "bob",
 			"TERM":    "xterm-256color",
@@ -348,6 +348,44 @@ func TestArgv_MiseEnvVars(t *testing.T) {
 	}
 }
 
+// --- stealth env vars ---
+
+func TestArgv_StealthEnvVars_Default(t *testing.T) {
+	argv := buildArgv(t)
+	// Even with no [stealth] config, resolved defaults must be passed
+	foundArch := false
+	foundPlatform := false
+	for _, a := range argv {
+		if strings.HasPrefix(a, "DEVCELL_STEALTH_ARCH=") {
+			foundArch = true
+		}
+		if strings.HasPrefix(a, "DEVCELL_STEALTH_PLATFORM=") {
+			foundPlatform = true
+		}
+		if strings.HasPrefix(a, "DEVCELL_STEALTH_USER_AGENT=") {
+			t.Error("DEVCELL_STEALTH_USER_AGENT should not be passed — UA is derived from arch+platform in the wrapper")
+		}
+	}
+	if !foundArch {
+		t.Error("missing DEVCELL_STEALTH_ARCH env var in argv")
+	}
+	if !foundPlatform {
+		t.Error("missing DEVCELL_STEALTH_PLATFORM env var in argv")
+	}
+}
+
+func TestArgv_StealthEnvVars_Explicit(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.CellCfg.Stealth = cfg.StealthSection{Arch: "arm", Platform: "macOS"}
+	})
+	if !hasArg(argv, "DEVCELL_STEALTH_ARCH=arm") {
+		t.Errorf("expected DEVCELL_STEALTH_ARCH=arm in argv: %v", argv)
+	}
+	if !hasArg(argv, "DEVCELL_STEALTH_PLATFORM=macOS") {
+		t.Errorf("expected DEVCELL_STEALTH_PLATFORM=macOS in argv: %v", argv)
+	}
+}
+
 // --- Port forwarding from config ---
 
 func TestArgv_CfgPortsSinglePort(t *testing.T) {
@@ -377,6 +415,25 @@ func TestArgv_CfgPortsMultiple(t *testing.T) {
 	}
 	if !hasConsecutive(argv, "-p", "0.0.0.0:8080:3000") {
 		t.Errorf("expected -p 0.0.0.0:8080:3000: %v", argv)
+	}
+}
+
+func TestArgv_CfgPortsUDP(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.CellCfg.Ports = cfg.PortsSection{Forward: []string{"54321/udp"}}
+	})
+	// docker -p format: hostPort:containerPort/proto — proto on container side only
+	if !hasConsecutive(argv, "-p", "0.0.0.0:54321:54321/udp") {
+		t.Errorf("expected -p 0.0.0.0:54321:54321/udp for UDP port: %v", argv)
+	}
+}
+
+func TestArgv_CfgPortsMappedUDP(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.CellCfg.Ports = cfg.PortsSection{Forward: []string{"9999:54321/udp"}}
+	})
+	if !hasConsecutive(argv, "-p", "0.0.0.0:9999:54321/udp") {
+		t.Errorf("expected -p 0.0.0.0:9999:54321/udp for mapped UDP port: %v", argv)
 	}
 }
 
@@ -418,7 +475,7 @@ func TestArgv_WorkdirAndImage(t *testing.T) {
 		t.Errorf("expected --workdir /myproject-3: %v", argv)
 	}
 	// BuildArgv's default image is the Debian variant — callers using --pure
-	// (the default after the DIMM-202 flip) override Image explicitly on the
+	// (the default after the CELL-189 flip) override Image explicitly on the
 	// RunSpec, so the default path tested here is the legacy --debian one.
 	if !hasArg(argv, runner.UserImageTag()) {
 		t.Error("missing devcell-local image name")
@@ -598,7 +655,7 @@ func min(a, b int) int {
 // --- UserImageTag stack-based (legacy bare tag, used by --debian) ---
 //
 // UserImageTag() is unchanged across the 2026-05-15 flip — it remains the
-// user's "current image" concept (bare devcell-user:<stack>). After DIMM-202
+// user's "current image" concept (bare devcell-user:<stack>). After CELL-189
 // it's reached only via `cell <agent> --debian` (legacy Dockerfile path);
 // the new default reaches UserImageTagPure() via PickImageTag(false).
 
@@ -606,19 +663,19 @@ func withCleanImageState(t *testing.T) {
 	t.Helper()
 	t.Setenv("DEVCELL_USER_IMAGE", "")
 	t.Setenv("DEVCELL_USER_IMAGE_PURE", "")
-	t.Setenv("DEVCELL_SESSION_NAME", "")
+	t.Setenv("DEVCELL_CELL_NAME", "")
 	t.Setenv("TMUX_SESSION_NAME", "")
 	origStack := runner.Stack
 	origModules := runner.Modules
-	origPerSession := runner.PerSessionImage
+	origPerSession := runner.PerCellImage
 	t.Cleanup(func() {
 		runner.Stack = origStack
 		runner.Modules = origModules
-		runner.PerSessionImage = origPerSession
+		runner.PerCellImage = origPerSession
 	})
 	runner.Stack = "base"
 	runner.Modules = nil
-	runner.PerSessionImage = false
+	runner.PerCellImage = false
 }
 
 func TestUserImageTag_DefaultStack(t *testing.T) {
@@ -681,7 +738,7 @@ func TestUserImageTag_EnvOverrideWins(t *testing.T) {
 
 func TestUserImageTag_PerSession_Default(t *testing.T) {
 	withCleanImageState(t)
-	runner.PerSessionImage = true
+	runner.PerCellImage = true
 	got := runner.UserImageTag()
 	if got != "devcell-user:main" {
 		t.Errorf("per-session default: want devcell-user:main, got %q", got)
@@ -690,7 +747,7 @@ func TestUserImageTag_PerSession_Default(t *testing.T) {
 
 func TestUserImageTag_PerSession_TmuxFallback(t *testing.T) {
 	withCleanImageState(t)
-	runner.PerSessionImage = true
+	runner.PerCellImage = true
 	t.Setenv("TMUX_SESSION_NAME", "DIMM")
 	got := runner.UserImageTag()
 	if got != "devcell-user:DIMM" {
@@ -700,8 +757,8 @@ func TestUserImageTag_PerSession_TmuxFallback(t *testing.T) {
 
 func TestUserImageTag_PerSession_ExplicitBeatssTmux(t *testing.T) {
 	withCleanImageState(t)
-	runner.PerSessionImage = true
-	t.Setenv("DEVCELL_SESSION_NAME", "explicit")
+	runner.PerCellImage = true
+	t.Setenv("DEVCELL_CELL_NAME", "explicit")
 	t.Setenv("TMUX_SESSION_NAME", "tmux-session")
 	got := runner.UserImageTag()
 	if got != "devcell-user:explicit" {
@@ -712,9 +769,9 @@ func TestUserImageTag_PerSession_ExplicitBeatssTmux(t *testing.T) {
 // --- ParseImageMetadata ---
 
 func TestParseImageMetadata_ValidJSON(t *testing.T) {
-	input := `{"base_image":"ghcr.io/dimmkirr/devcell:v1.2.3-go","stack":"go","modules":["desktop"],"git_commit":"a3f2e1","build_date":"2026-03-26T10:15:30Z","packages":142}`
+	input := `{"base_image":"ghcr.io/devcell-sh/devcell:v1.2.3-go","stack":"go","modules":["desktop"],"git_commit":"a3f2e1","build_date":"2026-03-26T10:15:30Z","packages":142}`
 	m := runner.ParseImageMetadata([]byte(input))
-	if m.BaseImage != "ghcr.io/dimmkirr/devcell:v1.2.3-go" {
+	if m.BaseImage != "ghcr.io/devcell-sh/devcell:v1.2.3-go" {
 		t.Errorf("base_image: want v1.2.3-go, got %q", m.BaseImage)
 	}
 	if m.Stack != "go" {
@@ -843,32 +900,23 @@ func TestImageVersions_Format(t *testing.T) {
 
 // --- StackImageTagImpure / StackImageTagPure ---
 //
-// Pre-flip there was a single bare StackImageTag(stack). After DIMM-202 both
+// Pre-flip there was a single bare StackImageTag(stack). After CELL-189 both
 // variants are explicit so scaffold's base-image fallback picks the right one.
-// DIMM-213 renamed the impure variant from `-debian` to `-impure` and added
-// a deprecated `StackImageTagDebian` alias that forwards to StackImageTagImpure.
+// CELL-165 renamed the impure variant from `-debian` to `-impure`. The
+// `StackImageTagDebian` deprecated alias was removed after callers migrated.
 
 func TestStackImageTagImpure_GoStack(t *testing.T) {
 	got := runner.StackImageTagImpure("go")
 	// version.Version is v0.0.0 in tests → v0.0.0-go-impure
-	if got != "public.ecr.aws/w1l3v2k8/devcell:v0.0.0-go-impure" {
-		t.Errorf("want public.ecr.aws/w1l3v2k8/devcell:v0.0.0-go-impure, got %q", got)
+	if got != "ghcr.io/devcell-sh/devcell:v0.0.0-go-impure" {
+		t.Errorf("want ghcr.io/devcell-sh/devcell:v0.0.0-go-impure, got %q", got)
 	}
 }
 
 func TestStackImageTagImpure_UltimateStack(t *testing.T) {
 	got := runner.StackImageTagImpure("ultimate")
-	if got != "public.ecr.aws/w1l3v2k8/devcell:v0.0.0-ultimate-impure" {
-		t.Errorf("want public.ecr.aws/w1l3v2k8/devcell:v0.0.0-ultimate-impure, got %q", got)
-	}
-}
-
-// Deprecated alias must forward to the canonical Impure tag.
-func TestStackImageTagDebian_AliasForwardsToImpure(t *testing.T) {
-	got := runner.StackImageTagDebian("ultimate")
-	want := runner.StackImageTagImpure("ultimate")
-	if got != want {
-		t.Errorf("Debian alias returned %q, want %q (same as Impure)", got, want)
+	if got != "ghcr.io/devcell-sh/devcell:v0.0.0-ultimate-impure" {
+		t.Errorf("want ghcr.io/devcell-sh/devcell:v0.0.0-ultimate-impure, got %q", got)
 	}
 }
 
@@ -920,7 +968,34 @@ func TestArgv_AwsReadOnlyFalse(t *testing.T) {
 func TestBaseImageTag_DefaultIsVersioned(t *testing.T) {
 	t.Setenv("DEVCELL_BASE_IMAGE", "")
 	got := runner.BaseImageTag()
-	if got != "public.ecr.aws/w1l3v2k8/devcell:v0.0.0-core" {
-		t.Errorf("want public.ecr.aws/w1l3v2k8/devcell:v0.0.0-core, got %q", got)
+	if got != "ghcr.io/devcell-sh/devcell:v0.0.0-core" {
+		t.Errorf("want ghcr.io/devcell-sh/devcell:v0.0.0-core, got %q", got)
+	}
+}
+
+// --- Thin image volume mount ---
+
+func TestArgv_ThinImageMountsNixStoreVolume(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.ThinImage = true
+	})
+	if !hasConsecutive(argv, "-v", "devcell-nix-store:/nix") {
+		t.Errorf("expected -v devcell-nix-store:/nix for thin image, argv: %v", argv)
+	}
+}
+
+func TestArgv_NonThinImageNoNixStoreVolume(t *testing.T) {
+	argv := buildArgv(t)
+	for i, a := range argv {
+		if a == "-v" && i+1 < len(argv) && strings.Contains(argv[i+1], "devcell-nix-store") {
+			t.Errorf("devcell-nix-store volume should NOT appear for non-thin image, argv: %v", argv)
+		}
+	}
+}
+
+func TestArgv_PassesHostProjectDir(t *testing.T) {
+	argv := buildArgv(t)
+	if !hasConsecutive(argv, "-e", "DEVCELL_HOST_PROJECT_DIR=/home/bob/myproject") {
+		t.Errorf("should pass DEVCELL_HOST_PROJECT_DIR for thin build path resolution, argv: %v", argv)
 	}
 }

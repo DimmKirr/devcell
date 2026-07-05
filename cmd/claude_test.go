@@ -16,7 +16,7 @@ func TestClaude_OllamaFlag_InjectsEnv(t *testing.T) {
 
 	cmd := exec.Command(binaryPath, "claude", "--ollama", "--dry-run")
 	cmd.Dir = home
-	cmd.Env = append(os.Environ(), "CELL_ID=1", "HOME="+home)
+	cmd.Env = append(os.Environ(), "DEVCELL_BUNK=1", "HOME="+home)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("claude --ollama --dry-run failed: %v\noutput: %s", err, out)
@@ -40,7 +40,7 @@ func TestClaude_OllamaFlag_Stripped(t *testing.T) {
 
 	cmd := exec.Command(binaryPath, "claude", "--ollama", "--dry-run")
 	cmd.Dir = home
-	cmd.Env = append(os.Environ(), "CELL_ID=1", "HOME="+home)
+	cmd.Env = append(os.Environ(), "DEVCELL_BUNK=1", "HOME="+home)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("claude --ollama --dry-run failed: %v\noutput: %s", err, out)
@@ -64,7 +64,7 @@ func TestClaude_NoOllama_NoEnv(t *testing.T) {
 
 	cmd := exec.Command(binaryPath, "claude", "--dry-run")
 	cmd.Dir = home
-	cmd.Env = append(os.Environ(), "CELL_ID=1", "HOME="+home)
+	cmd.Env = append(os.Environ(), "DEVCELL_BUNK=1", "HOME="+home)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("claude --dry-run failed: %v\noutput: %s", err, out)
@@ -95,7 +95,7 @@ use_ollama = true
 
 	cmd := exec.Command(binaryPath, "claude", "--dry-run")
 	cmd.Dir = home
-	cmd.Env = append(os.Environ(), "CELL_ID=1", "HOME="+home)
+	cmd.Env = append(os.Environ(), "DEVCELL_BUNK=1", "HOME="+home)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("claude --dry-run failed: %v\noutput: %s", err, out)
@@ -129,7 +129,7 @@ default = "ollama/qwen3:30b"
 
 	cmd := exec.Command(binaryPath, "claude", "--dry-run")
 	cmd.Dir = home
-	cmd.Env = append(os.Environ(), "CELL_ID=1", "HOME="+home)
+	cmd.Env = append(os.Environ(), "DEVCELL_BUNK=1", "HOME="+home)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("claude --dry-run failed: %v\noutput: %s", err, out)
@@ -163,7 +163,7 @@ default = "qwen3:30b"
 
 	cmd := exec.Command(binaryPath, "claude", "--dry-run")
 	cmd.Dir = home
-	cmd.Env = append(os.Environ(), "CELL_ID=1", "HOME="+home)
+	cmd.Env = append(os.Environ(), "DEVCELL_BUNK=1", "HOME="+home)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("claude --dry-run failed: %v\noutput: %s", err, out)
@@ -191,7 +191,7 @@ default = "ollama/deepseek-r1:32b"
 
 	cmd := exec.Command(binaryPath, "claude", "--ollama", "--dry-run")
 	cmd.Dir = home
-	cmd.Env = append(os.Environ(), "CELL_ID=1", "HOME="+home)
+	cmd.Env = append(os.Environ(), "DEVCELL_BUNK=1", "HOME="+home)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("claude --ollama --dry-run failed: %v\noutput: %s", err, out)
@@ -211,7 +211,7 @@ func TestClaude_OllamaNoModel_NoAnthropicModel(t *testing.T) {
 	// ollama not running in test env → auto-detect silently returns ""
 	cmd := exec.Command(binaryPath, "claude", "--ollama", "--dry-run")
 	cmd.Dir = home
-	cmd.Env = append(os.Environ(), "CELL_ID=1", "HOME="+home)
+	cmd.Env = append(os.Environ(), "DEVCELL_BUNK=1", "HOME="+home)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("claude --ollama --dry-run failed: %v\noutput: %s", err, out)
@@ -229,7 +229,7 @@ func TestClaude_OllamaWithUserArgs(t *testing.T) {
 
 	cmd := exec.Command(binaryPath, "claude", "--ollama", "--dry-run", "--resume")
 	cmd.Dir = home
-	cmd.Env = append(os.Environ(), "CELL_ID=1", "HOME="+home)
+	cmd.Env = append(os.Environ(), "DEVCELL_BUNK=1", "HOME="+home)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("claude --ollama --dry-run --resume failed: %v\noutput: %s", err, out)

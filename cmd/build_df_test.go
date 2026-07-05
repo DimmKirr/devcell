@@ -3,7 +3,7 @@ package main
 import "testing"
 
 // `cell build df` flag defaults — pin these so the user-visible interface
-// can't drift without a failing test. Mirror the table from DIMM-221 spec.
+// can't drift without a failing test. Mirror the table from CELL-98 spec.
 func TestDfCmd_TopFlag_DefaultsTo10(t *testing.T) {
 	got, err := dfCmd.Flags().GetInt("top")
 	if err != nil {

@@ -32,7 +32,7 @@ cookies are exported as a Playwright storage-state.json so authenticated
 sessions carry over to browser automation inside the container.
 
 Each app-name gets its own isolated Chrome profile stored at
-~/.devcell/<session>/.chrome/<app-name>/. When only one cell is running
+~/.devcell/<cell>/.chrome/<app-name>/. When only one cell is running
 the app-name is optional.
 
 Examples:
@@ -101,7 +101,7 @@ func runChrome(cmd *cobra.Command, args []string) error {
 
 	appName, urls := parseChromArgs(args)
 	if appName == "" {
-		appName = c.SessionName
+		appName = c.CellName
 	}
 
 	chromeProfile := filepath.Join(c.CellHome, ".chrome", appName)
@@ -112,7 +112,7 @@ func runChrome(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("create playwright dir: %w", err)
 	}
 
-	ux.Debugf("session: %s, cellID: %s, appName: %s", c.SessionName, c.CellID, c.AppName)
+	ux.Debugf("cell: %s, bunk: %s, appName: %s", c.CellName, c.Bunk, c.AppName)
 	ux.Debugf("chrome profile: %s", chromeProfile)
 	ux.Debugf("storage-state: %s", storageStatePath)
 
@@ -616,7 +616,7 @@ func isURL(s string) bool {
 }
 
 // playwrightSubdir is the per-CellHome directory holding all Playwright-format
-// state files (storage-state.json, fingerprint.json). Per DIMM-208 — namespaced
+// state files (storage-state.json, fingerprint.json). Per CELL-74 — namespaced
 // by format author, not by consumer tool.
 const (
 	playwrightSubdir = ".playwright"

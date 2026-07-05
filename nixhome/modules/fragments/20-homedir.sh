@@ -2,6 +2,8 @@
 # 20-homedir.sh — homedir setup (nix config, starship, repo homedir, browser env)
 # Sourced by entrypoint.sh if present and executable.
 
+notify home.starting
+
 # ── Nix-managed configs: NO COPY, use env vars ─────────────────────
 # nix.conf, starship.toml, fontconfig, mise config are all nix-managed
 # (symlinks → nix store in /opt/devcell/). NEVER copy them to $HOME —
@@ -17,7 +19,7 @@ if [ -d "$REPO_HOMEDIR" ]; then
         --chown="$HOST_USER" "$REPO_HOMEDIR/" "$HOME/"
 fi
 
-# ── Browser environment (DIMM-208 layout) ───────────────────────────
+# ── Browser environment (CELL-74 layout) ───────────────────────────
 # Both interactive chromium (over RDP/VNC) and patchright-mcp-cell path ③
 # fallback point at the same per-app Chromium user-data-dir. Sharing the
 # profile is safe because (a) wrapper path ① detects a running chromium
@@ -29,3 +31,5 @@ fi
 # Host path (Mac):    $HOME/.devcell/<session>/.chrome/<app>/   (same file via bind mount)
 export CHROMIUM_PROFILE_PATH="${HOME}/.chrome/${APP_NAME:-cell}"
 export PLAYWRIGHT_MCP_USER_DATA_DIR="${HOME}/.chrome/${APP_NAME:-cell}"
+
+notify home.ready

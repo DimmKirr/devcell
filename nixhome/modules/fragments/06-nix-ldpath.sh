@@ -18,8 +18,12 @@
 #
 # NIX_LD_LIBRARY_PATH is consulted ONLY by the nix-ld shim — nix-built
 # tools use their RPATH chains and never see this var.
+notify nix-lib.starting
+
 _NLD="/opt/devcell/.nix-ld-libs"
 if [ -d "$_NLD" ] && [ -z "${_DEVCELL_NIX_LD_LIBPATH_SET:-}" ]; then
   export NIX_LD_LIBRARY_PATH="$_NLD${NIX_LD_LIBRARY_PATH:+:$NIX_LD_LIBRARY_PATH}"
   export _DEVCELL_NIX_LD_LIBPATH_SET=1
 fi
+
+notify nix-lib.ready

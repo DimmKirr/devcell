@@ -2,6 +2,8 @@
 # 30-codex.sh — Codex CLI MCP server merge logic
 # Sourced by entrypoint.sh; has access to $HOME, $HOST_USER, log()
 
+notify codex.starting
+
 merge_codex_mcp() {
     local target_file="$1"
     local nix_file="/etc/codex/nix-mcp-servers.toml"
@@ -136,3 +138,5 @@ fi
 
 merge_codex_mcp "$HOME/.codex/config.toml"
 [ -d "$HOME/.codex" ] && chown -R "$HOST_USER" "$HOME/.codex"
+
+notify codex.ready

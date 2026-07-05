@@ -1,5 +1,6 @@
 # project-management.nix — Project management, time-tracking, and workflow-automation MCP servers
-{pkgs, config, ...}: let
+{pkgs, config, lib, ...}: let
+  cfg = config.devcell.modules.project-management;
   bin = config.devcell.managedMcp.nixBinPrefix;
   # hubstaff-mcp: Python MCP server for Hubstaff time tracking and project management.
   # https://github.com/cdmx-in/hubstaff-mcp
@@ -48,43 +49,58 @@
     nodejs = pkgs.nodejs_22;
   };
 in {
-  home.packages = [
-    hubstaffMcp  # Hubstaff MCP server for time tracking (use: hubstaff-mcp)
-    n8nMcp       # n8n MCP server for workflow automation (use: n8n-mcp)
-  ];
-
-  devcell.managedMcp.servers."hubstaff-mcp" = {
-    command = "${bin}/hubstaff-mcp";
-    args = [];
-    # Requires HUBSTAFF_REFRESH_TOKEN env var at runtime (personal access token)
+  options.devcell.modules.project-management = {
+    enable = lib.mkEnableOption "Hubstaff + n8n + Linear + Atlassian MCP servers";
+    meta = lib.mkOption {
+      type = lib.types.attrs;
+      readOnly = true;
+      default = {
+        description = "Hubstaff time tracking, n8n workflows, Linear (HTTP), Atlassian Jira/Confluence (HTTP)";
+        mcpServers = [ "hubstaff-mcp" "n8n" "linear-server" "atlassian" ];
+        sizeMb = 250;
+      };
+    };
   };
 
-  # Linear — remote HTTP MCP server.
-  # Auth: OAuth 2.1 flow on first use (run /mcp in Claude session to authenticate).
-  devcell.managedMcp.servers."linear-server" = {
-    type = "http";
-    url = "https://mcp.linear.app/mcp";
-  };
+  config = lib.mkIf cfg.enable {
+    home.packages = [
+      hubstaffMcp  # Hubstaff MCP server for time tracking (use: hubstaff-mcp)
+      n8nMcp       # n8n MCP server for workflow automation (use: n8n-mcp)
+    ];
 
-  # Atlassian (Jira + Confluence + Rovo) — remote HTTP MCP server.
-  # Upstream config repo: https://github.com/atlassian/atlassian-mcp-server
-  # Auth: OAuth 2.1 (3LO) on first use — run /mcp in Claude session to authenticate.
-  # Claude-only: opencode/codex/gemini filter to stdio. For those clients, wrap
-  # the URL with `npx -y mcp-remote ...` in a separate stdio entry.
-  devcell.managedMcp.servers."atlassian" = {
-    type = "http";
-    url = "https://mcp.atlassian.com/v1/mcp/authv2";
-  };
+    devcell.managedMcp.servers."hubstaff-mcp" = {
+      command = "${bin}/hubstaff-mcp";
+      args = [];
+      # Requires HUBSTAFF_REFRESH_TOKEN env var at runtime (personal access token)
+    };
 
-  # n8n — workflow automation. Talks to a self-hosted or cloud n8n instance via its REST API.
-  # Required env vars: N8N_API_URL (e.g. https://n8n.example.com), N8N_API_KEY (instance API key).
-  # The \${VAR} escape produces literal ${VAR} in the generated JSON, which Claude expands at spawn time.
-  devcell.managedMcp.servers."n8n" = {
-    command = "${bin}/n8n-mcp";
-    args = [];
-    env = {
-      N8N_API_URL = "\${N8N_API_URL}";
-      N8N_API_KEY = "\${N8N_API_KEY}";
+    # Linear — remote HTTP MCP server.
+    # Auth: OAuth 2.1 flow on first use (run /mcp in Claude session to authenticate).
+    devcell.managedMcp.servers."linear-server" = {
+      type = "http";
+      url = "https://mcp.linear.app/mcp";
+    };
+
+    # Atlassian (Jira + Confluence + Rovo) — remote HTTP MCP server.
+    # Upstream config repo: https://github.com/atlassian/atlassian-mcp-server
+    # Auth: OAuth 2.1 (3LO) on first use — run /mcp in Claude session to authenticate.
+    # Claude-only: opencode/codex/gemini filter to stdio. For those clients, wrap
+    # the URL with `npx -y mcp-remote ...` in a separate stdio entry.
+    devcell.managedMcp.servers."atlassian" = {
+      type = "http";
+      url = "https://mcp.atlassian.com/v1/mcp/authv2";
+    };
+
+    # n8n — workflow automation. Talks to a self-hosted or cloud n8n instance via its REST API.
+    # Required env vars: N8N_API_URL (e.g. https://n8n.example.com), N8N_API_KEY (instance API key).
+    # The \${VAR} escape produces literal ${VAR} in the generated JSON, which Claude expands at spawn time.
+    devcell.managedMcp.servers."n8n" = {
+      command = "${bin}/n8n-mcp";
+      args = [];
+      env = {
+        N8N_API_URL = "\${N8N_API_URL}";
+        N8N_API_KEY = "\${N8N_API_KEY}";
+      };
     };
   };
 }

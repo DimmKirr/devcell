@@ -2,6 +2,8 @@
 # 30-opencode.sh — merge nix-declared OpenCode providers + MCP servers
 # Sourced by entrypoint.sh; has access to $HOME, $HOST_USER, log()
 
+notify opencode.starting
+
 merge_opencode_providers() {
     local target_file="$1"
     local nix_file="/etc/opencode/nix-providers.json"
@@ -145,3 +147,5 @@ merge_opencode_providers "$HOME/opencode.json"
 
 merge_opencode_mcp "$HOME/.opencode.json"
 [ -f "$HOME/.opencode.json" ] && chown $HOST_USER "$HOME/.opencode.json"
+
+notify opencode.ready

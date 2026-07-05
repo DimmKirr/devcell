@@ -1,4 +1,4 @@
-// mise_test.go — TDD tests for DIMM-214: bake mise installs + shims into image,
+// mise_test.go — TDD tests for CELL-85: bake mise installs + shims into image,
 // two-level shim PATH for reliable runtime tooling.
 //
 // L1: file-content / wiring validation (no Docker, no nix runtime needed)
@@ -54,80 +54,37 @@ func TestMise_DockerfileBakesShimsForReshim(t *testing.T) {
 	}
 }
 
-// TestMise_SessionPathHasBakedShimDir asserts nixhome/modules/mise.nix adds
-// /opt/devcell/.local/share/mise/shims to home.sessionPath (level-2 dir).
-func TestMise_SessionPathHasBakedShimDir(t *testing.T) {
+// TestMise_SessionPathUserShimsOnly asserts nixhome/modules/mise.nix puts the
+// user shims dir on home.sessionPath and does NOT re-add the retired baked
+// shim dir — baked tools are resolved natively via MISE_SHARED_INSTALL_DIRS
+// (CELL-75), not through a second shim level.
+func TestMise_SessionPathUserShimsOnly(t *testing.T) {
 	mise := readNixhomeFile(t, "modules/mise.nix")
 
-	if !strings.Contains(mise, "/opt/devcell/.local/share/mise/shims") {
-		t.Fatal("nixhome/modules/mise.nix missing `/opt/devcell/.local/share/mise/shims` — level-2 baked shims won't be on PATH")
+	if !regexp.MustCompile(`(?s)home\.sessionPath\s*=\s*\[[^\]]*/\.local/share/mise/shims`).MatchString(mise) {
+		t.Fatal("user shims dir missing from `home.sessionPath = [ ... ]` in mise.nix")
 	}
-	if !regexp.MustCompile(`(?s)home\.sessionPath\s*=\s*\[[^\]]*"/opt/devcell/\.local/share/mise/shims"`).MatchString(mise) {
-		t.Fatal("baked shim dir not inside a `home.sessionPath = [ ... ]` list")
-	}
-}
-
-// TestMise_SessionPath_UserShimsBeforeBaked asserts precedence: user shims dir
-// must come BEFORE the baked dir so user-installed tools override baked ones.
-// home-manager prepends home.sessionPath entries in list order; first wins.
-func TestMise_SessionPath_UserShimsBeforeBaked(t *testing.T) {
-	mise := readNixhomeFile(t, "modules/mise.nix")
-
-	bakedPath := "/opt/devcell/.local/share/mise/shims"
-	bakedIdx := strings.Index(mise, bakedPath)
-	if bakedIdx == -1 {
-		t.Fatal("baked shim dir missing — TestMise_SessionPathHasBakedShimDir should also fail")
-	}
-
-	// Find a user-shim entry that is NOT the baked path string.
-	// Accept either $HOME/.local/share/mise/shims or ${config.home.homeDirectory}/...
-	userPattern := regexp.MustCompile(`(\$HOME|\$\{config\.home\.homeDirectory\}|~)/\.local/share/mise/shims`)
-	userMatches := userPattern.FindAllStringIndex(mise, -1)
-	if len(userMatches) == 0 {
-		t.Fatal("user shims dir (`$HOME/.local/share/mise/shims` or `${config.home.homeDirectory}/.local/share/mise/shims`) missing from mise.nix")
-	}
-	userFirst := userMatches[0][0]
-
-	if userFirst >= bakedIdx {
-		t.Fatalf("user shims (idx %d) must come BEFORE baked shims (idx %d) in home.sessionPath; current order would let baked override user installs", userFirst, bakedIdx)
+	if regexp.MustCompile(`(?s)home\.sessionPath\s*=\s*\[[^\]]*"/opt/devcell/\.local/share/mise/shims"`).MatchString(mise) {
+		t.Fatal("retired baked shim dir is back in home.sessionPath — shared installs (MISE_SHARED_INSTALL_DIRS) replaced the two-level shim design (CELL-75)")
 	}
 }
 
-// TestMise_ShellRcHasBakedShimDir asserts 05-shell-rc.sh's PATH export
-// includes /opt/devcell/.local/share/mise/shims (level-2 baked dir) for the
-// session user. mise.nix's home.sessionPath only affects the devcell user;
-// session users get PATH from this shell-rc fragment, so it must mirror the
-// two-level shim design or declared tools stay off the session-user PATH.
-func TestMise_ShellRcHasBakedShimDir(t *testing.T) {
+// TestMise_ShellRcUserShimsOnly asserts 05-shell-rc.sh's PATH export includes
+// the user shims dir and no longer prepends the retired baked shim dir —
+// baked tools resolve through user shims + MISE_SHARED_INSTALL_DIRS
+// (CELL-75).
+func TestMise_ShellRcUserShimsOnly(t *testing.T) {
 	frag := readNixhomeFile(t, "modules/fragments/05-shell-rc.sh")
 
-	if !strings.Contains(frag, "/opt/devcell/.local/share/mise/shims") {
-		t.Fatal("nixhome/modules/fragments/05-shell-rc.sh missing `/opt/devcell/.local/share/mise/shims` in PATH — session user won't have level-2 baked shims on PATH (user shim dir alone is fragile; baked dir is the safety net per DIMM-214)")
+	pathLine := regexp.MustCompile(`(?m)^export PATH=.*$`).FindString(frag)
+	if pathLine == "" {
+		t.Fatal("no `export PATH=` line found in 05-shell-rc.sh — fragment shape changed")
 	}
-}
-
-// TestMise_ShellRc_UserShimsBeforeBaked asserts precedence inside
-// 05-shell-rc.sh's PATH export: $HOME/.local/share/mise/shims (level 1)
-// must come BEFORE /opt/devcell/.local/share/mise/shims (level 2) so users
-// can override baked tools by running `mise install <tool>@<ver>` post-boot.
-func TestMise_ShellRc_UserShimsBeforeBaked(t *testing.T) {
-	frag := readNixhomeFile(t, "modules/fragments/05-shell-rc.sh")
-
-	bakedPath := "/opt/devcell/.local/share/mise/shims"
-	bakedIdx := strings.Index(frag, bakedPath)
-	if bakedIdx == -1 {
-		t.Fatal("baked shim dir missing — TestMise_ShellRcHasBakedShimDir should also fail")
+	if !strings.Contains(pathLine, "$HOME/.local/share/mise/shims") {
+		t.Fatalf("user shims dir missing from 05-shell-rc.sh PATH export: %q", pathLine)
 	}
-
-	userPattern := regexp.MustCompile(`\$HOME/\.local/share/mise/shims`)
-	userMatches := userPattern.FindAllStringIndex(frag, -1)
-	if len(userMatches) == 0 {
-		t.Fatal("user shims dir (`$HOME/.local/share/mise/shims`) missing from 05-shell-rc.sh PATH export")
-	}
-	userFirst := userMatches[0][0]
-
-	if userFirst >= bakedIdx {
-		t.Fatalf("user shims (idx %d) must come BEFORE baked shims (idx %d) in 05-shell-rc.sh PATH; current order would let baked override user installs", userFirst, bakedIdx)
+	if strings.Contains(pathLine, "/opt/devcell/.local/share/mise/shims") {
+		t.Fatalf("retired baked shim dir is back in 05-shell-rc.sh PATH export (two-level design was replaced by shared installs, CELL-75): %q", pathLine)
 	}
 }
 
@@ -201,6 +158,11 @@ func TestMise_ChownsGatedByShaOnWarmBoot(t *testing.T) {
 	}{
 		{"chown user_mise", `chown -R "$HOST_USER" "$user_mise"`},
 		{"chown mise state", `chown -R "$HOST_USER" "$HOME/.local/state/mise"`},
+		// Boot installs run as root and write lockfiles/metadata to
+		// ~/.cache/mise even when versions resolve from the shared layer;
+		// without this chown, user-level `mise install` (e.g. a project
+		// .tool-versions pin) fails with EACCES on the lockfile dir.
+		{"chown mise cache", `chown -R "$HOST_USER" "$HOME/.cache/mise"`},
 	}
 	for _, tc := range cases {
 		idx := strings.Index(frag, tc.pattern)
@@ -227,50 +189,40 @@ func TestMise_ChownsGatedByShaOnWarmBoot(t *testing.T) {
 func TestMise_EntrypointAlwaysCleansDanglingSymlinks(t *testing.T) {
 	frag := readNixhomeFile(t, "modules/fragments/10-mise.sh")
 
-	// The cleanup loop must exist OUTSIDE the outer `for tool_dir in "$baked/installs"/*/` block.
-	// We assert by structural inspection: the dangling-symlink cleanup
-	// (`[ -L "$link" ] && [ ! -e "$link" ]`) appears at the same indentation
-	// as `mkdir -p "$user_mise"`, not nested inside the baked-installs loop.
-	//
-	// Simpler heuristic: the cleanup block must appear BEFORE the
-	// `for tool_dir in "$baked/installs"/*/` opening (so it runs even when
-	// $baked doesn't exist).
-	bakedLoopIdx := strings.Index(frag, `for tool_dir in "$baked/installs"`)
-	cleanupIdx := strings.Index(frag, `[ ! -e "$link" ]`)
-
-	if bakedLoopIdx == -1 {
-		t.Fatal("baked-installs loop pattern not found — 10-mise.sh shape changed unexpectedly")
+	// The shared-installs design (CELL-75) keeps $HOME free of cross-tier
+	// symlinks: the cleanup loop must remove install symlinks with ABSOLUTE
+	// targets (legacy cross-bind into /opt/...) and dangling ones — but MUST
+	// preserve mise's own relative version aliases (`24 -> ./24.16.0`,
+	// `latest -> ...`). Deleting those forces a delete→recreate cycle and
+	// invalidates the sha-gate on every boot (observed 2026-06-11: "Removing
+	// legacy mise install symlink" spam + permanent cold boots).
+	if !regexp.MustCompile(`\[ -L "\$link" \](?s).{0,400}rm -f "\$link"`).MatchString(frag) {
+		t.Fatal("install-symlink cleanup loop not found in 10-mise.sh — old cross-bind symlinks would persist in $HOME and dangle on image rebuilds")
 	}
-	if cleanupIdx == -1 {
-		t.Fatal("dangling-symlink cleanup pattern not found in 10-mise.sh")
-	}
-	if cleanupIdx > bakedLoopIdx {
-		t.Fatalf("dangling-symlink cleanup (idx %d) is INSIDE or AFTER the baked-installs loop (idx %d) — must be hoisted before the loop so pure images (no /opt/mise) still clean leftover symlinks", cleanupIdx, bakedLoopIdx)
+	if !regexp.MustCompile(`readlink\s+"?\$link`).MatchString(frag) {
+		t.Fatal("cleanup loop never inspects the symlink target (readlink) — it would also delete mise's own relative version aliases (24 -> ./24.16.0), forcing delete/recreate and a sha-gate invalidation on every boot")
 	}
 }
 
-// TestMise_EntrypointBakedLoopGatedOnDirExists asserts the cross-bind loop
-// over `/opt/mise/installs/` only runs when the directory exists. Without
-// this gate, pure images (no /opt/mise) still iterate empty/dangling content
-// and waste cycles or worse, create dangling links.
-//
-// Note: shell's `for x in glob/*/` is already empty when glob has no matches,
-// so this is mostly a defense-in-depth check. The test pins the design intent.
-func TestMise_EntrypointBakedLoopGatedOnDirExists(t *testing.T) {
+// TestMise_EntrypointNoCrossBind asserts the legacy cross-bind loop (symlink
+// every baked tool version into $HOME) is gone. Baked installs are resolved
+// read-only via MISE_SHARED_INSTALL_DIRS; symlinks into the bind-mounted
+// home dangle whenever the image is rebuilt with different versions and
+// break sibling cells of other image generations (CELL-75).
+func TestMise_EntrypointNoCrossBind(t *testing.T) {
 	frag := readNixhomeFile(t, "modules/fragments/10-mise.sh")
 
-	// Either an explicit `[ -d "$baked/installs" ]` guard wraps the loop,
-	// or the loop body has a `[ -d "$tool_dir" ] || continue` first line.
-	// Accept either form.
-	hasOuterGuard := strings.Contains(frag, `[ -d "$baked/installs" ]`) || strings.Contains(frag, `[ -d "$baked" ]`)
-	hasInnerContinue := regexp.MustCompile(`for tool_dir in "\$baked/installs"[^\n]*\n\s*\[ -d "\$tool_dir" \] \|\| continue`).MatchString(frag)
-
-	if !hasOuterGuard && !hasInnerContinue {
-		t.Fatal("baked-installs loop missing pure-image guard — need either `[ -d \"$baked/installs\" ]` wrapper or `[ -d \"$tool_dir\" ] || continue` inside the loop body")
+	for _, marker := range []string{`"$baked/installs"`, `/opt/mise/installs`} {
+		if strings.Contains(frag, marker) {
+			t.Fatalf("legacy cross-bind marker %q still present in 10-mise.sh — shared installs replaced the symlink design (CELL-75)", marker)
+		}
+	}
+	if regexp.MustCompile(`ln -s\w*T?\s+"?\$ver_dir`).MatchString(frag) {
+		t.Fatal("cross-bind `ln -s` of baked versions still present in 10-mise.sh")
 	}
 }
 
-// TestMise_EntrypointInvalidatesShaOnStaleState pins the DIMM-215 fix.
+// TestMise_EntrypointInvalidatesShaOnStaleState pins the CELL-66 fix.
 // When the cleanup loop wipes dangling install symlinks (or detects an empty
 // tool dir), the sha-gate further down would otherwise still match
 // ~/.tool-versions's checksum and skip `mise install -y` — leaving declared
@@ -289,7 +241,7 @@ func TestMise_EntrypointInvalidatesShaOnStaleState(t *testing.T) {
 	rmPattern := regexp.MustCompile(`rm\s+-f[^\n]*\.tv-global\.sha`)
 	rmMatches := rmPattern.FindAllStringIndex(frag, -1)
 	if len(rmMatches) == 0 {
-		t.Fatal("entrypoint never removes .tv-global.sha — sha-gate will skip `mise install -y` even after cleanup wipes installs (DIMM-215)")
+		t.Fatal("entrypoint never removes .tv-global.sha — sha-gate will skip `mise install -y` even after cleanup wipes installs (CELL-66)")
 	}
 
 	// 2) The invalidation must come BEFORE the sha-gate read so the next
@@ -309,7 +261,7 @@ func TestMise_EntrypointInvalidatesShaOnStaleState(t *testing.T) {
 	//    cleanup loop and the rm. Looser check: the rm line is indented
 	//    further than `setup_mise_home() {` opens its body, AND there's an
 	//    `if ` token between the cleanup pattern and the rm.
-	cleanupAnchor := strings.Index(frag, `[ ! -e "$link" ]`)
+	cleanupAnchor := strings.Index(frag, `[ -L "$link" ]`)
 	if cleanupAnchor == -1 {
 		t.Fatal("cleanup pattern not found — fragment shape changed (TestMise_EntrypointAlwaysCleansDanglingSymlinks should also fail)")
 	}
@@ -367,18 +319,24 @@ func TestMise_AllDeclaredToolsCoveredByBakeStep(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestMise_DeclaredToolsOnPATH asserts every declared mise tool resolves on
-// PATH inside a fresh container. This is the user-visible bug being fixed.
+// PATH in the session user's login shell inside a fresh container. This is
+// the user-visible bug being fixed — the session user is the product
+// surface (root login shells go through the base image's /etc/profile and
+// are not provisioned by the entrypoint).
 func TestMise_DeclaredToolsOnPATH(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping L2 in -short mode")
 	}
-	c := startContainer(t, nil)
+	c := startContainer(t, map[string]string{
+		"APP_NAME":  "test",
+		"HOST_USER": hostUser,
+	})
 	declared := declaredMiseTools(t)
 
 	for _, tool := range declared {
 		bin := miseBinaryName(tool)
 		t.Run(tool, func(t *testing.T) {
-			out, code := exec(t, c, []string{"bash", "-lc", "command -v " + bin})
+			out, code := exec(t, c, []string{"gosu", hostUser, "bash", "-lc", "command -v " + bin})
 			if code != 0 || strings.TrimSpace(out) == "" {
 				t.Fatalf("declared mise tool %q (binary %q) not on PATH: out=%q exit=%d", tool, bin, out, code)
 			}
@@ -387,35 +345,37 @@ func TestMise_DeclaredToolsOnPATH(t *testing.T) {
 	}
 }
 
-// TestMise_TwoLevelShims_BakedDirExists asserts the image-level baked shim
-// dir exists with shims for every declared tool.
-func TestMise_TwoLevelShims_BakedDirExists(t *testing.T) {
+// TestMise_SharedInstalls_DeclaredToolsShared asserts mise resolves every
+// declared tool from the read-only baked install dir via
+// MISE_SHARED_INSTALL_DIRS (mise ≥2026.3.9 native shared installs, CELL-75)
+// — `mise ls` must tag them "(shared)". This is the provenance check: a tool
+// that was silently re-downloaded into the user data dir would resolve too,
+// but without the tag.
+func TestMise_SharedInstalls_DeclaredToolsShared(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping L2 in -short mode")
 	}
-	c := startContainer(t, nil)
+	c := startContainer(t, map[string]string{
+		"APP_NAME":  "test",
+		"HOST_USER": hostUser,
+	})
 
-	out, code := exec(t, c, []string{"ls", "/opt/devcell/.local/share/mise/shims"})
+	out, code := exec(t, c, []string{"gosu", hostUser, "bash", "-lc", "mise ls 2>/dev/null"})
 	if code != 0 {
-		t.Fatalf("baked shim dir missing from image: exit=%d out=%q", code, out)
-	}
-	files := strings.Fields(out)
-	if len(files) == 0 {
-		t.Fatal("baked shim dir is empty — mise reshim didn't generate any shims at build time")
+		t.Fatalf("mise ls failed: exit=%d out=%q", code, out)
 	}
 
 	declared := declaredMiseTools(t)
 	for _, tool := range declared {
-		bin := miseBinaryName(tool)
 		found := false
-		for _, f := range files {
-			if f == bin {
+		for _, line := range strings.Split(out, "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), tool) && strings.Contains(line, "(shared)") {
 				found = true
 				break
 			}
 		}
 		if !found {
-			t.Errorf("declared tool %q (binary %q) missing from baked shim dir; have: %v", tool, bin, files)
+			t.Errorf("declared tool %q not resolved from shared install dir (no \"(shared)\" tag in mise ls):\n%s", tool, out)
 		}
 	}
 }
@@ -427,62 +387,95 @@ func TestMise_TerraformAndOpentofuOnPATH(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping L2 in -short mode")
 	}
-	c := startContainer(t, nil)
+	c := startContainer(t, map[string]string{
+		"APP_NAME":  "test",
+		"HOST_USER": hostUser,
+	})
 
 	for _, bin := range []string{"terraform", "tofu"} {
-		bin := bin
 		t.Run(bin, func(t *testing.T) {
-			out, code := exec(t, c, []string{"bash", "-lc", "command -v " + bin})
+			out, code := exec(t, c, []string{"gosu", hostUser, "bash", "-lc", "command -v " + bin})
 			if code != 0 || strings.TrimSpace(out) == "" {
-				t.Fatalf("%s missing from PATH (this was the pre-DIMM-214 bug): out=%q exit=%d", bin, out, code)
+				t.Fatalf("%s missing from PATH (this was the pre-CELL-85 bug): out=%q exit=%d", bin, out, code)
 			}
 		})
 	}
 }
 
-// TestMise_PATHOrder_UserBeforeBaked asserts that user shim dir precedes
-// baked shim dir in the runtime PATH.
-func TestMise_PATHOrder_UserBeforeBaked(t *testing.T) {
+// TestMise_Layering_LocalToolVersionsOverridesShared pins the full layering
+// contract ("PATH, but for mise installs" — CELL-75):
+//  1. no local pin → the tool resolves from the read-only shared (baked) layer
+//  2. a project .tool-versions pinning a different version wins over shared
+//  3. the missing version auto-installs (exec_auto_install defaults to true)
+//     into the USER layer — never into the read-only shared dir
+func TestMise_Layering_LocalToolVersionsOverridesShared(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping L2 in -short mode")
 	}
-	c := startContainer(t, nil)
+	c := startContainer(t, map[string]string{
+		"APP_NAME":  "test",
+		"HOST_USER": hostUser,
+	})
 
-	out, code := exec(t, c, []string{"bash", "-lc", "echo $PATH"})
+	versionRe := regexp.MustCompile(`(?m)^v\d+\.\d+\.\d+$`)
+
+	// 1. Baseline: resolves the shared baked version (no local pin).
+	out, code := exec(t, c, []string{"gosu", hostUser, "bash", "-lc", "cd && node --version"})
 	if code != 0 {
-		t.Fatalf("echo $PATH failed: exit=%d", code)
+		t.Fatalf("baseline node --version failed: exit=%d out=%q", code, out)
 	}
-	path := out
+	baseline := versionRe.FindString(out)
+	if baseline == "" {
+		t.Fatalf("no version in baseline output: %q", out)
+	}
+	// The pin below must differ from the baked version or the test proves nothing.
+	const pin = "26.1.0"
+	if baseline == "v"+pin {
+		t.Fatalf("baked node is now %s — update the pinned test version to keep layers distinct", baseline)
+	}
 
-	bakedIdx := strings.Index(path, "/opt/devcell/.local/share/mise/shims")
-	if bakedIdx == -1 {
-		t.Fatalf("baked shim dir not on PATH: %s", path)
+	// 2+3. Project dir pins a version absent from both layers → shim must
+	// auto-install it into the user layer and run it.
+	out, code = exec(t, c, []string{"gosu", hostUser, "bash", "-lc",
+		`mkdir -p ~/app && echo "node ` + pin + `" > ~/app/.tool-versions && cd ~/app && node --version 2>/dev/null`})
+	if code != 0 {
+		t.Fatalf("pinned node --version failed (shim auto-install broken?): exit=%d out=%q", code, out)
 	}
-	// Find user shim dir occurrence that is NOT the baked path string.
-	// Pattern: ".local/share/mise/shims" appearing without "/opt/devcell" prefix.
-	userIdx := -1
-	for searchStart := 0; ; {
-		i := strings.Index(path[searchStart:], ".local/share/mise/shims")
-		if i == -1 {
-			break
-		}
-		abs := searchStart + i
-		// Check the preceding 12 chars don't form "/opt/devcell"
-		startCtx := abs - 12
-		if startCtx < 0 {
-			startCtx = 0
-		}
-		if !strings.Contains(path[startCtx:abs], "/opt/devcell") {
-			userIdx = abs
-			break
-		}
-		searchStart = abs + 1
+	if got := versionRe.FindString(out); got != "v"+pin {
+		t.Fatalf("project .tool-versions must override shared layer: got %q want %q (baseline %s)", got, "v"+pin, baseline)
 	}
-	if userIdx == -1 {
-		t.Fatalf("user shim dir not on PATH (only baked found): %s", path)
+
+	// Auto-install landed in the user layer; the shared dir stayed read-only.
+	out, _ = exec(t, c, []string{"gosu", hostUser, "bash", "-lc",
+		`test -d "$HOME/.local/share/mise/installs/node/` + pin + `" && echo USER-LAYER-OK; ` +
+			`test ! -e "/opt/devcell/.local/share/mise/installs/node/` + pin + `" && echo SHARED-UNTOUCHED`})
+	for _, want := range []string{"USER-LAYER-OK", "SHARED-UNTOUCHED"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %s marker — wrong layer received the auto-install:\n%s", want, out)
+		}
 	}
-	if userIdx >= bakedIdx {
-		t.Fatalf("user shim dir must come before baked in PATH; userIdx=%d bakedIdx=%d PATH=%s", userIdx, bakedIdx, path)
+}
+
+// TestMise_SharedInstalls_NoUserCopies asserts the user data dir contains no
+// copies or symlinks of the baked tools after boot — the old cross-bind
+// design symlinked every baked version into $HOME (dangling-link hazard on
+// image rebuilds, CELL-75); the shared-installs design must not.
+func TestMise_SharedInstalls_NoUserCopies(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping L2 in -short mode")
+	}
+	c := startContainer(t, map[string]string{
+		"APP_NAME":  "test",
+		"HOST_USER": hostUser,
+	})
+
+	// Only cross-tier links (absolute targets into /opt or elsewhere) are
+	// forbidden — mise's own relative version aliases (24 -> ./24.16.0) are
+	// legitimate and must survive boot.
+	out, _ := exec(t, c, []string{"gosu", hostUser, "bash", "-lc",
+		`find "$HOME/.local/share/mise/installs" -maxdepth 2 -type l -lname '/*' 2>/dev/null; true`})
+	if links := strings.TrimSpace(out); links != "" {
+		t.Errorf("user mise installs dir contains absolute-target symlinks (legacy cross-bind still active):\n%s", links)
 	}
 }
 

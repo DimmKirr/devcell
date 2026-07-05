@@ -20,6 +20,8 @@ if [ -z "$DEVCELL_SECRET_KEYS" ]; then
     return 0
 fi
 
+notify secrets.starting
+
 # Atomic write: mktemp → write → chmod → mv
 TMP=$(mktemp /run/secrets/devcell.XXXXXX)
 IFS=',' read -ra _KEYS <<< "$DEVCELL_SECRET_KEYS"
@@ -35,3 +37,5 @@ chmod 600 "$TMP"
 mv "$TMP" /run/secrets/devcell
 chown "$HOST_USER" /run/secrets/devcell
 log "Generated /run/secrets/devcell ($_COUNT secrets)"
+
+notify secrets.ready

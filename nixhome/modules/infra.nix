@@ -1,6 +1,7 @@
 # infra — Infrastructure-as-Code tools
 # Runtimes managed by mise.
 {pkgs, config, lib, ...}: let
+  cfg = config.devcell.modules.infra;
   bin = config.devcell.managedMcp.nixBinPrefix;
 
   # AWS MCP servers via uvx wrappers.
@@ -184,68 +185,85 @@
   '';
 
 in {
+  # imports must remain top-level — mise is always-on plumbing for this module set
   imports = [./mise.nix];
 
-  devcell.mise.tools.terraform = "1.14.3";
-  devcell.mise.tools.opentofu = "1.10.6";
-
-  # Place AWS config at /opt/devcell/.aws/config (nix-managed, read-only).
-  # AWS SDKs use this when AWS_CONFIG_FILE is set by the runner.
-  home.file.".aws/config".source = awsReadOnlyConfig;
-
-  home.packages = with pkgs; [
-    awsReadOnlyCredProcess  # credential_process for read-only AWS scoping
-    awscli2  # AWS CLI v2 (use: aws)
-    packer
-    terraform-docs
-    terraform-plugin-docs  # generates/validates Terraform provider docs (use: tfplugindocs)
-    kubernetes-helm  # Kubernetes package manager (use: helm)
-    porterCli  # Porter Dev CLI — Kubernetes PaaS (use: porter)
-    opentofuMcp  # OpenTofu Registry MCP server (use: opentofu-mcp-server)
-    awsApiMcpServer  # AWS API MCP server via uvx (use: aws-api-mcp-server)
-    cloudwatchMcpServer  # CloudWatch MCP server via uvx (use: cloudwatch-mcp-server)
-    notionMcpServer  # Notion API MCP server via npx (use: notion-mcp-server)
-  ];
-
-  # AWS API MCP — wraps all 200+ AWS services. Uses standard AWS credential chain.
-  # READ_OPERATIONS_ONLY is inherited from container env (set by runner when [aws] read_only=true).
-  devcell.managedMcp.servers."aws-api" = {
-    command = "${bin}/aws-api-mcp-server";
-    args = [];
-  };
-
-  # CloudWatch MCP — metrics, alarms, logs, analysis. Uses standard AWS credential chain.
-  devcell.managedMcp.servers."cloudwatch" = {
-    command = "${bin}/cloudwatch-mcp-server";
-    args = [];
-  };
-
-  devcell.managedMcp.servers.opentofu = {
-    command = "${bin}/opentofu-mcp-server";
-    args = [];
-  };
-  # Notion — two variants registered side-by-side.
-  #
-  # `notion-api` (default, enabled): official local stdio server
-  # (@notionhq/notion-mcp-server). Auth via NOTION_TOKEN env var, sourced from
-  # NOTION_API_KEY (DEVCELL_SECRET_KEYS). Token must be a Notion *internal
-  # integration* token (ntn_…) with relevant pages/databases shared to it.
-  # Non-interactive — works for headless agents and skills.
-  devcell.managedMcp.servers."notion-api" = {
-    command = "${bin}/notion-mcp-server";
-    args = [];
-    env = {
-      NOTION_TOKEN = "\${NOTION_API_KEY}";
+  options.devcell.modules.infra = {
+    enable = lib.mkEnableOption "AWS + CloudWatch + OpenTofu + Notion + Helm + Packer + Terraform";
+    meta = lib.mkOption {
+      type = lib.types.attrs;
+      readOnly = true;
+      default = {
+        description = "IaC + Cloud: Terraform/OpenTofu, AWS CLI v2, Helm, kubectl, Packer, Porter, MCPs for AWS API/CloudWatch/OpenTofu/Notion";
+        mcpServers = [ "aws-api" "cloudwatch" "opentofu" "notion-api" ];
+        sizeMb = 1220;
+      };
     };
   };
 
-  # `notion-oauth` (disabled by default): hosted remote MCP at mcp.notion.com,
-  # OAuth 2.1 flow on first use (run /mcp in a Claude session to authenticate).
-  # Useful when per-user OAuth scopes are preferred over a workspace-wide
-  # integration token. Flip `enabled = true` to stage it.
-  devcell.managedMcp.servers."notion-oauth" = {
-    enabled = false;
-    type = "http";
-    url = "https://mcp.notion.com/mcp";
+  config = lib.mkIf cfg.enable {
+    devcell.mise.tools.terraform = "1.14.3";
+    devcell.mise.tools.opentofu = "1.10.6";
+
+    # Place AWS config at /opt/devcell/.aws/config (nix-managed, read-only).
+    # AWS SDKs use this when AWS_CONFIG_FILE is set by the runner.
+    home.file.".aws/config".source = awsReadOnlyConfig;
+
+    home.packages = with pkgs; [
+      awsReadOnlyCredProcess  # credential_process for read-only AWS scoping
+      awscli2  # AWS CLI v2 (use: aws)
+      packer
+      terraform-docs
+      terraform-plugin-docs  # generates/validates Terraform provider docs (use: tfplugindocs)
+      kubernetes-helm  # Kubernetes package manager (use: helm)
+      kubectl  # Kubernetes CLI (use: kubectl) — pair with a read-only kubeconfig (see `cell auth kube`)
+      porterCli  # Porter Dev CLI — Kubernetes PaaS (use: porter)
+      opentofuMcp  # OpenTofu Registry MCP server (use: opentofu-mcp-server)
+      awsApiMcpServer  # AWS API MCP server via uvx (use: aws-api-mcp-server)
+      cloudwatchMcpServer  # CloudWatch MCP server via uvx (use: cloudwatch-mcp-server)
+      notionMcpServer  # Notion API MCP server via npx (use: notion-mcp-server)
+    ];
+
+    # AWS API MCP — wraps all 200+ AWS services. Uses standard AWS credential chain.
+    # READ_OPERATIONS_ONLY is inherited from container env (set by runner when [aws] read_only=true).
+    devcell.managedMcp.servers."aws-api" = {
+      command = "${bin}/aws-api-mcp-server";
+      args = [];
+    };
+
+    # CloudWatch MCP — metrics, alarms, logs, analysis. Uses standard AWS credential chain.
+    devcell.managedMcp.servers."cloudwatch" = {
+      command = "${bin}/cloudwatch-mcp-server";
+      args = [];
+    };
+
+    devcell.managedMcp.servers.opentofu = {
+      command = "${bin}/opentofu-mcp-server";
+      args = [];
+    };
+    # Notion — two variants registered side-by-side.
+    #
+    # `notion-api` (default, enabled): official local stdio server
+    # (@notionhq/notion-mcp-server). Auth via NOTION_TOKEN env var, sourced from
+    # NOTION_API_KEY (DEVCELL_SECRET_KEYS). Token must be a Notion *internal
+    # integration* token (ntn_…) with relevant pages/databases shared to it.
+    # Non-interactive — works for headless agents and skills.
+    devcell.managedMcp.servers."notion-api" = {
+      command = "${bin}/notion-mcp-server";
+      args = [];
+      env = {
+        NOTION_TOKEN = "\${NOTION_API_KEY}";
+      };
+    };
+
+    # `notion-oauth` (disabled by default): hosted remote MCP at mcp.notion.com,
+    # OAuth 2.1 flow on first use (run /mcp in a Claude session to authenticate).
+    # Useful when per-user OAuth scopes are preferred over a workspace-wide
+    # integration token. Flip `enabled = true` to stage it.
+    devcell.managedMcp.servers."notion-oauth" = {
+      enabled = false;
+      type = "http";
+      url = "https://mcp.notion.com/mcp";
+    };
   };
 }

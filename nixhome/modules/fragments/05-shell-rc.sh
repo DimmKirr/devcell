@@ -2,6 +2,8 @@
 # 05-shell-rc.sh — shell rc files + nix profile for session user
 # Sourced by entrypoint.sh if present and executable.
 
+notify shell.starting
+
 # ── Nix profile symlink + user-writable profile dir ──────────────────
 # Goal: `nix profile add nixpkgs#htop` works for the session user out of
 # the box, AND the baked home-manager profile (at /opt/devcell/...)
@@ -46,9 +48,9 @@ chown -h "$HOST_USER" "$HOME/.nix-profile" 2>/dev/null || true
 # DEVCELL_HOME file), leaving the session user with NO ~/.profile. Any
 # `bash -lc` (CI tests, IDE exec hooks, mise activation, sudo -i) then
 # read /etc/profile only and got system-default PATH with NO mise shim
-# dirs and NO nix profile bin — declared mise tools (go, terraform, node,
-# opentofu) silently absent on PATH despite working shims under both
-# $HOME/.local/share/mise/shims and /opt/devcell/.local/share/mise/shims.
+# dir and NO nix profile bin — declared mise tools (go, terraform, node,
+# opentofu) silently absent on PATH despite working shims under
+# $HOME/.local/share/mise/shims.
 #
 # Fix: write override content UNCONDITIONALLY for every rc file the session
 # user can hit. Source DEVCELL_HOME's version only when it exists (zsh case);
@@ -68,7 +70,7 @@ export NIX_CONF_DIR="/opt/devcell/.config/nix"
 export STARSHIP_CONFIG="/opt/devcell/.config/starship.toml"
 export FONTCONFIG_PATH="/opt/devcell/.config/fontconfig"
 export HISTFILE="$HOME/.zsh_history"
-export PATH="$HOME/go/bin:$HOME/.local/state/nix/profiles/profile/bin:/opt/devcell/.local/state/nix/profiles/profile/bin:$HOME/.local/share/mise/shims:/opt/devcell/.local/share/mise/shims\${PATH:+:}\${PATH}"
+export PATH="$HOME/go/bin:$HOME/.local/state/nix/profiles/profile/bin:/opt/devcell/.local/state/nix/profiles/profile/bin:$HOME/.local/share/mise/shims\${PATH:+:}\${PATH}"
 # NIX_LD_LIBRARY_PATH bootstrap for shells — covers docker exec / IDE attach
 # that bypass entrypoint.d/06-nix-ldpath.sh. Points at the merged .nix-ld-libs/
 # directory (symlinks to every .so* from the profile closure, glibc excluded).
@@ -102,3 +104,5 @@ for file in .profile .bashrc; do
     fi
     chown "$HOST_USER" "$HOME/$file"
 done
+
+notify shell.ready

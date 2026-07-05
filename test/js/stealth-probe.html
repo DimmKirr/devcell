@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html><head><title>Stealth Probe</title></head>
+<body>
+<pre id="results">computing...</pre>
+<script>
+(async function() {
+  const r = {};
+
+  // WebGL
+  try {
+    const c = document.createElement('canvas');
+    const gl = c.getContext('webgl');
+    if (gl) {
+      const ext = gl.getExtension('WEBGL_debug_renderer_info');
+      r.webglVendor = ext ? gl.getParameter(ext.UNMASKED_VENDOR_WEBGL) : 'no-ext';
+      r.webglRenderer = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : 'no-ext';
+      r.maxCubeMap = gl.getParameter(34076);
+      r.maxFragUniforms = gl.getParameter(36349);
+    } else { r.webglError = 'no context'; }
+  } catch(e) { r.webglError = e.message; }
+
+  // Navigator
+  r.webdriver = navigator.webdriver;
+  r.platform = navigator.platform;
+  r.hardwareConcurrency = navigator.hardwareConcurrency;
+  r.pluginsLength = navigator.plugins.length;
+  r.pdfViewerEnabled = navigator.pdfViewerEnabled;
+  r.languages = [...navigator.languages];
+
+  // Architecture
+  if (navigator.userAgentData) {
+    try {
+      const hea = await navigator.userAgentData.getHighEntropyValues(
+        ['architecture', 'bitness', 'platform', 'platformVersion']
+      );
+      r.heaArchitecture = hea.architecture;
+      r.heaBitness = hea.bitness;
+    } catch(e) { r.heaError = e.message; }
+  }
+
+  // Battery
+  try {
+    const bat = await navigator.getBattery();
+    r.batteryCharging = bat.charging;
+    r.batteryLevel = bat.level;
+  } catch(e) { r.batteryError = e.message; }
+
+  // Network
+  if (navigator.connection) {
+    r.netEffectiveType = navigator.connection.effectiveType;
+    r.netDownlink = navigator.connection.downlink;
+    r.netRtt = navigator.connection.rtt;
+  }
+
+  r.screenWidth = screen.width;
+  r.screenHeight = screen.height;
+
+  // SpeechSynthesis
+  if (window.speechSynthesis) {
+    const voices = window.speechSynthesis.getVoices();
+    r.speechVoices = voices.length;
+    r.speechFirstVoice = voices.length > 0 ? { name: voices[0].name, lang: voices[0].lang } : null;
+    r.speechGetVoicesNative = window.speechSynthesis.getVoices.toString().includes('[native code]');
+  }
+
+  document.getElementById('results').textContent = JSON.stringify(r);
+})();
+</script>
+</body></html>

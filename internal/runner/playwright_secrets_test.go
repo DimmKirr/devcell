@@ -16,6 +16,7 @@ func TestPlaywrightSecrets_GeneratesFile(t *testing.T) {
 	script := `
 set -e
 log() { :; }
+notify() { :; }
 chown() { :; }
 HOST_USER=testuser
 export BANK_USER=john@example.com
@@ -56,6 +57,7 @@ func TestPlaywrightSecrets_SkipsWhenNoKeys(t *testing.T) {
 	script := `
 set -e
 log() { :; }
+notify() { :; }
 chown() { :; }
 HOST_USER=testuser
 ` + fragmentScript(t, secretsDir)
@@ -81,6 +83,7 @@ func TestPlaywrightSecrets_SkipsWhenDirMissing(t *testing.T) {
 	script := `
 set -e
 log() { :; }
+notify() { :; }
 chown() { :; }
 HOST_USER=testuser
 export DEVCELL_SECRET_KEYS=FOO
@@ -106,6 +109,7 @@ func TestPlaywrightSecrets_OnlyWritesDeclaredKeys(t *testing.T) {
 	script := `
 set -e
 log() { :; }
+notify() { :; }
 chown() { :; }
 HOST_USER=testuser
 export SECRET_A=alpha

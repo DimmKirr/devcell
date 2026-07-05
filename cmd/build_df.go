@@ -11,7 +11,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// `cell build df` — read-only sibling of `cell build prune` (DIMM-221).
+// `cell build df` — read-only sibling of `cell build prune` (CELL-98).
 //
 // Shows the top-N largest images, containers, volumes, and build-cache
 // entries on the local Docker daemon, marking which are pinned by running

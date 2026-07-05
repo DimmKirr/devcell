@@ -108,7 +108,7 @@ func TestParseInspectPort_Missing(t *testing.T) {
 // 1150). The lookup must return the actual docker port (7350), not the
 // env-computed one (1150).
 func TestParseDockerPS_DirPortMismatch(t *testing.T) {
-	// Simulate: container started with cellID=3, SESSION_PORT_PREFIX=7
+	// Simulate: container started with bunk=3, SESSION_PORT_PREFIX=7
 	// Container name: cell-devcell-73-3-run, VNC host port: 7350
 	// Current pane: %11 → computed port would be 1150 (wrong)
 	dockerPSOutput := "cell-devcell-73-3-run\t0.0.0.0:7350->5900/tcp"

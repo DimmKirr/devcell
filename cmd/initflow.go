@@ -71,7 +71,6 @@ func RunInitFlow(opts InitFlowOptions) (*InitFlowResult, error) {
 		nixhomePath = opts.NixhomeSrc
 	}
 
-	nixhomeDest := filepath.Join(buildDir, "nixhome")
 	stack := opts.Stack
 	modules := opts.Modules
 
@@ -79,41 +78,11 @@ func RunInitFlow(opts InitFlowOptions) (*InitFlowResult, error) {
 		stack = "base" // explicit modules imply base stack
 	}
 
-	if stack == "" && !opts.Yes {
-		stackOpts, source := scanStacksFromNixhome(nixhomeDest)
-		ux.Debugf("Stack list (%s): %d stacks", source, len(stackOpts))
-
-		// Loop: stack picker → module multiselect.
-		// Esc in multiselect returns to stack picker.
-		for {
-			picked, selErr := ux.GetSelectionKV("Pick a stack", stackOpts)
-			if selErr != nil {
-				return nil, fmt.Errorf("stack selection: %w", selErr)
-			}
-			stack = picked
-
-			allModules := scanModulesFromNixhome(nixhomeDest)
-			preSelected := stackModulesFromNixhome(nixhomeDest, stack)
-			ux.Debugf("allModules (%d): %v", len(allModules), allModules)
-			ux.Debugf("preSelected (%d): %v", len(preSelected), preSelected)
-			selected, msErr := ux.GetMultiSelection(
-				"Modules (space: toggle, enter: confirm, esc: back)",
-				allModules, preSelected,
-			)
-			if msErr == ux.ErrUserAborted {
-				// Esc → clear and go back to stack picker.
-				fmt.Print("\033[2J\033[H") // clear screen, cursor to top
-				stack = ""
-				continue
-			}
-			if msErr != nil {
-				return nil, fmt.Errorf("module selection: %w", msErr)
-			}
-
-			stack, modules = ResolveModuleSelection(stack, preSelected, selected)
-			break
-		}
-	}
+	// Stack picker is deprecated. Default to "base" silently when no stack
+	// is configured — stacks themselves are being phased out in favour of
+	// explicit [cell].modules lists (Modules 2.0). The interactive picker
+	// also broke `cell shell` / `cell claude` whenever stdin wasn't a TTY
+	// (CI runs, `cell shell -- cmd`, scripted invocations). See CELL-1.
 	if stack == "" {
 		stack = "base"
 	}

@@ -41,9 +41,9 @@ assert_file_exists() {
   fi
 }
 
-# ── DIMM-134: OpenGraph meta tags ──
+# ── CELL-225: OpenGraph meta tags ──
 test_opengraph() {
-  echo "── DIMM-134: OpenGraph meta tags ──"
+  echo "── CELL-225: OpenGraph meta tags ──"
   local idx="dist/index.html"
   assert_contains "$idx" 'og:title' "Homepage has og:title"
   assert_contains "$idx" 'og:description' "Homepage has og:description"
@@ -52,30 +52,30 @@ test_opengraph() {
   assert_contains "$idx" 'twitter:card' "Homepage has twitter:card"
 }
 
-# ── DIMM-137: GitHub star count ──
+# ── CELL-222: GitHub star count ──
 test_star_badge() {
-  echo "── DIMM-137: GitHub star badge ──"
+  echo "── CELL-222: GitHub star badge ──"
   local idx="dist/index.html"
   assert_contains "$idx" 'star-badge\|github/stars' "Homepage has GitHub star badge"
 }
 
-# ── DIMM-139: Font display swap ──
+# ── CELL-220: Font display swap ──
 test_font_display() {
-  echo "── DIMM-139: Font display swap ──"
+  echo "── CELL-220: Font display swap ──"
   local idx="dist/index.html"
   assert_contains "$idx" 'display=swap\|font-display:\s*swap' "Fonts use display=swap"
 }
 
-# ── DIMM-140: Version number on homepage ──
+# ── CELL-219: Version number on homepage ──
 test_version_display() {
-  echo "── DIMM-140: Version number ──"
+  echo "── CELL-219: Version number ──"
   local idx="dist/index.html"
   assert_contains "$idx" 'releases' "Homepage links to releases"
 }
 
-# ── DIMM-141: Table zebra-striping ──
+# ── CELL-218: Table zebra-striping ──
 test_table_zebra() {
-  echo "── DIMM-141: Table zebra-striping ──"
+  echo "── CELL-218: Table zebra-striping ──"
   local css
   css=$(find dist/_astro -name "*.css" | head -1)
   if [[ -n "$css" ]]; then
@@ -86,16 +86,16 @@ test_table_zebra() {
   fi
 }
 
-# ── DIMM-138: Feature card icons ──
+# ── CELL-221: Feature card icons ──
 test_feature_icons() {
-  echo "── DIMM-138: Feature card icons ──"
+  echo "── CELL-221: Feature card icons ──"
   local idx="dist/index.html"
   assert_contains "$idx" 'card-icon' "Feature cards have icon class"
 }
 
-# ── DIMM-136: Docs search with Pagefind ──
+# ── CELL-223: Docs search with Pagefind ──
 test_docs_search() {
-  echo "── DIMM-136: Docs search ──"
+  echo "── CELL-223: Docs search ──"
   assert_file_exists "dist/pagefind/pagefind-ui.js" "Pagefind UI JS exists in dist"
   assert_file_exists "dist/pagefind/pagefind-ui.css" "Pagefind UI CSS exists in dist"
   local doc="dist/docs/quickstart/index.html"
@@ -103,9 +103,9 @@ test_docs_search() {
   assert_contains "$doc" 'pagefind-ui.js' "Docs page loads Pagefind UI script"
 }
 
-# ── DIMM-135: Comparison tables outside FAQ ──
+# ── CELL-224: Comparison tables outside FAQ ──
 test_comparison_section() {
-  echo "── DIMM-135: Comparison tables outside FAQ ──"
+  echo "── CELL-224: Comparison tables outside FAQ ──"
   local idx="dist/index.html"
   # The comparison tables should exist in their own section with id="compare", NOT inside <details>
   assert_contains "$idx" 'id="compare"' "Homepage has #compare section"

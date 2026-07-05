@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -11,9 +12,9 @@ import (
 
 // Config holds all runtime variables resolved from environment and cwd.
 type Config struct {
-	CellID        string
+	Bunk        string
 	AppName       string
-	SessionName   string
+	CellName   string
 	CellHome      string
 	ConfigDir     string
 	BuildDir      string // build context dir: .devcell/ when project config exists, else ConfigDir
@@ -33,10 +34,10 @@ type Config struct {
 // Load resolves all config fields from cwd and an environment lookup function.
 // Pure — no os.* calls inside.
 func Load(cwd string, getenv func(string) string) Config {
-	cellID := resolveCellID(getenv)
-	sessionName := resolveSessionName(getenv)
-	portPrefix := resolvePortPrefix(getenv, cellID)
-	appName := filepath.Base(cwd) + "-" + cellID
+	bunk := resolveBunk(getenv)
+	cellName := resolveCellName(getenv)
+	portPrefix := resolvePortPrefix(getenv, bunk)
+	appName := filepath.Base(cwd) + "-" + bunk
 	home := getenv("HOME")
 	imageTag := "v0.0.0-ultimate"
 
@@ -46,14 +47,14 @@ func Load(cwd string, getenv func(string) string) Config {
 
 	configDir := resolveConfigDir(getenv)
 	return Config{
-		CellID:        cellID,
+		Bunk:        bunk,
 		AppName:       appName,
-		SessionName:   sessionName,
-		CellHome:      home + "/.devcell/" + sessionName,
+		CellName:   cellName,
+		CellHome:      home + "/.devcell/" + cellName,
 		ConfigDir:     configDir,
 		BuildDir:      configDir,
 		ImageTag:      imageTag,
-		Image:         "ghcr.io/dimmkirr/devcell:" + imageTag,
+		Image:         "ghcr.io/devcell-sh/devcell:" + imageTag,
 		ContainerName: "cell-" + appName + "-run",
 		Hostname:      "cell-" + appName,
 		PortPrefix:    portPrefix,
@@ -88,18 +89,31 @@ func ResolveBuildDir(cwd, configDir string, projectConfigExists bool) string {
 	return configDir
 }
 
-func resolveCellID(getenv func(string) string) string {
-	if v := getenv("CELL_ID"); v != "" {
+// resolveBunk derives the per-pane id that seeds the VNC/RDP port prefix.
+// Priority: explicit DEVCELL_BUNK, then the active terminal multiplexer's pane id,
+// then "0". tmux is checked before zellij so a tmux pane nested inside zellij
+// (whose ZELLIJ* vars leak into the child) still keys off its real pane.
+//   - tmux:   TMUX_PANE="%5"        → "5"
+//   - zellij: ZELLIJ=0, ZELLIJ_PANE_ID="5" → "5"
+func resolveBunk(getenv func(string) string) string {
+	if v := getenv("DEVCELL_BUNK"); v != "" {
 		return v
 	}
 	if pane := getenv("TMUX_PANE"); pane != "" {
 		return strings.TrimPrefix(pane, "%")
 	}
+	// ZELLIJ is set (to "0") only inside a zellij session; guard on it so a
+	// stray ZELLIJ_PANE_ID can't hijack the fallback.
+	if getenv("ZELLIJ") != "" {
+		if pane := getenv("ZELLIJ_PANE_ID"); pane != "" {
+			return pane
+		}
+	}
 	return "0"
 }
 
-func resolveSessionName(getenv func(string) string) string {
-	if s := getenv("DEVCELL_SESSION_NAME"); s != "" {
+func resolveCellName(getenv func(string) string) string {
+	if s := getenv("DEVCELL_CELL_NAME"); s != "" {
 		return s
 	}
 	if s := getenv("TMUX_SESSION_NAME"); s != "" {
@@ -108,8 +122,8 @@ func resolveSessionName(getenv func(string) string) string {
 	return "main"
 }
 
-func resolvePortPrefix(getenv func(string) string, cellID string) string {
-	return getenv("SESSION_PORT_PREFIX") + cellID
+func resolvePortPrefix(getenv func(string) string, bunk string) string {
+	return getenv("SESSION_PORT_PREFIX") + bunk
 }
 
 func resolveConfigDir(getenv func(string) string) string {
@@ -127,8 +141,53 @@ func EnsureBuildDir(buildDir string) error {
 // ResolveAvailablePorts checks whether VNCPort and RDPPort are free and
 // replaces them with nearby available ports when they are already bound.
 func (c *Config) ResolveAvailablePorts() {
-	c.VNCPort = resolveAvailablePort(c.VNCPort)
-	c.RDPPort = resolveAvailablePort(c.RDPPort)
+	// Gather docker-allocated host ports once: on Docker Desktop (linuxkit VM)
+	// and native Linux with userland-proxy disabled, published ports never open
+	// a host-side socket, so net.Listen alone can't see them (CELL-119).
+	taken := dockerAllocatedPorts()
+	c.VNCPort = resolveAvailablePort(c.VNCPort, taken)
+	c.RDPPort = resolveAvailablePort(c.RDPPort, taken)
+}
+
+// dockerAllocatedPorts returns the set of host ports currently published by
+// running docker containers. Degrades gracefully: any error (docker absent,
+// daemon down) yields an empty set, falling back to net.Listen-only probing.
+func dockerAllocatedPorts() map[int]struct{} {
+	out, err := exec.Command("docker", "ps", "--format", "{{.Ports}}").Output()
+	if err != nil {
+		return map[int]struct{}{}
+	}
+	return parseDockerPublishedPorts(string(out))
+}
+
+// parseDockerPublishedPorts extracts host ports from `docker ps --format
+// '{{.Ports}}'` output. Each container's mappings are comma-separated, e.g.
+// "0.0.0.0:25689->3389/tcp, :::25689->3389/tcp". The host port is the number
+// after the last ":" before "->" — which handles IPv4 (0.0.0.0:P), IPv6
+// (:::P or [::]:P) alike. Mappings without a "->" (exposed-but-not-published)
+// and non-numeric host ports (ranges) are skipped. Pure — no I/O.
+func parseDockerPublishedPorts(psOutput string) map[int]struct{} {
+	ports := map[int]struct{}{}
+	for _, line := range strings.Split(psOutput, "\n") {
+		for _, mapping := range strings.Split(line, ",") {
+			mapping = strings.TrimSpace(mapping)
+			arrow := strings.Index(mapping, "->")
+			if arrow < 0 {
+				continue
+			}
+			hostPart := mapping[:arrow]
+			colon := strings.LastIndex(hostPart, ":")
+			if colon < 0 {
+				continue
+			}
+			p, err := strconv.Atoi(hostPart[colon+1:])
+			if err != nil {
+				continue
+			}
+			ports[p] = struct{}{}
+		}
+	}
+	return ports
 }
 
 // resolveAvailablePort returns preferred if it's free, otherwise scans
@@ -142,7 +201,7 @@ func (c *Config) ResolveAvailablePorts() {
 // Bump <1024 to ≥1024 BEFORE the scan so dockerd's bind actually succeeds
 // (dockerd is root but the host already has the port allocated to another
 // container, which is the real collision we need to detect).
-func resolveAvailablePort(preferred string) string {
+func resolveAvailablePort(preferred string, taken map[int]struct{}) string {
 	port, err := strconv.Atoi(preferred)
 	if err != nil {
 		return preferred
@@ -156,6 +215,12 @@ func resolveAvailablePort(preferred string) string {
 		candidate := port + i
 		if candidate > 65535 {
 			break
+		}
+		// A candidate is unavailable if docker already published it (taken)
+		// OR the kernel won't let us bind it. The taken check catches the
+		// Docker Desktop case where the port has no host socket (CELL-119).
+		if _, used := taken[candidate]; used {
+			continue
 		}
 		if isPortAvailable(candidate) {
 			return strconv.Itoa(candidate)

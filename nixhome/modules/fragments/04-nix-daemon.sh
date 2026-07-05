@@ -26,6 +26,8 @@
 #                                    because the non-root user cannot chmod
 #                                    the root-owned per-user dir.
 
+notify nix.starting
+
 # ── ALWAYS: /tmp must be 1777 (sticky world-writable) ───────────────────
 # Even when DEVCELL_NIX_DAEMON is off, every GUI service needs /tmp writable.
 # Xvfb fails to create /tmp/.X99-lock → no display → x11vnc has nothing to
@@ -86,11 +88,13 @@ chmod 0755 /nix/var/nix/daemon-socket 2>/dev/null || true
 # either way, so opting out still leaves working sudo / writable /tmp.
 if [ "${DEVCELL_NIX_DAEMON:-true}" != "true" ]; then
     log "nix-daemon disabled via DEVCELL_NIX_DAEMON=$DEVCELL_NIX_DAEMON"
+    notify nix.ready
     return 0
 fi
 
 if ! command -v nix-daemon >/dev/null 2>&1; then
     log "nix-daemon not found on PATH — skipping daemon spawn"
+    notify nix.ready
     return 0
 fi
 
@@ -134,3 +138,5 @@ else
     # Don't export NIX_REMOTE — let the user's nix CLI try direct-mode and
     # fail loudly rather than connecting to a dead socket.
 fi
+
+notify nix.ready

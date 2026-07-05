@@ -2,6 +2,8 @@
 # 40-postgres.sh — PostgreSQL for CloudQuery asset inventory
 # Sourced by entrypoint.sh if present and executable.
 
+notify postgres.starting
+
 NIX_BIN="/opt/devcell/.local/state/nix/profiles/profile/bin"
 PGDATA="$HOME/.local/share/postgresql"
 PGPORT=5432
@@ -61,3 +63,5 @@ if ! gosu "$HOST_USER" "$NIX_BIN/psql" -p "$PGPORT" -h /tmp -d postgres -tAc \
 fi
 
 log "PostgreSQL ready on port $PGPORT"
+
+notify postgres.ready

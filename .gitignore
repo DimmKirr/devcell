@@ -24,3 +24,14 @@ test/results
 .gocache
 .gomodcache
 docs/
+.nixhome-tmp/
+
+# macOS
+.DS_Store
+
+# Personal dev config / scratch (not project state)
+.claude/
+.context/
+.envrc
+.idea/
+CLAUDE.md

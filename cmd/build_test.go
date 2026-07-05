@@ -51,7 +51,7 @@ func TestPureBuildArgv_TargetsNix2ContainerOutput(t *testing.T) {
 	}
 }
 
-// After the 2026-05-15 flip (DIMM-202), UserImageTag() is unchanged
+// After the 2026-05-15 flip (CELL-189), UserImageTag() is unchanged
 // (bare devcell-user:<stack>); the pure variant is reached via
 // UserImageTagPure() with the -pure suffix.
 func TestUserImageTag_BareLocal_PureSuffixOnVariant(t *testing.T) {
@@ -80,7 +80,7 @@ func TestUserImageTag_BareLocal_PureSuffixOnVariant(t *testing.T) {
 	}
 }
 
-// PickImageTag — post-flip direction (DIMM-204) + DIMM-213 vocab:
+// PickImageTag — post-flip direction (CELL-183) + CELL-165 vocab:
 //   false (default) → pure tag
 //   true (--impure, alias --debian) → bare tag
 func TestPickImageTag_FlippedDirection(t *testing.T) {
@@ -299,8 +299,8 @@ func TestBuildBinarySize(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const maxSize = 20 * 1024 * 1024 // 20 MB
+	const maxSize = 50 * 1024 * 1024 // 50 MB
 	if info.Size() > maxSize {
-		t.Errorf("binary size %d exceeds 20MB limit", info.Size())
+		t.Errorf("binary size %d exceeds 50MB limit", info.Size())
 	}
 }

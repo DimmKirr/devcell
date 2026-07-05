@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -24,7 +25,7 @@ import (
 
 const (
 	// DefaultRegistry is the fallback registry prefix for devcell images.
-	DefaultRegistry = "public.ecr.aws/w1l3v2k8/devcell"
+	DefaultRegistry = "ghcr.io/devcell-sh/devcell"
 )
 
 // Registry is the active container registry. Set via cfg.ResolvedRegistry()
@@ -39,9 +40,9 @@ var Stack = "base"
 // Set from CellConfig at startup.
 var Modules []string
 
-// PerSessionImage tags user images per tmux session instead of per stack.
+// PerCellImage tags user images per cell instead of per stack.
 // Set from CellConfig at startup; defaults to false (stack-based).
-var PerSessionImage bool
+var PerCellImage bool
 
 // BaseImageTag returns the base image tag used in scaffold FROM,
 // allowing override via DEVCELL_BASE_IMAGE env var (local dev, CI, tests).
@@ -57,7 +58,7 @@ func BaseImageTag() string {
 // user's "current image" concept and existing local images keep working.
 //
 // Default (stack-based): devcell-user:<stack> or devcell-user:<stack>-<mod1>-<mod2>-<sha8>
-// Legacy (per_session_image=true): devcell-user:<session>
+// Legacy (per_cell_image=true): devcell-user:<cell>
 //
 // Used by:
 //   - `cell <agent> --impure` (PickImageTag(true) → bare local tag)
@@ -68,8 +69,8 @@ func UserImageTag() string {
 	if tag := os.Getenv("DEVCELL_USER_IMAGE"); tag != "" {
 		return tag
 	}
-	if PerSessionImage {
-		return "devcell-user:" + resolveSession()
+	if PerCellImage {
+		return "devcell-user:" + resolveCellName()
 	}
 	tag := Stack
 	if tag == "" {
@@ -87,7 +88,7 @@ func UserImageTag() string {
 }
 
 // UserImageTagPure returns the local tag for nix2container-built (pure)
-// images — the DEFAULT path after the 2026-05-15 flip (DIMM-202). Same
+// images — the DEFAULT path after the 2026-05-15 flip (CELL-189). Same
 // repo as UserImageTag with a "-pure" suffix.
 //
 // Example: UserImageTag()="devcell-user:ultimate" → UserImageTagPure()="devcell-user:ultimate-pure".
@@ -106,7 +107,7 @@ func StackImageTagPure(stack string) string {
 
 // StackImageTagImpure returns the registry tag for the multi-arch Dockerfile-
 // built (impure) stack image. The registry uses the explicit `-impure` suffix
-// (DIMM-213 vocabulary rename — was `-debian`) so the namespace is symmetric
+// (CELL-165 vocabulary rename — was `-debian`) so the namespace is symmetric
 // with the pure variant.
 //
 // Used by scaffold's FROM-image fallback for the legacy Dockerfile build path.
@@ -116,20 +117,51 @@ func StackImageTagImpure(stack string) string {
 	return fmt.Sprintf("%s:%s-%s-impure", Registry, version.Version, stack)
 }
 
-// StackImageTagDebian is a deprecated alias for StackImageTagImpure, kept for
-// one release while internal callers migrate. Returns the same `-impure`-
-// suffixed tag.
+// ResolveBuildTag returns the tag a `cell build` invocation should use:
+// custom (typically from --image) when non-empty, falling back to the
+// auto-derived stack tag. Trims whitespace on custom to forgive copy-paste.
+func ResolveBuildTag(custom, derived string) string {
+	if t := strings.TrimSpace(custom); t != "" {
+		return t
+	}
+	return derived
+}
+
+// UserImageTagThin returns the local tag for thin images — nix store lives
+// on a Docker named volume, not baked into the image.
 //
-// Deprecated: use StackImageTagImpure.
-func StackImageTagDebian(stack string) string {
-	return StackImageTagImpure(stack)
+// Resolution order:
+//  1. DEVCELL_USER_IMAGE_THIN — legacy explicit override
+//  2. DEVCELL_USER_IMAGE — modern unified override; used as-is (no suffix).
+//     CELL-286 prep: every devcell image we publish is thin, so the
+//     `-thin` suffix on the env-driven path is redundant. CI sets
+//     `DEVCELL_USER_IMAGE=ghcr.io/devcell-sh/devcell:v<ver>-<arch>` and
+//     expects this exact tag at runtime (no suffix appended).
+//  3. UserImageTag() + "-thin" — local-dev fallback, preserves the suffix
+//     convention so `devcell-user:<stack>-thin` doesn't collide with
+//     `-pure`/`-impure` legacy local tags.
+//
+// Example (no env): UserImageTag()="devcell-user:ultimate" → "devcell-user:ultimate-thin".
+func UserImageTagThin() string {
+	if tag := os.Getenv("DEVCELL_USER_IMAGE_THIN"); tag != "" {
+		return tag
+	}
+	if tag := os.Getenv("DEVCELL_USER_IMAGE"); tag != "" {
+		return tag
+	}
+	return UserImageTag() + "-thin"
+}
+
+// PickImageTagThin returns the thin image tag for runtime callers.
+func PickImageTagThin() string {
+	return UserImageTagThin()
 }
 
 // PickImageTag is the single seam every runtime caller (`cell claude`,
 // `cell shell`, `cell codex`, `cell gemini`, …) uses to decide which local
 // image variant to exec into.
 //
-// After the 2026-05-15 flip (DIMM-204) + DIMM-213 vocab rename, pure is the
+// After the 2026-05-15 flip (CELL-183) + CELL-165 vocab rename, pure is the
 // default and `impure` (was `debian`) is the opt-in legacy path:
 //
 //	impure=false (default):    UserImageTagPure() (nix2container, devcell-user:<stack>-pure)
@@ -141,9 +173,10 @@ func PickImageTag(impure bool) string {
 	return UserImageTagPure()
 }
 
-// resolveSession returns the session name from env vars (legacy per-session mode).
-func resolveSession() string {
-	if s := os.Getenv("DEVCELL_SESSION_NAME"); s != "" {
+// resolveCellName returns the cell name from env vars: DEVCELL_CELL_NAME wins,
+// then we read tmux's TMUX_SESSION_NAME, falling back to "main".
+func resolveCellName() string {
+	if s := os.Getenv("DEVCELL_CELL_NAME"); s != "" {
 		return s
 	}
 	if s := os.Getenv("TMUX_SESSION_NAME"); s != "" {
@@ -181,6 +214,8 @@ type RunSpec struct {
 	ExtraEnv     map[string]string   // additional env vars injected by the command handler
 	InheritEnv   []string            // env var names to inherit from host (passed as -e KEY with no value)
 	Getenv       func(string) string // env lookup; defaults to os.Getenv when nil
+	ThinImage    bool                // when true, mount devcell-nix-store volume for /nix
+	BootDir      string              // CELL-264: host-side boot dir for fsnotify sentinels; empty disables the bind-mount
 }
 
 func (s RunSpec) getenv(key string) string {
@@ -217,7 +252,7 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 
 	// Labels for VNC lookup: filter by basedir+cellid without inspecting all containers
 	argv = append(argv, "--label", "devcell.basedir="+c.BaseDir)
-	argv = append(argv, "--label", "devcell.cellid="+c.CellID)
+	argv = append(argv, "--label", "devcell.cellid="+c.Bunk)
 
 	// Core env vars
 	e := func(k, v string) { argv = append(argv, "-e", k+"="+v) }
@@ -230,6 +265,7 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 	e("HISTFILE", "/home/"+c.HostUser+"/zsh_history_"+c.AppName)
 	e("TMPDIR", "/home/"+c.HostUser+"/tmp")
 	e("CODEX_OSS_BASE_URL", envOrDefault("CODEX_OSS_BASE_URL", "http://host.docker.internal:1234/v1"))
+	e("DEVCELL_HOST_PROJECT_DIR", c.BaseDir)
 
 	// Volume mount helper (defined early for use in git identity fallback)
 	v := func(mount string) { argv = append(argv, "-v", mount) }
@@ -338,6 +374,10 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 		e("READ_OPERATIONS_ONLY", "true") // consumed by aws-api MCP server
 	}
 
+	// Stealth identity — drives CDP userAgentMetadata + JS spoofs inside container
+	e("DEVCELL_STEALTH_ARCH", spec.CellCfg.Stealth.ResolvedArch())
+	e("DEVCELL_STEALTH_PLATFORM", spec.CellCfg.Stealth.ResolvedPlatform())
+
 	// cfg [env] entries
 	for k, v := range spec.CellCfg.Env {
 		argv = append(argv, "-e", k+"="+v)
@@ -374,6 +414,22 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 	v(c.ConfigDir + ":/etc/devcell/config")
 	v(c.ConfigDir + ":/home/" + c.HostUser + "/.config/devcell")
 
+	// Thin image: nix store lives on a named Docker volume, not baked into the image
+	if spec.ThinImage {
+		v(ThinStoreVolume() + ":/nix")
+	}
+
+	// In-container boot progress dir bind-mount (CELL-264). Container's
+	// 00-notify.sh helper writes sentinel files into /tmp/devcell-boot/;
+	// host's BootDirWatcher reads them via fsnotify on the bind-mount
+	// counterpart. Empty BootDir → no mount → fragments no-op the helper.
+	if spec.BootDir != "" {
+		const bootContainerPath = "/tmp/devcell-boot"
+		v(spec.BootDir + ":" + bootContainerPath)
+		e("DEVCELL_BOOT_DIR", bootContainerPath)
+	}
+
+
 	// cfg [[volumes]] entries
 	for _, vol := range spec.CellCfg.Volumes {
 		argv = append(argv, "-v", vol.Mount)
@@ -387,7 +443,12 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 	// cfg [ports] entries
 	for _, port := range spec.CellCfg.Ports.Forward {
 		if !strings.Contains(port, ":") {
-			port = port + ":" + port
+			// "54321/udp" → host=54321, container=54321/udp
+			num := port
+			if idx := strings.IndexByte(num, '/'); idx != -1 {
+				num = num[:idx]
+			}
+			port = num + ":" + port
 		}
 		argv = append(argv, "-p", publishPrefix+port)
 	}
@@ -458,7 +519,7 @@ func EnsureNetwork(ctx context.Context) error {
 }
 
 // BuildImage runs docker build to build UserImageTag from configDir.
-// Legacy Dockerfile path; reached via `cell build --impure` after DIMM-213.
+// Legacy Dockerfile path; reached via `cell build --impure` after CELL-165.
 // verbose=true streams plain-text output to out; verbose=false suppresses all
 // docker output (quiet mode) and captures stderr to out for error replay.
 // --pull is always passed so Docker checks for a newer base image digest and
@@ -502,6 +563,16 @@ func BuildImage(ctx context.Context, configDir string, noCache bool, verbose boo
 		return fmt.Errorf("docker build: %w", err)
 	}
 	return nil
+}
+
+
+
+// DetectArch returns "aarch64" or "x86_64" based on the host CPU.
+func DetectArch() string {
+	if runtime.GOARCH == "arm64" {
+		return "aarch64"
+	}
+	return "x86_64"
 }
 
 // ImageExists returns true if a Docker image with the given tag exists locally.
@@ -713,7 +784,7 @@ func ParseImageMetadata(data []byte) ImageMetadata {
 // Falls back to a runtime `cat /etc/devcell/metadata.json` for older images
 // that predate the manifest-based stamping.
 func ImageMetadataFromContainer(ctx context.Context) ImageMetadata {
-	tag := PickImageTag(false) // false = pure (default after DIMM-204)
+	tag := PickImageTag(false) // false = pure (default after CELL-183)
 	if !ImageExists(ctx, tag) {
 		// Pure image not built/pulled yet; fall back to the debian tag if
 		// that's all we have locally.

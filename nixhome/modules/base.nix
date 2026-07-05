@@ -108,6 +108,13 @@
       # ── Entrypoint fragments ───────────────────────────────────────────────
       # Standalone shell scripts sourced by entrypoint.sh at container start.
       # See fragments/ directory for the actual shell code.
+      # 00 — sd_notify helper. Defines the `notify` shell function that all
+      # later fragments call to report boot progress to the host. MUST sort
+      # first (00 prefix) so it's sourced before any consumer. CELL-263.
+      ".config/devcell/entrypoint.d/00-notify.sh" = {
+        executable = true;
+        source = ./fragments/00-notify.sh;
+      };
       # nix-daemon — runs as root, mediates /nix/store writes for the
       # session user. Without it, `nix profile install` etc. fail because
       # /nix/store is root-owned in the pure image.
@@ -124,7 +131,7 @@
         source = ./fragments/20-homedir.sh;
       };
       # 22 — sweep stale Chromium SingletonLock/Cookie/Socket files at boot
-      # (DIMM-208). Required for the unified ~/.chrome/<app>/ profile layout:
+      # (CELL-74). Required for the unified ~/.chrome/<app>/ profile layout:
       # without cleanup, a SIGKILL'd chromium leaves locks pointing at a dead
       # PID from a prior container generation, blocking future launches.
       ".config/devcell/entrypoint.d/22-chromium-singleton.sh" = {
@@ -151,6 +158,9 @@
     noto-fonts     # comprehensive Unicode incl. Noto Sans Mono
 
     aria2 # download tool
+    gawk # GNU awk (use: awk)
+    gnused # GNU sed (use: sed)
+    gnugrep # GNU grep (use: grep) — needed on nix-only images where /usr/bin/grep is absent
     # nix-ld — dynamic linker shim for non-nix binaries (mise-downloaded node/go,
     # pip wheels, downloaded gpg keychains). Resolves the standard
     # `/lib/ld-linux-<arch>.so.<n>` interpreter path that precompiled tarballs
@@ -187,6 +197,14 @@
     wget # HTTP downloader
     rsync # fast file sync (used by entrypoint fragment staging)
     yq-go # TOML/YAML/JSON processor
+    # cell — the devcell CLI itself, baked into every image so it can
+    # run from inside the container (e.g. CI's publish step doing
+    # `cell nix-store push` against the populated /nix volume without
+    # the host's runner needing the binary). Shipped via Dockerfile
+    # COPY of the goreleaser-built binary at thin-image build time —
+    # see internal/runner/thin_build.go. NOT a nix derivation: prior
+    # attempt at `devcell.url = "path:.."` created an unrecoverable
+    # circular flake import in the overlay-based thin build flow.
   ] ++ lib.optionals pkgs.stdenv.isLinux [
     glibcLocales # en_US.UTF-8 locale for browser fingerprinting + text handling
     bubblewrap   # unprivileged sandboxing tool used by Linux-only tooling
