@@ -1,5 +1,30 @@
+# pre-commit hooks for devcell.
+#
+# Bootstrap paths (any one works):
+#   - `nix develop`          — shellHook in flake.nix installs the hooks
+#   - `mise install`         — .mise.toml pins pre-commit + runs install
+#   - `pip install pre-commit && pre-commit install`
+#
+# Run manually across the tree:  `pre-commit run --all-files`
 repos:
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.28.0
     hooks:
       - id: gitleaks
+
+  - repo: local
+    hooks:
+      # Keep flake.nix `vendorHash` in sync with go.mod / go.sum.
+      # Fires only when the Go module surface changes; delegates to
+      # `task nix:update-vendor-hash`, which shells out to nix-update
+      # and rewrites flake.nix in place. If the hash actually changed,
+      # pre-commit aborts the commit so the user reviews the diff and
+      # re-stages flake.nix — that guarantees any tag pointing at the
+      # commit has the correct hash baked in.
+      - id: nix-vendor-hash
+        name: Sync flake.nix vendorHash with go.mod/go.sum
+        entry: task nix:update-vendor-hash
+        language: system
+        files: ^(go\.mod|go\.sum)$
+        pass_filenames: false
+        require_serial: true
