@@ -182,6 +182,7 @@ var (
 	serveWorkspaceHost    string
 	serveDocker           bool
 	serveStop             bool
+	servePTY              bool
 )
 
 func init() {
@@ -206,6 +207,8 @@ func init() {
 		"run cell serve in a Docker container (detached, with Docker socket)")
 	serveCmd.Flags().BoolVar(&serveStop, "stop", false,
 		"stop a running daemon")
+	serveCmd.Flags().BoolVar(&servePTY, "pty", false,
+		"drive claude interactively via PTY instead of spawning `claude -p` per request")
 }
 
 func runServe(cmd *cobra.Command, args []string) error {
@@ -263,8 +266,15 @@ func runServe(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("system prompt: %w", err)
 	}
 
-	exec := &serve.ShellExecutor{}
-	srv := serve.NewServer(exec, servePort)
+	var executor serve.Executor
+	if servePTY {
+		ptyExec := serve.NewPTYExecutor("claude")
+		defer ptyExec.Close()
+		executor = ptyExec
+	} else {
+		executor = &serve.ShellExecutor{}
+	}
+	srv := serve.NewServer(executor, servePort)
 	srv.SetAPIKey(apiKey)
 	srv.SetSystemPrompt(systemPrompt)
 	// Off by default. Setting DEVCELL_LOG_PROMPTS=1 makes /v1/chat/completions
