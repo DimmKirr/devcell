@@ -107,6 +107,15 @@ func (p *PhaseRunner) PhaseDetailedRunning(running, finalName string, fn func() 
 	return nil
 }
 
+// UpdateText changes the in-progress spinner text. Safe to call from the
+// closure passed to Phase/PhaseDetailed/PhaseDetailedRunning. No-op if no
+// phase is currently running.
+func (p *PhaseRunner) UpdateText(message string) {
+	if p.cur != nil {
+		p.cur.UpdateText(message)
+	}
+}
+
 // Seal lands the final ✓ row before the host→container handoff. Explicit
 // boundary marker — the call site that follows Seal is the docker exec that
 // takes the TTY. Distinct from Phase because there's no work to wrap; the

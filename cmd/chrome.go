@@ -79,7 +79,7 @@ func chromeBinary() (string, error) {
 }
 
 func runChrome(cmd *cobra.Command, args []string) error {
-	applyOutputFlags()
+	applyOutputFlagsWithLog("chrome")
 	c, err := config.LoadFromOS()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)

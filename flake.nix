@@ -29,6 +29,17 @@
         ./internal
       ];
     };
+
+    # Version stamped into the binary via -ldflags. Consumers pinning a
+    # release (`nix profile install github:DimmKirr/devcell/v0.8.2#cell`)
+    # override this by pointing `nix build` at a tagged ref and passing
+    # `--override-input` or by editing this string in a release commit.
+    # `self.shortRev` is populated when Nix evaluates a clean flake ref
+    # (git tag / commit); falls back to "dirty" for uncommitted trees.
+    cellVersion = "v0.0.0-dev";
+    cellCommit = self.shortRev or self.dirtyShortRev or "unknown";
+    cellBuildDate = self.lastModifiedDate or "unknown";
+    versionPkg = "github.com/DimmKirr/devcell/internal/version";
   in {
     packages = forAllSystems ({
       system,
@@ -41,12 +52,24 @@
       # error with the new hash to substitute.
       cell = pkgs.buildGo126Module {
         pname = "cell";
-        version = "0.0.0";
+        version = nixpkgs.lib.removePrefix "v" cellVersion;
         src = cellSrc;
 
-        vendorHash = "sha256-yEh9BUxg7jgSvZEEvMRPvFIFwlLbyjIuRT/JF5CKQNw=";
+        vendorHash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
 
         subPackages = ["cmd"];
+
+        # Stamp version.Version / GitCommit / BuildDate into the binary
+        # so `cell --version` reports the flake's tag/commit instead of
+        # the hardcoded "v0.0.0" defaults in internal/version/version.go.
+        # Mirrors Taskfile.yml CELL_LDFLAGS and .goreleaser.yaml.
+        ldflags = [
+          "-s"
+          "-w"
+          "-X ${versionPkg}.Version=${cellVersion}"
+          "-X ${versionPkg}.GitCommit=${cellCommit}"
+          "-X ${versionPkg}.BuildDate=${cellBuildDate}"
+        ];
 
         # Tests need Docker / GHCR auth / real /nix volumes — none of
         # which the nix sandbox provides. The full suite runs via

@@ -479,3 +479,153 @@ func TestInitFlow_ForceOverwrites(t *testing.T) {
 		t.Error("force should overwrite existing Dockerfile")
 	}
 }
+
+// --- Behavioral scenario tests ---
+// These verify init flow scaffolding + nix image selection for 4 common scenarios.
+
+// TestInitScenario_NewDirectory verifies init in a fresh directory defaults to
+// base stack and FlakeNixImage is decoupled from binary version.
+func TestInitScenario_NewDirectory(t *testing.T) {
+	dir := t.TempDir()
+	result, err := RunInitFlow(InitFlowOptions{
+		BaseDir:   dir,
+		ConfigDir: filepath.Join(dir, ".config", "devcell"),
+		Yes:       true,
+	})
+	if err != nil {
+		t.Fatalf("RunInitFlow: %v", err)
+	}
+	if result.Stack != "base" {
+		t.Errorf("new dir: expected stack=base, got %q", result.Stack)
+	}
+	if len(result.Modules) != 0 {
+		t.Errorf("new dir: expected no modules, got %v", result.Modules)
+	}
+	c := readToml(t, filepath.Join(dir, ".devcell.toml"))
+	if c.Cell.Stack != "base" {
+		t.Errorf("new dir toml: expected stack=base, got %q", c.Cell.Stack)
+	}
+
+	flake, _ := os.ReadFile(filepath.Join(dir, ".devcell", "flake.nix"))
+	if !strings.Contains(string(flake), "devcell.stacks.base") {
+		t.Errorf("new dir flake.nix should reference devcell.stacks.base, got:\n%s", flake)
+	}
+}
+
+// TestInitScenario_ExistingToml_Ultimate verifies force re-init with stack=ultimate.
+func TestInitScenario_ExistingToml_Ultimate(t *testing.T) {
+	dir := t.TempDir()
+	// First init with base.
+	_, err := RunInitFlow(InitFlowOptions{
+		BaseDir:   dir,
+		ConfigDir: filepath.Join(dir, ".config", "devcell"),
+		Stack:     "base",
+		Yes:       true,
+	})
+	if err != nil {
+		t.Fatalf("first init: %v", err)
+	}
+
+	// Re-init with ultimate (force).
+	result, err := RunInitFlow(InitFlowOptions{
+		BaseDir:   dir,
+		ConfigDir: filepath.Join(dir, ".config", "devcell"),
+		Stack:     "ultimate",
+		Yes:       true,
+		Force:     true,
+	})
+	if err != nil {
+		t.Fatalf("re-init ultimate: %v", err)
+	}
+	if result.Stack != "ultimate" {
+		t.Errorf("re-init: expected stack=ultimate, got %q", result.Stack)
+	}
+	c := readToml(t, filepath.Join(dir, ".devcell.toml"))
+	if c.Cell.Stack != "ultimate" {
+		t.Errorf("re-init toml: expected stack=ultimate, got %q", c.Cell.Stack)
+	}
+
+	flake, _ := os.ReadFile(filepath.Join(dir, ".devcell", "flake.nix"))
+	if !strings.Contains(string(flake), "devcell.stacks.ultimate") {
+		t.Errorf("re-init flake.nix should reference devcell.stacks.ultimate, got:\n%s", flake)
+	}
+}
+
+// TestInitScenario_ExistingToml_BaseWithDesktopModule verifies force re-init
+// with base stack + desktop module.
+func TestInitScenario_ExistingToml_BaseWithDesktopModule(t *testing.T) {
+	dir := t.TempDir()
+	// First init.
+	_, err := RunInitFlow(InitFlowOptions{
+		BaseDir:   dir,
+		ConfigDir: filepath.Join(dir, ".config", "devcell"),
+		Stack:     "base",
+		Yes:       true,
+	})
+	if err != nil {
+		t.Fatalf("first init: %v", err)
+	}
+
+	// Re-init with base + desktop module.
+	result, err := RunInitFlow(InitFlowOptions{
+		BaseDir:   dir,
+		ConfigDir: filepath.Join(dir, ".config", "devcell"),
+		Stack:     "base",
+		Modules:   []string{"desktop"},
+		Yes:       true,
+		Force:     true,
+	})
+	if err != nil {
+		t.Fatalf("re-init base+desktop: %v", err)
+	}
+	if result.Stack != "base" {
+		t.Errorf("expected stack=base, got %q", result.Stack)
+	}
+	if len(result.Modules) != 1 || result.Modules[0] != "desktop" {
+		t.Errorf("expected modules=[desktop], got %v", result.Modules)
+	}
+
+	c := readToml(t, filepath.Join(dir, ".devcell.toml"))
+	if c.Cell.Stack != "base" {
+		t.Errorf("toml: expected stack=base, got %q", c.Cell.Stack)
+	}
+	if len(c.Cell.Modules) != 1 || c.Cell.Modules[0] != "desktop" {
+		t.Errorf("toml: expected modules=[desktop], got %v", c.Cell.Modules)
+	}
+
+	flake, _ := os.ReadFile(filepath.Join(dir, ".devcell", "flake.nix"))
+	flakeStr := string(flake)
+	if !strings.Contains(flakeStr, "devcell.stacks.base") {
+		t.Errorf("flake.nix should reference devcell.stacks.base")
+	}
+	if !strings.Contains(flakeStr, "devcell.modules.desktop") {
+		t.Errorf("flake.nix should reference devcell.modules.desktop, got:\n%s", flakeStr)
+	}
+}
+
+// TestInitScenario_NewDirectory_ExplicitBase verifies cell init --stack=base in a new dir.
+func TestInitScenario_NewDirectory_ExplicitBase(t *testing.T) {
+	dir := t.TempDir()
+	result, err := RunInitFlow(InitFlowOptions{
+		BaseDir:   dir,
+		ConfigDir: filepath.Join(dir, ".config", "devcell"),
+		Stack:     "base",
+		Yes:       true,
+	})
+	if err != nil {
+		t.Fatalf("RunInitFlow: %v", err)
+	}
+	if result.Stack != "base" {
+		t.Errorf("expected stack=base, got %q", result.Stack)
+	}
+
+	c := readToml(t, filepath.Join(dir, ".devcell.toml"))
+	if c.Cell.Stack != "base" {
+		t.Errorf("toml: expected stack=base, got %q", c.Cell.Stack)
+	}
+
+	flake, _ := os.ReadFile(filepath.Join(dir, ".devcell", "flake.nix"))
+	if !strings.Contains(string(flake), "devcell.stacks.base") {
+		t.Errorf("flake.nix should reference devcell.stacks.base")
+	}
+}

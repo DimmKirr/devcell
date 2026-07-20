@@ -39,7 +39,7 @@ func init() {
 }
 
 func runVNC(cmd *cobra.Command, args []string) error {
-	applyOutputFlags()
+	applyOutputFlagsWithLog("vnc")
 	list, _ := cmd.Flags().GetBool("list")
 	vncGlobal, _ = cmd.Flags().GetBool("global")
 	vncViewer, _ = cmd.Flags().GetString("viewer")
