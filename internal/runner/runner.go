@@ -44,6 +44,13 @@ var Modules []string
 // Set from CellConfig at startup; defaults to false (stack-based).
 var PerCellImage bool
 
+// FlakeNixImage returns the lightweight nixos/nix image used for flake
+// lock/update and stack discovery. Decoupled from the binary version so
+// dev builds with -dirty tags don't require a registry push.
+func FlakeNixImage() string {
+	return cfg.NixSection{}.ResolvedImage()
+}
+
 // BaseImageTag returns the base image tag used in scaffold FROM,
 // allowing override via DEVCELL_BASE_IMAGE env var (local dev, CI, tests).
 func BaseImageTag() string {
@@ -237,7 +244,10 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 		argv = append(argv, "op", "run", "--")
 	}
 
-	dockerRunFlags := []string{"--rm", "-it", "--shm-size=1g"}
+	dockerRunFlags := []string{"--rm", "-it", "--shm-size=1g", "--device=/dev/fuse"}
+	for _, cap := range spec.CellCfg.Cell.DockerCapAdd {
+		dockerRunFlags = append(dockerRunFlags, "--cap-add="+cap)
+	}
 	if spec.CellCfg.Cell.DockerPrivileged {
 		dockerRunFlags = append(dockerRunFlags, "--privileged")
 	}
@@ -567,12 +577,29 @@ func BuildImage(ctx context.Context, configDir string, noCache bool, verbose boo
 
 
 
-// DetectArch returns "aarch64" or "x86_64" based on the host CPU.
+// DetectArch returns "aarch64" or "x86_64". Respects DEVCELL_ARCH env
+// override ("amd64"→"x86_64", "arm64"→"aarch64") for cross-architecture builds.
 func DetectArch() string {
+	if v := os.Getenv("DEVCELL_ARCH"); v != "" {
+		switch v {
+		case "amd64", "x86_64":
+			return "x86_64"
+		case "arm64", "aarch64":
+			return "aarch64"
+		}
+	}
 	if runtime.GOARCH == "arm64" {
 		return "aarch64"
 	}
 	return "x86_64"
+}
+
+// DockerPlatform returns the docker --platform value for the given nix arch.
+func DockerPlatform(arch string) string {
+	if arch == "aarch64" {
+		return "linux/arm64"
+	}
+	return "linux/amd64"
 }
 
 // ImageExists returns true if a Docker image with the given tag exists locally.
@@ -921,10 +948,8 @@ func ImageVersions(ctx context.Context) (base, user string) {
 	return
 }
 
-// UpdateFlakeLock runs nix flake lock (or update) inside a temp base container
-// with configDir bind-mounted. When lockOnly is true, runs "nix flake lock"
-// (resolves inputs, generates lock if missing, doesn't update existing pins).
-// When lockOnly is false, runs "nix flake update" (pulls latest for all inputs).
+// UpdateFlakeLock runs nix flake lock (or update) inside a lightweight
+// nixos/nix container with configDir bind-mounted.
 func UpdateFlakeLock(ctx context.Context, configDir string, lockOnly bool, verbose bool, out io.Writer) error {
 	nixCmd := "nix flake update"
 	if lockOnly {
@@ -932,10 +957,10 @@ func UpdateFlakeLock(ctx context.Context, configDir string, lockOnly bool, verbo
 	}
 	args := []string{
 		"run", "--rm",
-		"-v", configDir + ":/opt/devcell/.config/devcell",
+		"-v", configDir + ":/work",
 		"--entrypoint", "sh",
-		BaseImageTag(),
-		"-c", "cd /opt/devcell/.config/devcell && " + nixCmd,
+		FlakeNixImage(),
+		"-c", "cd /work && " + nixCmd,
 	}
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
@@ -967,14 +992,14 @@ func UpdateFlakeLock(ctx context.Context, configDir string, lockOnly bool, verbo
 func DiscoverStacks(ctx context.Context, configDir string, out io.Writer) ([]string, error) {
 	// Combined: lock the flake, then find the devcell input source path and list stacks/*.nix.
 	// nix output goes to stderr (visible in --debug); stack names go to stdout (parsed).
-	script := `cd /opt/devcell/.config/devcell && nix flake lock >&2 && \
+	script := `cd /work && nix flake lock >&2 && \
 SRC=$(nix eval --raw --impure --expr '(builtins.getFlake "path:'"$(pwd)"'").inputs.devcell' 2>&1 >&2) && \
 ls "$SRC/stacks/" 2>/dev/null | sed 's/\.nix$//' | sort`
 	args := []string{
 		"run", "--rm",
-		"-v", configDir + ":/opt/devcell/.config/devcell",
+		"-v", configDir + ":/work",
 		"--entrypoint", "sh",
-		BaseImageTag(),
+		FlakeNixImage(),
 		"-c", script,
 	}
 	fmt.Fprintf(out, "[debug] docker %s\n", strings.Join(args, " "))

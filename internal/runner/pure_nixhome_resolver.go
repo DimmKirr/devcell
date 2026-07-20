@@ -15,7 +15,7 @@ const DefaultNixhomeGitRef = "feature/wip"
 // flow already present for the docker path (scaffold.go:130-140), but emits a
 // flake reference instead of editing a generated flake.nix.
 type PureNixhomeInputs struct {
-	// TomlNixhome is the resolved [cell].nixhome value (project TOML →
+	// TomlNixhome is the resolved [nix].nixhome value (project TOML →
 	// global TOML → DEVCELL_NIXHOME_PATH env, merged by cfg.LoadFromOS).
 	// Empty if unset.
 	TomlNixhome string

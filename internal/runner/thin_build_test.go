@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -93,54 +94,8 @@ func TestThinBuildArgv_RunsDockerBuild(t *testing.T) {
 func TestThinBuildArgv_InnerDockerfileFromNixCore(t *testing.T) {
 	argv := ThinBuildArgv(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, testStack, "x86_64")
 	script := argv[len(argv)-1]
-	if !strings.Contains(script, "FROM nixos/nix:latest") {
-		t.Errorf("inner Dockerfile should FROM nixos/nix:latest, got script")
-	}
-}
-
-// CELL-293: cell binary baked into every image via Dockerfile COPY
-// of the goreleaser-built host binary. Replaces the failed nix-derivation
-// approach (`devcell.url = "path:.."` in nixhome/flake.nix) which created
-// an unrecoverable circular flake import in the overlay-based thin build.
-// When cellBinaryPath is set, the runner:
-//   - bind-mounts the host binary into the builder
-//   - script copies it into the inner docker build context
-//   - generated Dockerfile COPYs it into /opt/devcell/.local/bin/cell
-
-func TestThinBuildArgvFull_MountsCellBinaryWhenProvided(t *testing.T) {
-	argv := ThinBuildArgvFull(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, "local", "x86_64", "base", "", "/home/bob/bin/cell")
-	want := "/home/bob/bin/cell:/opt/cell-host-bin:ro"
-	for i, a := range argv {
-		if a == "-v" && i+1 < len(argv) && argv[i+1] == want {
-			return
-		}
-	}
-	t.Errorf("expected host-cell mount '-v %s' in argv: %v", want, argv)
-}
-
-func TestThinBuildArgvFull_GeneratedDockerfileCopiesCell(t *testing.T) {
-	argv := ThinBuildArgvFull(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, "local", "x86_64", "base", "", "/home/bob/bin/cell")
-	script := argv[len(argv)-1]
-	if !strings.Contains(script, "cp /opt/cell-host-bin \"$CTX/cell\"") {
-		t.Errorf("script must stage cell binary into $CTX/cell, got script without that cp")
-	}
-	if !strings.Contains(script, "COPY cell /opt/devcell/.local/bin/cell") {
-		t.Errorf("generated Dockerfile must COPY cell into /opt/devcell/.local/bin/cell")
-	}
-}
-
-func TestThinBuildArgvFull_NoCellBinaryWhenEmpty(t *testing.T) {
-	// Back-compat: when no cell binary path is supplied, runner must NOT
-	// add the mount or the COPY (older callers / ThinBuildArgv shim).
-	argv := ThinBuildArgvFull(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, "local", "x86_64", "base", "", "")
-	for i, a := range argv {
-		if a == "-v" && i+1 < len(argv) && strings.Contains(argv[i+1], "cell-host-bin") {
-			t.Errorf("must NOT mount cell binary when path is empty: %v", argv)
-		}
-	}
-	script := argv[len(argv)-1]
-	if strings.Contains(script, "COPY cell") {
-		t.Errorf("must NOT include COPY cell in Dockerfile when path is empty")
+	if !strings.Contains(script, "FROM "+testCoreImage) {
+		t.Errorf("inner Dockerfile should FROM %s, got script", testCoreImage)
 	}
 }
 
@@ -178,13 +133,17 @@ func TestThinBuildArgv_CopiesConfigInContext(t *testing.T) {
 }
 
 func TestThinBuildArgv_NixConfDaemonMode(t *testing.T) {
-	argv := ThinBuildArgv(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, testStack, "x86_64")
+	nativeArch := "x86_64"
+	if runtime.GOARCH == "arm64" {
+		nativeArch = "aarch64"
+	}
+	argv := ThinBuildArgv(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, testStack, nativeArch)
 	script := argv[len(argv)-1]
 	if !strings.Contains(script, "sandbox = true") {
 		t.Error("should set sandbox = true (isolate builds)")
 	}
-	if !strings.Contains(script, "max-jobs = auto") {
-		t.Error("should set max-jobs = auto (parallel builds under daemon)")
+	if !strings.Contains(script, "DEVCELL_NIX_MAX_JOBS:-auto") {
+		t.Error("should set max-jobs from DEVCELL_NIX_MAX_JOBS (default auto)")
 	}
 	if !strings.Contains(script, "nix-daemon") {
 		t.Error("should start nix-daemon (avoids /homeless-shelter race)")
@@ -444,18 +403,68 @@ func TestThinBuildArgv_ProfileSymlinkResolvesToStorePath(t *testing.T) {
 // The builder must register the resolved profile as an indirect GC root
 // under /nix/var/nix/gcroots/ so the store path stays alive on the volume.
 func TestThinBuildArgv_ProfilePinnedAsGCRoot(t *testing.T) {
-	argv := ThinBuildArgvFull(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, "local", "x86_64", testStack, "", "")
+	argv := ThinBuildArgvFull(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, "local", "x86_64", testStack, "", "testproj")
 	script := argv[len(argv)-1]
 
 	if !strings.Contains(script, "/nix/var/nix/gcroots/devcell/") {
 		t.Error("builder must register the resolved home-manager profile as a GC root under /nix/var/nix/gcroots/devcell/ so the shared-volume GC does not reap it")
 	}
 
-	// Per-stack GC root name — different stacks must not clobber each other's
-	// roots. Use the hmTarget + archSuffix combo, matching the existing flake
-	// key convention (`devcell-<hmTarget><archSuffix>`).
-	if !strings.Contains(script, "/nix/var/nix/gcroots/devcell/local") {
-		t.Error("GC root name must be per-hmTarget so different stacks preserve their own home-manager-path")
+	// Per-project + per-stack GC root name — different projects and stacks must
+	// not clobber each other's roots (CELL-320).
+	if !strings.Contains(script, "/nix/var/nix/gcroots/devcell/testproj-local-profile") {
+		t.Error("GC root name must be project-scoped: <project>-<hmTarget><arch>-profile")
+	}
+}
+
+// CELL-320: GC roots must be scoped by project name so containers from
+// different projects don't overwrite each other's roots. Without project
+// scoping, the last project to build wins — its ln -sfT overwrites the
+// previous project's root, and the next nix-collect-garbage reaps the
+// now-unrooted derivations.
+func TestThinBuildArgv_ProjectScopedGCRoots(t *testing.T) {
+	argv := ThinBuildArgvFull(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, "local", "x86_64", testStack, "", "myproject")
+	script := argv[len(argv)-1]
+
+	// Profile root must include project name.
+	if !strings.Contains(script, "/nix/var/nix/gcroots/devcell/myproject-local-profile") {
+		t.Error("GC root for profile must be project-scoped: /nix/var/nix/gcroots/devcell/<project>-<hmTarget><arch>-profile")
+	}
+
+	// Generation root must include project name.
+	if !strings.Contains(script, "/nix/var/nix/gcroots/devcell/myproject-local-generation") {
+		t.Error("GC root for generation must be project-scoped: /nix/var/nix/gcroots/devcell/<project>-<hmTarget><arch>-generation")
+	}
+}
+
+// Two different projects must produce different GC root paths.
+func TestThinBuildArgv_DifferentProjectsDifferentRoots(t *testing.T) {
+	argvA := ThinBuildArgvFull(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, "local", "x86_64", testStack, "", "alpha")
+	argvB := ThinBuildArgvFull(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, "local", "x86_64", testStack, "", "beta")
+	scriptA := argvA[len(argvA)-1]
+	scriptB := argvB[len(argvB)-1]
+
+	if !strings.Contains(scriptA, "alpha-local-profile") {
+		t.Error("project alpha must have its own GC root")
+	}
+	if !strings.Contains(scriptB, "beta-local-profile") {
+		t.Error("project beta must have its own GC root")
+	}
+	if strings.Contains(scriptA, "beta-local") {
+		t.Error("project alpha must not reference project beta's root")
+	}
+}
+
+// Arch suffix must appear in project-scoped GC root names.
+func TestThinBuildArgv_ProjectScopedGCRootsWithArch(t *testing.T) {
+	argv := ThinBuildArgvFull(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, "local", "aarch64", testStack, "", "myproject")
+	script := argv[len(argv)-1]
+
+	if !strings.Contains(script, "/nix/var/nix/gcroots/devcell/myproject-local-aarch64-profile") {
+		t.Error("GC root for profile must include arch suffix for aarch64")
+	}
+	if !strings.Contains(script, "/nix/var/nix/gcroots/devcell/myproject-local-aarch64-generation") {
+		t.Error("GC root for generation must include arch suffix for aarch64")
 	}
 }
 
@@ -572,7 +581,7 @@ func TestThinBuildArgv_LocalPathStillMounts(t *testing.T) {
 // target name ("local"), which is an implementation detail.
 
 func TestThinBuildArgv_SetsDevcellStackFromCaller(t *testing.T) {
-	argv := ThinBuildArgvFull(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, "local", "x86_64", "ultimate", "", "")
+	argv := ThinBuildArgvFull(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, "local", "x86_64", "ultimate", "", "testproj")
 	script := argv[len(argv)-1]
 	if !strings.Contains(script, "export DEVCELL_STACK=ultimate") {
 		t.Errorf("script must set DEVCELL_STACK to the user-facing stack name (not the HM target), got script without that export")
@@ -583,7 +592,7 @@ func TestThinBuildArgv_SetsDevcellStackFromCaller(t *testing.T) {
 }
 
 func TestThinBuildArgv_SetsDevcellModulesFromCaller(t *testing.T) {
-	argv := ThinBuildArgvFull(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, "local", "x86_64", "", "foo,bar", "")
+	argv := ThinBuildArgvFull(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, "local", "x86_64", "", "foo,bar", "testproj")
 	script := argv[len(argv)-1]
 	if !strings.Contains(script, "export DEVCELL_MODULES=foo,bar") {
 		t.Error("script must set DEVCELL_MODULES to the user-facing module CSV")
@@ -591,7 +600,7 @@ func TestThinBuildArgv_SetsDevcellModulesFromCaller(t *testing.T) {
 }
 
 func TestThinBuildArgv_BakesStackAndModulesEnvIntoImage(t *testing.T) {
-	argv := ThinBuildArgvFull(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, "local", "x86_64", "ultimate", "foo,bar", "")
+	argv := ThinBuildArgvFull(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, "local", "x86_64", "ultimate", "foo,bar", "testproj")
 	script := argv[len(argv)-1]
 	if !strings.Contains(script, "ENV DEVCELL_STACK=ultimate") {
 		t.Error("inner Dockerfile must bake ENV DEVCELL_STACK so the running container's writeMetadata sees it")
@@ -604,13 +613,144 @@ func TestThinBuildArgv_BakesStackAndModulesEnvIntoImage(t *testing.T) {
 func TestThinBuildArgv_EmptyStackAndModulesIsExplicit(t *testing.T) {
 	// Empty values still get exported — the entrypoint's writeMetadata
 	// distinguishes empty (modules: []) from missing (skip metadata write).
-	argv := ThinBuildArgvFull(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, "local", "x86_64", "", "", "")
+	argv := ThinBuildArgvFull(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, "local", "x86_64", "", "", "testproj")
 	script := argv[len(argv)-1]
 	if !strings.Contains(script, "export DEVCELL_STACK=") {
 		t.Error("empty stack must still appear as `export DEVCELL_STACK=` so writeMetadata fires")
 	}
 	if !strings.Contains(script, "export DEVCELL_MODULES=") {
 		t.Error("empty modules must still appear as `export DEVCELL_MODULES=`")
+	}
+}
+
+// --- Cross-architecture (DEVCELL_ARCH) ---
+
+func TestThinBuildArgv_PlatformFlagOnBuilderContainer(t *testing.T) {
+	argv := ThinBuildArgvFull(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, testStack, "x86_64", testStack, "", "testproj")
+	found := false
+	for i, a := range argv {
+		if a == "--platform" && i+1 < len(argv) && argv[i+1] == "linux/amd64" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("builder docker run must include --platform linux/amd64 for x86_64 arch")
+	}
+}
+
+func TestThinBuildArgv_PlatformFlagArm64(t *testing.T) {
+	argv := ThinBuildArgvFull(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, testStack, "aarch64", testStack, "", "testproj")
+	found := false
+	for i, a := range argv {
+		if a == "--platform" && i+1 < len(argv) && argv[i+1] == "linux/arm64" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("builder docker run must include --platform linux/arm64 for aarch64 arch")
+	}
+}
+
+func TestThinBuildArgv_InnerDockerBuildPlatform(t *testing.T) {
+	argv := ThinBuildArgvFull(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, testStack, "x86_64", testStack, "", "testproj")
+	script := argv[len(argv)-1]
+	if !strings.Contains(script, "--platform linux/amd64") {
+		t.Error("inner docker build must include --platform linux/amd64 for x86_64 arch")
+	}
+}
+
+func TestThinBuildArgv_InnerDockerBuildPlatformArm64(t *testing.T) {
+	argv := ThinBuildArgvFull(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, testStack, "aarch64", testStack, "", "testproj")
+	script := argv[len(argv)-1]
+	if !strings.Contains(script, "--platform linux/arm64") {
+		t.Error("inner docker build must include --platform linux/arm64 for aarch64 arch")
+	}
+}
+
+// GNU coreutils `cp` refuses to write through a dangling symlink — the builder
+// must rm -f the dangling link before cp, otherwise the /etc/{passwd,group,...}
+// materialisation fails with "cp: not writing through dangling symlink".
+func TestThinBuildArgv_DanglingSymlinkFixRemovesBeforeCopy(t *testing.T) {
+	argv := ThinBuildArgv(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, testStack, "x86_64")
+	script := argv[len(argv)-1]
+	if !strings.Contains(script, `rm -f "$f"`) {
+		t.Error(`dangling symlink fix must rm -f "$f" before cp — plain cp fails with "not writing through dangling symlink" (GNU coreutils)`)
+	}
+}
+
+// /etc/nix/nix.conf may be a symlink into the read-only nix store (when the
+// volume already has the base-system path). The script must rm + overwrite
+// rather than append, otherwise both sed and cat silently fail on the
+// read-only target.
+func TestThinBuildArgv_OverwritesNixConf(t *testing.T) {
+	argv := ThinBuildArgv(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, testStack, "x86_64")
+	script := argv[len(argv)-1]
+	if !strings.Contains(script, "rm -f /etc/nix/nix.conf") {
+		t.Error("must rm -f /etc/nix/nix.conf before writing — it may be a symlink to a read-only store path")
+	}
+	if !strings.Contains(script, "cat > /etc/nix/nix.conf") {
+		t.Error("must overwrite (>) nix.conf, not append (>>) — ensures our sandbox setting takes effect")
+	}
+}
+
+// QEMU can't translate seccomp BPF programs, so cross-arch builds must disable
+// Nix's sandbox — otherwise home-manager switch fails with
+// "unable to load seccomp BPF program: Invalid argument".
+func TestThinBuildArgv_CrossArchDisablesSandboxAndFilterSyscalls(t *testing.T) {
+	crossArch := "x86_64"
+	if runtime.GOARCH == "amd64" {
+		crossArch = "aarch64"
+	}
+	argv := ThinBuildArgvFull(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, testStack, crossArch, testStack, "", "testproj")
+	script := argv[len(argv)-1]
+	if !strings.Contains(script, "sandbox = false") {
+		t.Error("cross-arch build must set sandbox = false")
+	}
+	if !strings.Contains(script, "filter-syscalls = false") {
+		t.Error("cross-arch build must set filter-syscalls = false — QEMU can't translate seccomp BPF syscall numbers")
+	}
+}
+
+// QEMU can't handle personality(PER_LINUX32) — cross-arch builds must clear
+// extra-platforms so Nix doesn't attempt to build i686-linux derivations.
+func TestThinBuildArgv_CrossArchDisablesExtraPlatforms(t *testing.T) {
+	crossArch := "x86_64"
+	if runtime.GOARCH == "amd64" {
+		crossArch = "aarch64"
+	}
+	argv := ThinBuildArgvFull(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, testStack, crossArch, testStack, "", "testproj")
+	script := argv[len(argv)-1]
+	if !strings.Contains(script, "extra-platforms =") {
+		t.Error("cross-arch build must set extra-platforms = (empty) — QEMU can't handle personality() for i686")
+	}
+}
+
+func TestThinBuildArgv_NativeArchOmitsExtraPlatforms(t *testing.T) {
+	nativeArch := "x86_64"
+	if runtime.GOARCH == "arm64" {
+		nativeArch = "aarch64"
+	}
+	argv := ThinBuildArgvFull(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, testStack, nativeArch, testStack, "", "testproj")
+	script := argv[len(argv)-1]
+	if strings.Contains(script, "extra-platforms") {
+		t.Error("native-arch build should NOT set extra-platforms — Nix defaults handle i686 correctly on real hardware")
+	}
+}
+
+func TestThinBuildArgv_NativeArchEnablesSandboxAndFilterSyscalls(t *testing.T) {
+	nativeArch := "x86_64"
+	if runtime.GOARCH == "arm64" {
+		nativeArch = "aarch64"
+	}
+	argv := ThinBuildArgvFull(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, testStack, nativeArch, testStack, "", "testproj")
+	script := argv[len(argv)-1]
+	if !strings.Contains(script, "sandbox = true") {
+		t.Error("native-arch build should keep sandbox = true")
+	}
+	if !strings.Contains(script, "filter-syscalls = true") {
+		t.Error("native-arch build should keep filter-syscalls = true")
 	}
 }
 
