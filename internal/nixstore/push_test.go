@@ -106,6 +106,10 @@ func TestPush_LayerIsSingleGzipped(t *testing.T) {
 
 	mustSeedEmptyBase(t, baseRef)
 
+	prevChunk := nixstore.ChunkSize
+	nixstore.ChunkSize = 0
+	defer func() { nixstore.ChunkSize = prevChunk }()
+
 	fixture := map[string][]byte{"nix/marker": []byte("hello")}
 	tarBytes := mustBuildTar(t, fixture)
 	if err := nixstore.Push(context.Background(), baseRef, dstRef, io.NopCloser(bytes.NewReader(tarBytes))); err != nil {
@@ -232,6 +236,81 @@ func (s *syncBuffer) String() string {
 	return s.buf.String()
 }
 
+// TestPush_DetectsStallAndAborts verifies that Push aborts the upload
+// when the input reader stalls (no new bytes for StallTimeout). This
+// reproduces the CI hang where GHCR throttles a 5+ GB upload to near
+// zero and the process blocks until externally SIGTERMed.
+func TestPush_DetectsStallAndAborts(t *testing.T) {
+	srv := newRegistryForPush(t)
+	defer srv.Close()
+
+	regHost := mustHostForPush(t, srv.URL)
+	baseRef := regHost + "/base:latest"
+	dstRef := regHost + "/cache:stall"
+	mustSeedEmptyBase(t, baseRef)
+
+	prevStall := nixstore.StallTimeout
+	prevTick := nixstore.ProgressTick
+	prevWriter := nixstore.ProgressWriter
+	prevChunk := nixstore.ChunkSize
+	nixstore.StallTimeout = 200 * time.Millisecond
+	nixstore.ProgressTick = 50 * time.Millisecond
+	nixstore.ProgressWriter = &syncBuffer{}
+	nixstore.ChunkSize = 0 // streaming path — stallReader must block during upload
+	defer func() {
+		nixstore.StallTimeout = prevStall
+		nixstore.ProgressTick = prevTick
+		nixstore.ProgressWriter = prevWriter
+		nixstore.ChunkSize = prevChunk
+	}()
+
+	tarBytes := mustBuildTar(t, map[string][]byte{
+		"nix/store/pkg/bin/tool": bytes.Repeat([]byte{0x42}, 4096),
+	})
+	sr := &stallReader{
+		initial: tarBytes,
+		block:   make(chan struct{}),
+	}
+	t.Cleanup(func() { sr.Close() })
+
+	start := time.Now()
+	err := nixstore.Push(context.Background(), baseRef, dstRef, sr)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected Push to detect stall and return error, got nil")
+	}
+	if !strings.Contains(err.Error(), "stall") {
+		t.Errorf("error should mention stall: %v", err)
+	}
+	if elapsed > 5*time.Second {
+		t.Errorf("Push should abort within StallTimeout (~200ms), took %s", elapsed)
+	}
+}
+
+// stallReader delivers initial bytes on Read, then blocks until Close.
+type stallReader struct {
+	initial []byte
+	pos     int
+	block   chan struct{}
+	once    sync.Once
+}
+
+func (s *stallReader) Read(p []byte) (int, error) {
+	if s.pos < len(s.initial) {
+		n := copy(p, s.initial[s.pos:])
+		s.pos += n
+		return n, nil
+	}
+	<-s.block
+	return 0, io.ErrClosedPipe
+}
+
+func (s *stallReader) Close() error {
+	s.once.Do(func() { close(s.block) })
+	return nil
+}
+
 // TestPush_RejectsBadDstRef ensures Push fails cleanly when the
 // destination reference is malformed.
 func TestPush_RejectsBadDstRef(t *testing.T) {
@@ -329,6 +408,184 @@ func mustBuildStubLayer(t *testing.T) []byte {
 	_ = tw.Close()
 	_ = gz.Close()
 	return buf.Bytes()
+}
+
+// TestPush_ChunkedRoundTrip verifies that Push splits a large tar into
+// multiple OCI layers when ChunkSize is set, and that Pull reassembles
+// them correctly (byte-for-byte match). This is the core test for CELL-297.
+func TestPush_ChunkedRoundTrip(t *testing.T) {
+	srv := newRegistryForPush(t)
+	defer srv.Close()
+
+	regHost := mustHostForPush(t, srv.URL)
+	baseRef := regHost + "/base:latest"
+	dstRef := regHost + "/cache:chunked"
+
+	mustSeedEmptyBase(t, baseRef)
+
+	// Set a tiny chunk size so that our small fixture produces multiple layers.
+	prevChunk := nixstore.ChunkSize
+	nixstore.ChunkSize = 512
+	defer func() { nixstore.ChunkSize = prevChunk }()
+
+	// Fixture: three files, each > 512 bytes so we get multiple chunks.
+	fixture := map[string][]byte{
+		"nix/store/aaa-pkg/bin/cmd":       bytes.Repeat([]byte("A"), 600),
+		"nix/store/bbb-pkg/lib/libfoo.so": bytes.Repeat([]byte("B"), 600),
+		"nix/store/ccc-pkg/share/data":    bytes.Repeat([]byte("C"), 600),
+	}
+	tarBytes := mustBuildTar(t, fixture)
+
+	if err := nixstore.Push(context.Background(), baseRef, dstRef, io.NopCloser(bytes.NewReader(tarBytes))); err != nil {
+		t.Fatalf("Push failed: %v", err)
+	}
+
+	// Verify the pushed image has more than 2 layers (1 base + N>1 chunks).
+	ref, err := name.ParseReference(dstRef)
+	if err != nil {
+		t.Fatalf("parse ref: %v", err)
+	}
+	img, err := remote.Image(ref)
+	if err != nil {
+		t.Fatalf("fetch image: %v", err)
+	}
+	layers, err := img.Layers()
+	if err != nil {
+		t.Fatalf("layers: %v", err)
+	}
+	if len(layers) <= 2 {
+		t.Errorf("expected >2 layers (1 base + multiple chunks), got %d", len(layers))
+	}
+
+	// Pull and verify byte-for-byte match.
+	dstDir := t.TempDir()
+	if err := nixstore.Pull(context.Background(), dstRef, dstDir, 0); err != nil {
+		t.Fatalf("Pull after chunked Push failed: %v", err)
+	}
+	for relPath, want := range fixture {
+		got, err := os.ReadFile(filepath.Join(dstDir, relPath))
+		if err != nil {
+			t.Errorf("expected %s extracted; got: %v", relPath, err)
+			continue
+		}
+		if !bytes.Equal(got, want) {
+			t.Errorf("%s mismatch (want %d bytes, got %d bytes)", relPath, len(want), len(got))
+		}
+	}
+}
+
+// TestPush_ChunkBoundary verifies that a single file larger than ChunkSize
+// stays in one chunk — chunk size is a soft cap that never splits mid-entry.
+func TestPush_ChunkBoundary(t *testing.T) {
+	srv := newRegistryForPush(t)
+	defer srv.Close()
+
+	regHost := mustHostForPush(t, srv.URL)
+	baseRef := regHost + "/base:latest"
+	dstRef := regHost + "/cache:boundary"
+
+	mustSeedEmptyBase(t, baseRef)
+
+	prevChunk := nixstore.ChunkSize
+	nixstore.ChunkSize = 256
+	defer func() { nixstore.ChunkSize = prevChunk }()
+
+	// One file much larger than ChunkSize — must not be split.
+	fixture := map[string][]byte{
+		"nix/store/big/data": bytes.Repeat([]byte("X"), 2048),
+	}
+	tarBytes := mustBuildTar(t, fixture)
+
+	if err := nixstore.Push(context.Background(), baseRef, dstRef, io.NopCloser(bytes.NewReader(tarBytes))); err != nil {
+		t.Fatalf("Push failed: %v", err)
+	}
+
+	// Round-trip must preserve the large file intact.
+	dstDir := t.TempDir()
+	if err := nixstore.Pull(context.Background(), dstRef, dstDir, 0); err != nil {
+		t.Fatalf("Pull failed: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(dstDir, "nix/store/big/data"))
+	if err != nil {
+		t.Fatalf("expected big file extracted: %v", err)
+	}
+	if !bytes.Equal(got, fixture["nix/store/big/data"]) {
+		t.Errorf("big file mismatch (want %d bytes, got %d bytes)", len(fixture["nix/store/big/data"]), len(got))
+	}
+}
+
+// TestPush_ChunkedLayersAreSingleGzipped verifies each chunk layer is
+// single-gzipped (no double-gzip regression from CELL-292).
+func TestPush_ChunkedLayersAreSingleGzipped(t *testing.T) {
+	srv := newRegistryForPush(t)
+	defer srv.Close()
+
+	regHost := mustHostForPush(t, srv.URL)
+	baseRef := regHost + "/base:latest"
+	dstRef := regHost + "/cache:gz-check"
+
+	mustSeedEmptyBase(t, baseRef)
+
+	prevChunk := nixstore.ChunkSize
+	nixstore.ChunkSize = 256
+	defer func() { nixstore.ChunkSize = prevChunk }()
+
+	fixture := map[string][]byte{
+		"nix/store/aaa/file": bytes.Repeat([]byte("A"), 300),
+		"nix/store/bbb/file": bytes.Repeat([]byte("B"), 300),
+	}
+	tarBytes := mustBuildTar(t, fixture)
+
+	if err := nixstore.Push(context.Background(), baseRef, dstRef, io.NopCloser(bytes.NewReader(tarBytes))); err != nil {
+		t.Fatalf("Push failed: %v", err)
+	}
+
+	ref, err := name.ParseReference(dstRef)
+	if err != nil {
+		t.Fatalf("parse ref: %v", err)
+	}
+	img, err := remote.Image(ref)
+	if err != nil {
+		t.Fatalf("fetch image: %v", err)
+	}
+	allLayers, err := img.Layers()
+	if err != nil {
+		t.Fatalf("layers: %v", err)
+	}
+
+	// Check each non-base layer.
+	for i, l := range allLayers[1:] {
+		sz, _ := l.Size()
+		if sz < 100 {
+			continue
+		}
+
+		compressedRC, err := l.Compressed()
+		if err != nil {
+			t.Fatalf("layer %d compressed: %v", i+1, err)
+		}
+		head := make([]byte, 2)
+		if _, err := io.ReadFull(compressedRC, head); err != nil {
+			t.Fatalf("layer %d read compressed head: %v", i+1, err)
+		}
+		compressedRC.Close()
+		if head[0] != 0x1f || head[1] != 0x8b {
+			t.Errorf("layer %d raw bytes don't start with gzip magic: got %x", i+1, head)
+		}
+
+		uncompressedRC, err := l.Uncompressed()
+		if err != nil {
+			t.Fatalf("layer %d uncompressed: %v", i+1, err)
+		}
+		uhead := make([]byte, 2)
+		if _, err := io.ReadFull(uncompressedRC, uhead); err != nil {
+			t.Fatalf("layer %d read uncompressed head: %v", i+1, err)
+		}
+		uncompressedRC.Close()
+		if uhead[0] == 0x1f && uhead[1] == 0x8b {
+			t.Errorf("layer %d is DOUBLE-gzipped", i+1)
+		}
+	}
 }
 
 // re-use sha256Hex from pull_test.go (same package). Declaration to

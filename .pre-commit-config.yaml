@@ -16,8 +16,9 @@ repos:
     hooks:
       # Keep flake.nix `vendorHash` in sync with go.mod / go.sum.
       # Fires only when the Go module surface changes; delegates to
-      # `task nix:update-vendor-hash`, which shells out to nix-update
-      # and rewrites flake.nix in place. If the hash actually changed,
+      # `task nix:update-vendor-hash`, which builds .#cell with a fake
+      # hash, extracts the real hash from the mismatch error, and
+      # rewrites flake.nix in place. If the hash actually changed,
       # pre-commit aborts the commit so the user reviews the diff and
       # re-stages flake.nix — that guarantees any tag pointing at the
       # commit has the correct hash baked in.
