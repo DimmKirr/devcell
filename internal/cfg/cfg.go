@@ -5,6 +5,7 @@ import (
 	"os"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -13,6 +14,14 @@ import (
 // DefaultRegistry is the default container registry for devcell images.
 // Must match runner.DefaultRegistry.
 const DefaultRegistry = "ghcr.io/devcell-sh/devcell"
+
+// DefaultNixImage is the pinned nixos/nix image for thin builds.
+// Pinned because nixos/nix symlinks /etc files into /nix/store; upgrading
+// changes the store hash and breaks when a shared volume is mounted over /nix.
+const DefaultNixImage = "nixos/nix:2.34.7"
+
+// DefaultTartOCIImage is the default macOS base image for tart VMs.
+const DefaultTartOCIImage = "ghcr.io/cirruslabs/macos-sequoia-base:latest"
 
 // CellSection holds [cell] config.
 type CellSection struct {
@@ -23,15 +32,91 @@ type CellSection struct {
 	Locale          string   `toml:"locale"`            // POSIX locale (e.g. "en_US.UTF-8"); default: "en_US.UTF-8"
 	Stack           string   `toml:"stack"`             // nix stack name (e.g. "go", "python"); default: "base" (see ResolvedStack)
 	Modules         []string `toml:"modules"`           // extra nix modules to compose on top of stack
-	NixhomePath     string   `toml:"nixhome"`           // local nixhome path; overridden by DEVCELL_NIXHOME_PATH env
+	NixhomePath     string   `toml:"nixhome"`           // deprecated: use [nix] nixhome instead
 	Engine          string   `toml:"engine"`            // execution engine: "docker" (default) or "vagrant"
 	VagrantProvider string   `toml:"vagrant_provider"`  // vagrant provider: "utm" (default) or "libvirt"
 	VagrantBox      string   `toml:"vagrant_box"`       // vagrant box name override (default: "utm/bookworm")
 	DockerPrivileged  bool     `toml:"docker_privileged"`   // run container with --privileged; default: false
+	DockerCapAdd      []string `toml:"docker_cap_add"`      // extra Linux capabilities (e.g. ["SYS_ADMIN"]); default: none
 	PerCellImage   *bool    `toml:"per_cell_image"`   // tag user image per cell instead of per stack; default: false
 	Hostname          string   `toml:"hostname"`            // override container hostname; default: computed "cell-<basename>-<bunk>"; env: DEVCELL_HOSTNAME
 	MacAddress        string   `toml:"mac_address"`         // MAC for the container's NIC (XX:XX:XX:XX:XX:XX); pinned across restarts for infra-side identity persistence. Honored on user-defined bridge networks (devcell uses --network devcell-network). Empty → docker auto-assigns a random MAC per launch.
 	Thin              *bool    `toml:"thin"`                // thin image mode; default: true; disable with thin=false or DEVCELL_THIN=0
+	Background        *bool    `toml:"background"`          // keep VM/container running after shell exit; default: false; env: DEVCELL_BACKGROUND
+	TartSSHPort       int      `toml:"tart_ssh_port"`       // SSH port for tart engine; default: 22; env: DEVCELL_TART_SSH_PORT
+	TartSSHHost       string   `toml:"tart_ssh_host"`       // SSH host for tart engine; default: "localhost"; env: DEVCELL_TART_SSH_HOST
+	TartSSHUser       string   `toml:"tart_ssh_user"`       // SSH user for tart engine; default: "admin"; env: DEVCELL_TART_SSH_USER
+	TartSSHKey        string   `toml:"tart_ssh_key"`        // path to SSH private key for tart; env: DEVCELL_TART_SSH_KEY
+	TartOCIImage      string   `toml:"tart_oci_image"`      // OCI base image for tart VMs; default: DefaultTartOCIImage; env: DEVCELL_TART_OCI_IMAGE
+}
+
+// ResolvedBackground returns the effective background setting: default OFF, enabled by env/toml.
+func (c CellSection) ResolvedBackground() bool {
+	if v := os.Getenv("DEVCELL_BACKGROUND"); v == "1" {
+		return true
+	} else if v == "0" {
+		return false
+	}
+	if c.Background != nil {
+		return *c.Background
+	}
+	return false
+}
+
+// ResolvedTartSSHPort returns the effective SSH port: env > toml > default 22.
+func (c CellSection) ResolvedTartSSHPort() int {
+	if v := os.Getenv("DEVCELL_TART_SSH_PORT"); v != "" {
+		if p := atoiOr(v, 0); p > 0 {
+			return p
+		}
+	}
+	if c.TartSSHPort > 0 {
+		return c.TartSSHPort
+	}
+	return 22
+}
+
+// ResolvedTartSSHHost returns the effective SSH host: env > toml > default "localhost".
+func (c CellSection) ResolvedTartSSHHost() string {
+	if v := os.Getenv("DEVCELL_TART_SSH_HOST"); v != "" {
+		return v
+	}
+	if c.TartSSHHost != "" {
+		return c.TartSSHHost
+	}
+	return "localhost"
+}
+
+// ResolvedTartSSHUser returns the effective SSH user: env > toml > default "admin".
+// Cirrus Labs OCI images ship with user "admin"; our init flow provisions
+// into that account rather than creating a separate user.
+func (c CellSection) ResolvedTartSSHUser() string {
+	if v := os.Getenv("DEVCELL_TART_SSH_USER"); v != "" {
+		return v
+	}
+	if c.TartSSHUser != "" {
+		return c.TartSSHUser
+	}
+	return "admin"
+}
+
+// ResolvedTartSSHKey returns the effective SSH key path: env > toml > "".
+func (c CellSection) ResolvedTartSSHKey() string {
+	if v := os.Getenv("DEVCELL_TART_SSH_KEY"); v != "" {
+		return v
+	}
+	return c.TartSSHKey
+}
+
+// ResolvedTartOCIImage returns the effective tart OCI base image: env > toml > default.
+func (c CellSection) ResolvedTartOCIImage() string {
+	if v := os.Getenv("DEVCELL_TART_OCI_IMAGE"); v != "" {
+		return v
+	}
+	if c.TartOCIImage != "" {
+		return c.TartOCIImage
+	}
+	return DefaultTartOCIImage
 }
 
 // ResolvedThin returns the effective thin setting: default ON, disabled by env/toml.
@@ -304,6 +389,23 @@ func (s StealthSection) ResolvedUserAgent() string {
 	return "Mozilla/5.0 (" + platformUA + ") AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"
 }
 
+// NixSection holds [nix] config for nix image and nixhome settings.
+type NixSection struct {
+	Image       string `toml:"image"`   // nix core image for thin builds; default: DefaultNixImage; env: DEVCELL_NIX_IMAGE
+	NixhomePath string `toml:"nixhome"` // local nixhome path; overridden by DEVCELL_NIXHOME_PATH env
+}
+
+// ResolvedImage returns the effective nix image: env > toml > default.
+func (n NixSection) ResolvedImage() string {
+	if v := os.Getenv("DEVCELL_NIX_IMAGE"); v != "" {
+		return v
+	}
+	if n.Image != "" {
+		return n.Image
+	}
+	return DefaultNixImage
+}
+
 // AwsSection holds [aws] config for AWS credential scoping.
 type AwsSection struct {
 	ReadOnly *bool `toml:"read_only"` // default: true (nil = not set → true)
@@ -320,6 +422,7 @@ func (a AwsSection) ResolvedReadOnly() bool {
 // CellConfig is the merged configuration from all TOML layers.
 type CellConfig struct {
 	Cell     CellSection
+	Nix      NixSection     `toml:"nix"`
 	LLM      LLMSection     `toml:"llm"`
 	Git      GitSection     `toml:"git"`
 	Ports    PortsSection   `toml:"ports"`
@@ -427,6 +530,9 @@ func Merge(global, project CellConfig) CellConfig {
 	if project.Cell.DockerPrivileged {
 		out.Cell.DockerPrivileged = true
 	}
+	if len(project.Cell.DockerCapAdd) > 0 {
+		out.Cell.DockerCapAdd = unionDedupStrings(global.Cell.DockerCapAdd, project.Cell.DockerCapAdd)
+	}
 	if project.Cell.PerCellImage != nil {
 		out.Cell.PerCellImage = project.Cell.PerCellImage
 	}
@@ -435,6 +541,24 @@ func Merge(global, project CellConfig) CellConfig {
 	}
 	if project.Cell.MacAddress != "" {
 		out.Cell.MacAddress = project.Cell.MacAddress
+	}
+	if project.Cell.Background != nil {
+		out.Cell.Background = project.Cell.Background
+	}
+	if project.Cell.TartSSHPort > 0 {
+		out.Cell.TartSSHPort = project.Cell.TartSSHPort
+	}
+	if project.Cell.TartSSHHost != "" {
+		out.Cell.TartSSHHost = project.Cell.TartSSHHost
+	}
+	if project.Cell.TartSSHUser != "" {
+		out.Cell.TartSSHUser = project.Cell.TartSSHUser
+	}
+	if project.Cell.TartSSHKey != "" {
+		out.Cell.TartSSHKey = project.Cell.TartSSHKey
+	}
+	if project.Cell.TartOCIImage != "" {
+		out.Cell.TartOCIImage = project.Cell.TartOCIImage
 	}
 
 	// LLM: project wins for scalars, providers accumulate
@@ -477,6 +601,15 @@ func Merge(global, project CellConfig) CellConfig {
 	}
 	if project.Stealth.Platform != "" {
 		out.Stealth.Platform = project.Stealth.Platform
+	}
+
+	// Nix: project wins when non-empty
+	out.Nix = global.Nix
+	if project.Nix.Image != "" {
+		out.Nix.Image = project.Nix.Image
+	}
+	if project.Nix.NixhomePath != "" {
+		out.Nix.NixhomePath = project.Nix.NixhomePath
 	}
 
 	// Op documents: accumulate from both Documents and legacy Items, deduped.
@@ -538,7 +671,10 @@ func ApplyEnv(c *CellConfig, getenv func(string) string) {
 		c.Cell.ImageTag = tag
 	}
 	if p := getenv("DEVCELL_NIXHOME_PATH"); p != "" {
-		c.Cell.NixhomePath = p
+		c.Nix.NixhomePath = p
+	}
+	if v := getenv("DEVCELL_NIX_IMAGE"); v != "" {
+		c.Nix.Image = v
 	}
 	if v := getenv("DEVCELL_PER_SESSION_IMAGE"); v == "true" || v == "1" {
 		b := true
@@ -547,19 +683,37 @@ func ApplyEnv(c *CellConfig, getenv func(string) string) {
 }
 
 // LoadLayered loads global + project files, merges them, then applies env overrides.
-func LoadLayered(globalPath, projectPath string, getenv func(string) string) CellConfig {
-	global, _ := LoadFile(globalPath)
-	project, _ := LoadFile(projectPath)
+// Returns an error if either file exists but has a parse error (missing files are fine).
+func LoadLayered(globalPath, projectPath string, getenv func(string) string) (CellConfig, error) {
+	global, err := LoadFile(globalPath)
+	if err != nil {
+		return CellConfig{}, fmt.Errorf("parsing %s: %w", globalPath, err)
+	}
+	project, err := LoadFile(projectPath)
+	if err != nil {
+		return CellConfig{}, fmt.Errorf("parsing %s: %w", projectPath, err)
+	}
 	merged := Merge(global, project)
 	ApplyEnv(&merged, getenv)
-	return merged
+	return merged, nil
 }
 
-// LoadFromOS loads the layered config using real XDG paths and os.Getenv.
-func LoadFromOS(configDir, cwd string) CellConfig {
+// LoadFromOSWithDirs loads the layered config using explicit directories and os.Getenv.
+// Returns an error if a config file exists but has a parse error.
+func LoadFromOSWithDirs(configDir, cwd string) (CellConfig, error) {
 	globalPath := configDir + "/devcell.toml"
 	projectPath := cwd + "/.devcell.toml"
 	return LoadLayered(globalPath, projectPath, os.Getenv)
+}
+
+// LoadFromOS loads the layered config using real XDG paths and os.Getenv.
+// Parse errors are logged to stderr and the file is skipped.
+func LoadFromOS(configDir, cwd string) CellConfig {
+	c, err := LoadFromOSWithDirs(configDir, cwd)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: %v — config ignored\n", err)
+	}
+	return c
 }
 
 // Known stack names (must match nixhome/stacks/*.nix without devcell- prefix).
@@ -611,4 +765,12 @@ func ValidateStack(stack string) error {
 	copy(sorted, knownStacks)
 	sort.Strings(sorted)
 	return fmt.Errorf("unknown stack %q; available stacks: %s", stack, strings.Join(sorted, ", "))
+}
+
+func atoiOr(s string, fallback int) int {
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return fallback
+	}
+	return n
 }

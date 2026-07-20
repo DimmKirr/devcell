@@ -64,6 +64,7 @@ tools inside a consistent Docker dev environment.`,
 }
 
 func Execute() {
+	defer ux.CloseDebugLog()
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "\n cell %s\n", version.Full())
 		baseVer, userVer := runner.ImageVersions(context.Background())
@@ -84,10 +85,13 @@ func init() {
 	rootCmd.PersistentFlags().Bool("plain-text", false, "disable spinners, use plain log output (for CI/non-TTY)")
 	rootCmd.PersistentFlags().Bool("debug", false, "plain-text mode plus stream full build log to stdout")
 	rootCmd.PersistentFlags().String("format", "text", "output format: text, yaml, or json")
-	rootCmd.PersistentFlags().String("engine", "docker", "execution engine: docker or vagrant")
+	rootCmd.PersistentFlags().String("engine", "docker", "execution engine: docker, vagrant, or tart")
+	rootCmd.PersistentFlags().Bool("background", false, "keep VM/container running after shell exit")
 	rootCmd.PersistentFlags().Bool("macos", false, "use macOS VM via Vagrant (alias for --engine=vagrant)")
 	rootCmd.PersistentFlags().String("vagrant-provider", "utm", "Vagrant provider (e.g. utm)")
 	rootCmd.PersistentFlags().String("vagrant-box", "", "Vagrant box name override")
+	rootCmd.PersistentFlags().String("tart-ssh-port", "", "SSH port for tart engine (default: 22)")
+	rootCmd.PersistentFlags().String("tart-ssh-host", "", "SSH host for tart engine (default: localhost)")
 	rootCmd.PersistentFlags().String("base-image", "", "core image for scaffold Dockerfile (default: ghcr.io/devcell-sh/devcell:core-local)")
 	rootCmd.PersistentFlags().String("cell-name", "", "cell name for persistent home (~/.devcell/<name>)")
 	rootCmd.AddCommand(
@@ -129,9 +133,23 @@ func applyOutputFlags() {
 	}
 }
 
+// applyOutputFlagsWithLog calls applyOutputFlags and, when --debug is active,
+// opens a persistent log file at <projectDir>/.devcell/debug/<ts>-<cmd>.log.
+// commandName should be the bare subcommand name (e.g. "init", "build").
+func applyOutputFlagsWithLog(commandName string) {
+	applyOutputFlags()
+	if !ux.Verbose {
+		return
+	}
+	if c, err := config.LoadFromOS(); err == nil {
+		ux.InitDebugLog(c.BaseDir, commandName)
+	}
+}
+
 // cellBoolFlags are boolean flags consumed by devcell: strip the flag token only.
 var cellBoolFlags = map[string]bool{
 	"--build":      true,
+	"--background": true,
 	"--dry-run":    true,
 	"--plain-text": true,
 	"--debug":      true,
@@ -153,6 +171,8 @@ var cellStringFlags = map[string]bool{
 	"--engine":           true,
 	"--vagrant-provider": true,
 	"--vagrant-box":      true,
+	"--tart-ssh-port":    true,
+	"--tart-ssh-host":    true,
 	"--base-image":       true,
 	"--cell-name":        true,
 	"--format":           true,
@@ -196,7 +216,7 @@ func stripCellFlags(args []string) []string {
 // (e.g. OPENCODE_CONFIG_CONTENT). Pass nil when not needed.
 func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[string]string) error {
 	userArgs = stripCellFlags(userArgs)
-	applyOutputFlags()
+	applyOutputFlagsWithLog(filepath.Base(binary))
 	c, err := config.LoadFromOS()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
@@ -221,7 +241,7 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 		result, err := RunInitFlow(InitFlowOptions{
 			BaseDir:    c.BaseDir,
 			ConfigDir:  c.ConfigDir,
-			NixhomeSrc: globalCfg.Cell.NixhomePath,
+			NixhomeSrc: globalCfg.Nix.NixhomePath,
 			Yes:        false,
 		})
 		if err != nil {
@@ -265,6 +285,16 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 			c.VNCPort, c.RDPPort,
 			c.HostHome,
 			scanFlag("--dry-run"),
+		)
+	}
+	if engine == "tart" {
+		return runTartAgent(
+			binary, defaultFlags, userArgs,
+			cellCfgForEngine,
+			c.BaseDir, c.HostHome, c.CellName,
+			scanFlag("--dry-run"),
+			scanFlag("--background"),
+			scanFlag("--debug"),
 		)
 	}
 
@@ -831,7 +861,7 @@ func pullWithSpinner(
 // Only the impure (Dockerfile) build path needs this — runBuildPure resolves
 // and consumes nixhome internally via runner.ResolvePureNixhomeRef.
 func syncNixhomeWithConfirmation(c config.Config, cellCfg cfg.CellConfig) error {
-	nixhomePath := cellCfg.Cell.NixhomePath
+	nixhomePath := cellCfg.Nix.NixhomePath
 	if nixhomePath == "" {
 		return nil
 	}
