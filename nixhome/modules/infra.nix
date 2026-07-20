@@ -137,7 +137,7 @@
       url = "https://github.com/porter-dev/releases/releases/download/v${porterVersion}/porter_${porterVersion}_linux_arm64";
       hash = "sha256-MzylRrLZZBu8M3dA7DJ44QdP4Pj1KVCuRW3+dKHy/Xw=";
     };
-  }.${pkgs.stdenv.hostPlatform.system} or (throw "porter: unsupported system ${pkgs.stdenv.hostPlatform.system}");
+  }.${pkgs.stdenv.hostPlatform.system} or null;
 
   porterCli = pkgs.stdenvNoCC.mkDerivation {
     pname = "porter";
@@ -217,11 +217,13 @@ in {
       terraform-plugin-docs  # generates/validates Terraform provider docs (use: tfplugindocs)
       kubernetes-helm  # Kubernetes package manager (use: helm)
       kubectl  # Kubernetes CLI (use: kubectl) — pair with a read-only kubeconfig (see `cell auth kube`)
-      porterCli  # Porter Dev CLI — Kubernetes PaaS (use: porter)
       opentofuMcp  # OpenTofu Registry MCP server (use: opentofu-mcp-server)
       awsApiMcpServer  # AWS API MCP server via uvx (use: aws-api-mcp-server)
       cloudwatchMcpServer  # CloudWatch MCP server via uvx (use: cloudwatch-mcp-server)
       notionMcpServer  # Notion API MCP server via npx (use: notion-mcp-server)
+    ]
+    ++ lib.optionals pkgs.stdenv.isLinux [
+      porterCli  # Porter Dev CLI — Linux-only static binary (use: porter)
     ];
 
     # AWS API MCP — wraps all 200+ AWS services. Uses standard AWS credential chain.

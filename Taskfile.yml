@@ -107,16 +107,20 @@ tasks:
     cmds:
       - |
         FLAKE="{{.TASKFILE_DIR}}/flake.nix"
-        replace_hash() { tmp=$(mktemp); sed "s|vendorHash = \"sha256-[^\"]*\"|vendorHash = \"$1\"|" "$FLAKE" > "$tmp" && mv "$tmp" "$FLAKE"; }
+        replace_hash() { local tmp=$(mktemp); sed "s|vendorHash = \"sha256-[^\"]*\"|vendorHash = \"$1\"|" "$FLAKE" > "$tmp" && cat "$tmp" > "$FLAKE" && rm -f "$tmp"; }
         OLD_HASH=$(grep 'vendorHash = "sha256-' "$FLAKE" | sed 's/.*"\(sha256-[^"]*\)".*/\1/')
+        BACKUP=$(mktemp)
+        cp "$FLAKE" "$BACKUP"
         replace_hash "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
         echo "Building .#cell to compute vendorHash (this may take a minute)..."
         NEW_HASH=$(nix build .#cell 2>&1 | grep 'got:' | awk '{print $2}')
         if [ -z "$NEW_HASH" ]; then
-          replace_hash "$OLD_HASH"
+          cp "$BACKUP" "$FLAKE"
+          rm -f "$BACKUP"
           echo "nix build succeeded — vendorHash is already correct"
           exit 0
         fi
+        rm -f "$BACKUP"
         replace_hash "$NEW_HASH"
         if [ "$OLD_HASH" != "$NEW_HASH" ]; then
           echo "vendorHash updated: $OLD_HASH → $NEW_HASH"

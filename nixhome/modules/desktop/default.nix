@@ -40,7 +40,7 @@ in
     };
   };
 
-  config = lib.mkIf modCfg.enable {
+  config = lib.mkIf (modCfg.enable && pkgs.stdenv.isLinux) {
   # LD_LIBRARY_PATH for non-nix binaries (Chromium, Electron, downloaded tools).
   # NIX_LD_LIBRARY_PATH points at /opt/devcell/.nix-ld-libs — a merged directory
   # with symlinks to every .so* from the profile closure (glibc excluded).

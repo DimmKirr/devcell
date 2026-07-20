@@ -70,12 +70,14 @@ in {
 
   config = lib.mkIf cfg.enable {
     home.packages = with pkgs; [
-      drawio-headless  # Draw.io headless CLI for .drawio → PNG/SVG/PDF export (use: drawio)
-      gimp             # GNU Image Manipulation Program 3.2 (use: gimp)
-      gimp-mcp         # GIMP MCP server — 56 AI-driven image editing commands
       inkscape         # vector graphics editor (use: inkscape)
       inkscape-mcp     # Inkscape MCP server for Claude
       potrace          # bitmap → SVG tracer; ships mkbitmap preprocessor (use: potrace, mkbitmap)
+    ]
+    ++ lib.optionals pkgs.stdenv.isLinux [
+      gimp             # GNU Image Manipulation Program 3.2 — GTK/X11, Linux only (use: gimp)
+      gimp-mcp         # GIMP MCP server — requires gimp, Linux only
+      drawio-headless  # Draw.io headless CLI — Electron, Linux only (use: drawio)
     ];
 
     devcell.managedMcp.servers."inkscape-mcp" = {
@@ -88,7 +90,7 @@ in {
     };
 
     devcell.managedMcp.servers."gimp-mcp" = {
-      command = "${bin}/gimp-mcp";
+      command = "${bin}/gimp-mcp-server";
       args = [];
       env = {};
     };

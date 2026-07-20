@@ -86,3 +86,50 @@ func TestGraphicsNix_InkscapeWorkspaceOverridden(t *testing.T) {
 		t.Fatal("INKS_WORKSPACE must not be set to the upstream default `inkspace` — it's a cwd-relative scratch dir that would litter every project root")
 	}
 }
+
+func TestCodexNix_StagesManagedServerRegistry(t *testing.T) {
+	codex := readNixhomeFile(t, "modules/llm/codex.nix")
+	fragment := readNixhomeFile(t, "modules/fragments/30-codex.sh")
+
+	if !strings.Contains(codex, "devcellManagedServers = builtins.attrNames mcpCfg.servers") {
+		t.Fatal("codex.nix must stage all managed server names, including HTTP-only entries, so Codex startup can remove stale generated MCP config")
+	}
+	if !strings.Contains(fragment, "managed_names = set(nix.get('devcellManagedServers', []))") {
+		t.Fatal("30-codex.sh must consume devcellManagedServers when cleaning stale generated MCP entries")
+	}
+	if !strings.Contains(fragment, "resolve_env_value") || !strings.Contains(fragment, "codex_ready_servers") {
+		t.Fatal("30-codex.sh must resolve ${VAR} env placeholders and skip Codex MCP servers with missing required env")
+	}
+}
+
+func TestCredentialMcpServersDeclareRequiredEnv(t *testing.T) {
+	checks := map[string][]string{
+		"modules/project-management.nix": {
+			`HUBSTAFF_REFRESH_TOKEN = "\${HUBSTAFF_REFRESH_TOKEN}"`,
+			`N8N_API_URL = "\${N8N_API_URL}"`,
+			`N8N_API_KEY = "\${N8N_API_KEY}"`,
+		},
+		"modules/travel.nix": {
+			`GOOGLE_MAPS_API_KEY = "\${GOOGLE_MAPS_API_KEY}"`,
+			`TRIPIT_USERNAME = "\${TRIPIT_USERNAME}"`,
+			`TRIPIT_PASSWORD = "\${TRIPIT_PASSWORD}"`,
+			`TRIPIT_CLIENT_ID = "\${TRIPIT_CLIENT_ID}"`,
+			`TRIPIT_CLIENT_SECRET = "\${TRIPIT_CLIENT_SECRET}"`,
+		},
+		"modules/qa-tools.nix": {
+			`MAILSLURP_API_KEY = "\${MAILSLURP_API_KEY}"`,
+		},
+		"modules/infra.nix": {
+			`NOTION_TOKEN = "\${NOTION_API_KEY}"`,
+		},
+	}
+
+	for relPath, wantSnippets := range checks {
+		content := readNixhomeFile(t, relPath)
+		for _, want := range wantSnippets {
+			if !strings.Contains(content, want) {
+				t.Fatalf("nixhome/%s is missing required credential env declaration %q", relPath, want)
+			}
+		}
+	}
+}

@@ -37,7 +37,7 @@
     mcp = lib.mapAttrs toOpenCodeServer stdioServers;
   };
 
-  hasServers = mcpCfg.servers != {};
+  hasServers = stdioServers != {};
 in {
   options.devcell.managedOpencode = {
     providers = lib.mkOption {

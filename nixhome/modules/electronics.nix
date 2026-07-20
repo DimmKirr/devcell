@@ -9,19 +9,23 @@
   cfg = config.devcell.modules.electronics;
   bin = config.devcell.managedMcp.nixBinPrefix;
   # wokwi-cli: hardware simulator CLI — not in nixpkgs; use pre-built static binary.
-  # SHA256 hashes verified from: https://github.com/wokwi/wokwi-cli/releases/tag/v0.26.0
+  # SHA256 hashes verified from: https://github.com/wokwi/wokwi-cli/releases/tag/v0.26.1
   wokwi-cli = let
-    version = "0.26.0";
+    version = "0.26.1";
     sys = pkgs.stdenv.hostPlatform.system;
     asset =
       {
         x86_64-linux = {
           url = "https://github.com/wokwi/wokwi-cli/releases/download/v${version}/wokwi-cli-linuxstatic-x64";
-          hash = "sha256-uRBti3m40GrblnP0eylEQfkzGV1l4LllqtVhTvr6WHY=";
+          hash = "sha256-ctloFQurr3UyxHq3dB64WpWmw+PP75H/vP22d/046BE=";
         };
         aarch64-linux = {
           url = "https://github.com/wokwi/wokwi-cli/releases/download/v${version}/wokwi-cli-linuxstatic-arm64";
-          hash = "sha256-dW7ZiIRyrqiXKv9IOG70z1FOK9Fo9i8D5y7+BWCZ2U4=";
+          hash = "sha256-IF3Az2y5T6xr8/Sxf+nxewwDMk3dAthmwEDKElkBsec=";
+        };
+        aarch64-darwin = {
+          url = "https://github.com/wokwi/wokwi-cli/releases/download/v${version}/wokwi-cli-macos-arm64";
+          hash = "sha256-+WUSLcj7o9W/aLdu0BQ8e0zmCRAsLwgkPBEZibJAm8s=";
         };
       }.${
         sys
@@ -75,16 +79,16 @@ in {
   config = lib.mkIf cfg.enable {
     home.packages = with pkgs;
       [
-        kicad-small # KiCad EDA without 3D models (saves ~6 GB)
         ngspice # SPICE simulation (libngspice0 + ngspice CLI)
-        libspnav # 3D mouse / space navigator support
-        esphome # ESP32 framework for home automation
         platformio # embedded development platform (Arduino, ESP32, etc.)
-        wokwi-cli # Wokwi hardware simulator CLI (v0.26.0 static binary)
         kicadMcp # KiCad MCP server for Claude
+        wokwi-cli # Wokwi hardware simulator CLI (Linux + macOS ARM)
+        poppler-utils # PDF tools (pdfinfo, pdfimages, etc.)
       ]
-      ++ [
-        pkgs."poppler-utils" # PDF tools (pdfinfo, pdfimages, etc.)
+      ++ lib.optionals pkgs.stdenv.isLinux [
+        esphome # ESP32 framework — bleak (BLE) dep is Linux-only in nixpkgs
+        kicad-small # KiCad EDA — OpenGL/mesa, Linux only
+        libspnav # 3D mouse / space navigator — Linux input subsystem
       ];
 
     devcell.managedMcp.servers."kicad-mcp" = {

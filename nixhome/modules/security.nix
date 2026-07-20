@@ -111,13 +111,10 @@ in {
     binwalk                     # firmware/binary analyzer + carving (use: binwalk -e file.exe)
     yara                        # pattern matching for malware/PE ID (use: yara rules.yar file.exe)
     upx                         # executable packer/unpacker (use: upx -d file.exe)
-    pev                         # PE-specific toolkit: pestr/pesec/pedis/pescan (use: readpe file.exe)
-    detect-it-easy              # PE compiler/packer/protector ID (use: diec file.exe)
     capstone                    # multi-arch disassembly engine (lib + cstool: cstool x86 …)
     python312Packages.ropper    # ROP gadget finder for exploit dev (use: ropper -f file.exe)
 
     # forensics & file carving
-    foremost                    # file carving by header/footer signatures (use: foremost -i image.dd -o out/)
     sleuthkit                   # disk image / filesystem forensics suite (use: fls, icat, mmls, fsstat)
 
     # parameter discovery
@@ -133,6 +130,11 @@ in {
     # MCP security audit server — disabled, source build broken upstream
     # hexstrikeMcp      # hexstrike-ai MCP wrapper (use: hexstrike-mcp)
     # hexstrikeServer   # hexstrike-ai Flask server (use: hexstrike-server)
+  ]
+  ++ lib.optionals pkgs.stdenv.isLinux [
+    pev                         # PE-specific toolkit — Linux only (use: readpe file.exe)
+    detect-it-easy              # PE compiler/packer/protector ID — Qt/Linux only (use: diec file.exe)
+    foremost                    # file carving — Linux only (use: foremost -i image.dd -o out/)
   ];
 
   # ── Wordlist symlinks for hexstrike/ffuf/gobuster ────────────────────────
@@ -140,7 +142,7 @@ in {
   #   nix profile install nixpkgs#seclists
   # Then re-run this activation to create symlinks:
   #   home-manager switch --flake /opt/nixhome#devcell-ultimate
-  home.activation.wordlistSymlinks = lib.hm.dag.entryAfter ["writeBoundary"] ''
+  home.activation.wordlistSymlinks = lib.mkIf pkgs.stdenv.isLinux (lib.hm.dag.entryAfter ["writeBoundary"] ''
     export PATH="/usr/bin:/bin:$PATH"
     # nixos/nix:latest has /usr/share as a symlink into the nix store
     if [ -L /usr/share ]; then
@@ -152,7 +154,7 @@ in {
     if [ -d "${pkgs.dirb}/share/dirb/wordlists" ]; then
       $DRY_RUN_CMD sudo ln -sfT ${pkgs.dirb}/share/dirb/wordlists /usr/share/wordlists/dirb
     fi
-  '';
+  '');
 
   # HexStrike AI — 150+ security audit tools via MCP.
   # Two-process: Flask API + MCP stdio client, started together by the wrapper.

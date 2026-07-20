@@ -2,6 +2,8 @@
 {pkgs, config, lib, ...}: let
   cfg = config.devcell.modules.python;
 in {
+  imports = [./mise.nix];
+
   options.devcell.modules.python = {
     enable = lib.mkEnableOption "Python 3.13 (mise-managed) + uv package manager";
     meta = lib.mkOption {

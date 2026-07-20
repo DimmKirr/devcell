@@ -85,19 +85,6 @@
       # `home-manager switch` time, and the values resolve through nix-ld
       # at runtime. No /nix/store hashes hardcoded into the Dockerfile.
       #
-      # .nix-ld-loader → real nix glibc loader (what nix-ld defers to)
-      # .nix-ld-shim   → nix-ld bridge binary (what /lib/ld-linux-* points to)
-      ".nix-ld-loader" = {
-        source = "${pkgs.glibc}/lib/${
-          if pkgs.stdenv.hostPlatform.isAarch64
-          then "ld-linux-aarch64.so.1"
-          else "ld-linux-x86-64.so.2"
-        }";
-      };
-      ".nix-ld-shim" = {
-        source = "${pkgs.nix-ld}/libexec/nix-ld";
-      };
-
       # Bake the flake source that built this image. Store-pinned snapshot —
       # the exact tree home-manager evaluated, not the host's working copy.
       # Enables offline `nix eval /opt/devcell/nixhome#...` for inventory,
@@ -140,6 +127,17 @@
       };
     }
     // lib.optionalAttrs pkgs.stdenv.isLinux {
+      # nix-ld stable symlinks (Linux-only — glibc + nix-ld don't exist on darwin)
+      ".nix-ld-loader" = {
+        source = "${pkgs.glibc}/lib/${
+          if pkgs.stdenv.hostPlatform.isAarch64
+          then "ld-linux-aarch64.so.1"
+          else "ld-linux-x86-64.so.2"
+        }";
+      };
+      ".nix-ld-shim" = {
+        source = "${pkgs.nix-ld}/libexec/nix-ld";
+      };
       # Locale — must run before any other fragment so bash doesn't warn.
       ".config/devcell/entrypoint.d/01-locale.sh" = {
         executable = true;
@@ -161,15 +159,6 @@
     gawk # GNU awk (use: awk)
     gnused # GNU sed (use: sed)
     gnugrep # GNU grep (use: grep) — needed on nix-only images where /usr/bin/grep is absent
-    # nix-ld — dynamic linker shim for non-nix binaries (mise-downloaded node/go,
-    # pip wheels, downloaded gpg keychains). Resolves the standard
-    # `/lib/ld-linux-<arch>.so.<n>` interpreter path that precompiled tarballs
-    # hardcode; defers to the real nix glibc loader (via NIX_LD env) and
-    # consults NIX_LD_LIBRARY_PATH (NOT LD_LIBRARY_PATH) for shared libs.
-    # The separate var keeps nix-built tools on their RPATH chains untouched —
-    # fixes the `gpg: GLIBC_2.42 not found (libgpg-error-1.59)` collision that
-    # the legacy `06-nix-ldpath.sh` export was creating on impure cells.
-    nix-ld
     dnsutils # DNS tools (use: dig, nslookup, host)
     dasel # JSON/TOML/YAML/XML processor with TOML output support
     ffmpeg # media processing
@@ -184,7 +173,6 @@
     ripgrep # fast grep
     sqlite # SQLite CLI (use: sqlite3)
     expect # provides unbuffer — forces PTY for commands that need a TTY
-    tini # minimal init for containers
     tmux # terminal multiplexer
     tmuxp # tmux session manager
     tree # directory listing
@@ -197,16 +185,11 @@
     wget # HTTP downloader
     rsync # fast file sync (used by entrypoint fragment staging)
     yq-go # TOML/YAML/JSON processor
-    # cell — the devcell CLI itself, baked into every image so it can
-    # run from inside the container (e.g. CI's publish step doing
-    # `cell nix-store push` against the populated /nix volume without
-    # the host's runner needing the binary). Shipped via Dockerfile
-    # COPY of the goreleaser-built binary at thin-image build time —
-    # see internal/runner/thin_build.go. NOT a nix derivation: prior
-    # attempt at `devcell.url = "path:.."` created an unrecoverable
-    # circular flake import in the overlay-based thin build flow.
   ] ++ lib.optionals pkgs.stdenv.isLinux [
     glibcLocales # en_US.UTF-8 locale for browser fingerprinting + text handling
     bubblewrap   # unprivileged sandboxing tool used by Linux-only tooling
+    nix-ld       # dynamic linker shim for non-nix binaries (glibc-based, Linux-only)
+    fuse3        # FUSE userspace filesystem support (provides fusermount3)
+    tini         # minimal init for containers (Linux-only)
   ];
 }
