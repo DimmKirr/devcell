@@ -28,21 +28,13 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 )
 
-// Pull resolves srcRef, downloads the LAST layer of the image, and
-// extracts the gzipped tarball into dstDir. Archive entries are written
-// relative to dstDir, with stripComponents leading path elements
-// stripped per `tar --strip-components=N` semantics (e.g. with
-// stripComponents=1, archive entry `nix/store/abc/file` becomes
-// `dstDir/store/abc/file`). Symlinks and file modes are preserved.
-//
-// We only extract the topmost layer because the production workflow
-// builds cache images as `<busybox-base> + <single nix-store tar layer>`
-// — extracting earlier layers would pollute dstDir with the base
-// image's filesystem.
-//
-// The decompression stream is consumed lazily as tar entries are read,
-// so peak memory stays near the gzip window size (~32 KB) regardless
-// of layer size.
+// Pull resolves srcRef, downloads all non-base layers of the image,
+// and extracts each gzipped tarball into dstDir. For multi-layer
+// (chunked) images, layers[1:] are extracted in order; for single-layer
+// images, layers[0] is extracted (backward compat with legacy cache
+// images). Archive entries are written relative to dstDir, with
+// stripComponents leading path elements stripped per `tar
+// --strip-components=N` semantics. Symlinks and file modes are preserved.
 func Pull(ctx context.Context, srcRef, dstDir string, stripComponents int) error {
 	ref, err := name.ParseReference(srcRef)
 	if err != nil {
@@ -65,32 +57,33 @@ func Pull(ctx context.Context, srcRef, dstDir string, stripComponents int) error
 		return fmt.Errorf("image %q has no layers", srcRef)
 	}
 
-	last := layers[len(layers)-1]
-	rc, err := last.Uncompressed()
-	if err != nil {
-		return fmt.Errorf("open layer stream: %w", err)
+	start := 0
+	if len(layers) > 1 {
+		start = 1
 	}
-	defer rc.Close()
-
-	if err := extractTar(rc, dstDir, stripComponents); err != nil {
-		return fmt.Errorf("extract layer into %q: %w", dstDir, err)
+	for i, l := range layers[start:] {
+		rc, err := l.Uncompressed()
+		if err != nil {
+			return fmt.Errorf("open layer %d stream: %w", start+i, err)
+		}
+		if err := extractTar(rc, dstDir, stripComponents); err != nil {
+			rc.Close()
+			return fmt.Errorf("extract layer %d into %q: %w", start+i, dstDir, err)
+		}
+		rc.Close()
 	}
 	return nil
 }
 
-// PullToDockerVolume streams the LAST layer of srcRef into the named
-// Docker volume by spawning `docker run -i alpine sh -c 'cd /dest &&
-// tar -x --strip-components=N'` and feeding the (gunzipped) tar stream
-// over stdin. Use this when the destination is a Docker volume that
-// the current process can't directly mount (the standard workflow
-// case — the volume is owned by the host docker daemon).
+// PullToDockerVolume streams all non-base layers of srcRef into the
+// named Docker volume by spawning `docker run -i alpine sh -c 'cd
+// /dest && tar -x --strip-components=N'` for each layer and feeding
+// the (gunzipped) tar stream over stdin. For multi-layer (chunked)
+// images, layers[1:] are extracted in order; for single-layer images,
+// layers[0] is extracted (backward compat).
 //
 // stripComponents has the same meaning as Pull: leading path elements
 // to strip from each archive entry.
-//
-// We pull alpine implicitly via docker run; this matches the existing
-// workflow's approach and keeps the call site identical to what the
-// CI publish step does today.
 func PullToDockerVolume(ctx context.Context, srcRef, volName string, stripComponents int) error {
 	ref, err := name.ParseReference(srcRef)
 	if err != nil {
@@ -110,26 +103,34 @@ func PullToDockerVolume(ctx context.Context, srcRef, volName string, stripCompon
 	if len(layers) == 0 {
 		return fmt.Errorf("image %q has no layers", srcRef)
 	}
-	last := layers[len(layers)-1]
-	rc, err := last.Uncompressed()
-	if err != nil {
-		return fmt.Errorf("open layer stream: %w", err)
+
+	start := 0
+	if len(layers) > 1 {
+		start = 1
 	}
-	defer rc.Close()
 
 	tarFlag := ""
 	if stripComponents > 0 {
 		tarFlag = fmt.Sprintf(" --strip-components=%d", stripComponents)
 	}
-	cmd := osexec.CommandContext(ctx, "docker", "run", "--rm", "-i",
-		"-v", volName+":/dest",
-		"public.ecr.aws/docker/library/alpine:latest",
-		"sh", "-c", "cd /dest && tar -x"+tarFlag)
-	cmd.Stdin = rc
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("docker tar -x into %q: %w", volName, err)
+
+	for i, l := range layers[start:] {
+		rc, err := l.Uncompressed()
+		if err != nil {
+			return fmt.Errorf("open layer %d stream: %w", start+i, err)
+		}
+		cmd := osexec.CommandContext(ctx, "docker", "run", "--rm", "-i",
+			"-v", volName+":/dest",
+			"public.ecr.aws/docker/library/alpine:latest",
+			"sh", "-c", "cd /dest && tar -x"+tarFlag)
+		cmd.Stdin = rc
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			rc.Close()
+			return fmt.Errorf("docker tar -x layer %d into %q: %w", start+i, volName, err)
+		}
+		rc.Close()
 	}
 	return nil
 }

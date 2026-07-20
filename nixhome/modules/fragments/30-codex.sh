@@ -63,7 +63,7 @@ def toml_val(v):
 
 def write_toml(data, out):
     # Scalars first (skip internal keys and tables)
-    skip = {'mcp_servers', 'backupBeforeMerge'}
+    skip = {'mcp_servers', 'backupBeforeMerge', 'devcellManagedServers'}
     for k, v in data.items():
         if k not in skip and not isinstance(v, dict):
             out.write(f'{k} = {toml_val(v)}\n')
@@ -97,15 +97,63 @@ except FileNotFoundError:
     existing = {}
 
 merged = dict(existing)
-# Remove stale nix-managed servers (command starts with /opt/devcell/) before adding current stack
+def is_devcell_managed(srv):
+    if not isinstance(srv, dict):
+        return False
+    cmd = srv.get('command')
+    return (
+        isinstance(cmd, str) and cmd.startswith('/opt/devcell/')
+    )
+
+def resolve_env_value(value):
+    if not isinstance(value, str):
+        return value, True
+    if value.startswith('${') and value.endswith('}') and len(value) > 3:
+        name = value[2:-1]
+        resolved = os.environ.get(name)
+        return resolved, bool(resolved)
+    return value, True
+
+def codex_ready_servers(servers):
+    ready = {}
+    skipped = []
+    for name, srv in servers.items():
+        if not isinstance(srv, dict):
+            ready[name] = srv
+            continue
+        srv = dict(srv)
+        env = srv.get('env')
+        if isinstance(env, dict):
+            resolved_env = {}
+            missing = []
+            for key, value in env.items():
+                resolved, ok = resolve_env_value(value)
+                if not ok:
+                    missing.append(key)
+                else:
+                    resolved_env[key] = resolved
+            if missing:
+                skipped.append((name, missing))
+                continue
+            srv['env'] = resolved_env
+        ready[name] = srv
+    return ready, skipped
+
+# Remove stale nix-managed servers before adding current stack. The marker handles
+# generated entries whose command cannot identify the owning stack; the /opt/devcell
+# prefix handles older configs.
+managed_names = set(nix.get('devcellManagedServers', []))
 cleaned = {k: v for k, v in existing.get('mcp_servers', {}).items()
-           if not isinstance(v, dict) or not v.get('command', '').startswith('/opt/devcell/')}
-merged['mcp_servers'] = {**cleaned, **nix.get('mcp_servers', {})}
+           if k not in managed_names and not is_devcell_managed(v)}
+nix_servers, skipped = codex_ready_servers(nix.get('mcp_servers', {}))
+merged['mcp_servers'] = {**cleaned, **nix_servers}
 
 with open(temp_path, 'w') as f:
     write_toml(merged, f)
 
 print(f"merged {len(merged.get('mcp_servers', {}))} server(s)", file=sys.stderr)
+for name, missing in skipped:
+    print(f"skipped {name}: missing {', '.join(missing)}", file=sys.stderr)
 PYEOF
 
     if [ $? -eq 0 ] && [ -s "$temp_file" ] && python3 -c "import tomllib; tomllib.load(open('$temp_file','rb'))" 2>/dev/null; then

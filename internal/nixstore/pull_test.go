@@ -236,6 +236,100 @@ func sha256Hex(b []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// TestPull_MultiLayer verifies Pull extracts ALL non-base layers (not just
+// the last one). This is the pull-side contract for CELL-297's chunked push:
+// an image has 1 base layer + N data layers, and Pull must extract all N.
+func TestPull_MultiLayer(t *testing.T) {
+	srv := newRegistry(t)
+	defer srv.Close()
+
+	regHost := mustHost(t, srv.URL)
+	imgRef := regHost + "/nix-store:multi-data"
+
+	baseFixture := map[string][]byte{"base/marker": []byte("BASE")}
+	dataLayer1 := map[string][]byte{
+		"nix/store/aaa/bin/tool1": []byte("tool1-content"),
+	}
+	dataLayer2 := map[string][]byte{
+		"nix/store/bbb/bin/tool2": []byte("tool2-content"),
+	}
+
+	mustPushImageWithLayers(t, imgRef,
+		mustBuildTarGz(t, baseFixture),
+		mustBuildTarGz(t, dataLayer1),
+		mustBuildTarGz(t, dataLayer2),
+	)
+
+	dstDir := t.TempDir()
+	if err := nixstore.Pull(context.Background(), imgRef, dstDir, 0); err != nil {
+		t.Fatalf("Pull failed: %v", err)
+	}
+
+	// Both data layers' files must be extracted.
+	for _, tc := range []struct{ path, want string }{
+		{"nix/store/aaa/bin/tool1", "tool1-content"},
+		{"nix/store/bbb/bin/tool2", "tool2-content"},
+	} {
+		got, err := os.ReadFile(filepath.Join(dstDir, tc.path))
+		if err != nil {
+			t.Errorf("expected %s extracted; got: %v", tc.path, err)
+			continue
+		}
+		if string(got) != tc.want {
+			t.Errorf("%s = %q, want %q", tc.path, got, tc.want)
+		}
+	}
+
+	// Base layer content must NOT be extracted.
+	if _, err := os.Stat(filepath.Join(dstDir, "base/marker")); !os.IsNotExist(err) {
+		t.Errorf("base layer content should not be extracted; stat err = %v", err)
+	}
+}
+
+// TestPull_SingleLayer_BackwardCompat verifies old-style images (base + 1
+// data layer) still pull correctly after the multi-layer extraction change.
+func TestPull_SingleLayer_BackwardCompat(t *testing.T) {
+	srv := newRegistry(t)
+	defer srv.Close()
+
+	regHost := mustHost(t, srv.URL)
+	imgRef := regHost + "/nix-store:compat"
+
+	baseFixture := map[string][]byte{"base/marker": []byte("BASE")}
+	dataFixture := map[string][]byte{
+		"nix/store/aaa/bin/tool": []byte("tool-content"),
+		"nix/var/log/build.log":  []byte("log-content"),
+	}
+
+	mustPushImageWithLayers(t, imgRef,
+		mustBuildTarGz(t, baseFixture),
+		mustBuildTarGz(t, dataFixture),
+	)
+
+	dstDir := t.TempDir()
+	if err := nixstore.Pull(context.Background(), imgRef, dstDir, 0); err != nil {
+		t.Fatalf("Pull failed: %v", err)
+	}
+
+	for _, tc := range []struct{ path, want string }{
+		{"nix/store/aaa/bin/tool", "tool-content"},
+		{"nix/var/log/build.log", "log-content"},
+	} {
+		got, err := os.ReadFile(filepath.Join(dstDir, tc.path))
+		if err != nil {
+			t.Errorf("expected %s extracted; got: %v", tc.path, err)
+			continue
+		}
+		if string(got) != tc.want {
+			t.Errorf("%s = %q, want %q", tc.path, got, tc.want)
+		}
+	}
+
+	if _, err := os.Stat(filepath.Join(dstDir, "base/marker")); !os.IsNotExist(err) {
+		t.Errorf("base layer content should not be extracted; stat err = %v", err)
+	}
+}
+
 // Silence unused-import lints — these are kept for symmetry with future
 // tests on push side.
 var _ = crane.Pull

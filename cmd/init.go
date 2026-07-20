@@ -25,12 +25,32 @@ func init() {
 	initCmd.Flags().String("nixhome", "", "nixhome source: local path or git URL (default: upstream repo)")
 	initCmd.Flags().String("local-nixhome", "", "deprecated: use --nixhome instead")
 	_ = initCmd.Flags().MarkHidden("local-nixhome")
+	initCmd.Flags().Bool("no-cache", false, "Force re-download of cached IPSW restore image (tart only)")
 	initCmd.Flags().String("stack", "", "stack name (base, dev [seed, ~3 GB], ultimate [~15 GB]; legacy: go, node, python, fullstack, electronics)")
 	initCmd.Flags().StringSlice("modules", nil, "explicit module list (comma-separated, e.g. go,infra,electronics)")
 }
 
 func runInit(cmd *cobra.Command, _ []string) error {
-	applyOutputFlags()
+	applyOutputFlagsWithLog("init")
+
+	engine := scanStringFlag("--engine")
+	if engine == "tart" {
+		c, err := config.LoadFromOS()
+		if err != nil {
+			return fmt.Errorf("load config: %w", err)
+		}
+		stack, _ := cmd.Flags().GetString("stack")
+		force, _ := cmd.Flags().GetBool("force")
+		noCache, _ := cmd.Flags().GetBool("no-cache")
+		nixhomePath := c.BaseDir + "/nixhome"
+		if nh, _ := cmd.Flags().GetString("nixhome"); nh != "" {
+			nixhomePath = nh
+		} else if nh := os.Getenv("DEVCELL_NIXHOME_PATH"); nh != "" {
+			nixhomePath = nh
+		}
+		return runInitTart(c.CellName, c.HostHome, c.BaseDir, stack, nixhomePath, force, noCache)
+	}
+
 	macos, _ := cmd.Flags().GetBool("macos")
 	if macos {
 		return runInitMacOS()
@@ -77,7 +97,7 @@ func runInit(cmd *cobra.Command, _ []string) error {
 	}
 	if nixhomeSrc == "" {
 		globalCfg, _ := cfg.LoadFile(c.ConfigDir + "/devcell.toml")
-		nixhomeSrc = globalCfg.Cell.NixhomePath
+		nixhomeSrc = globalCfg.Nix.NixhomePath
 		if nixhomeSrc != "" {
 			nixhomeSrcOrigin = "global config (" + c.ConfigDir + "/devcell.toml)"
 		}

@@ -4,11 +4,14 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"runtime"
 	"strings"
 )
 
-// NixCoreImage is the base image for thin builds. All-nix, no Debian.
-const NixCoreImage = "nixos/nix:latest"
+// NixCoreImage is the default nix base image for thin builds.
+// Prefer cfg.DefaultNixImage for the canonical constant; this alias exists
+// for call sites inside runner that don't take a config parameter.
+const NixCoreImage = "nixos/nix:2.34.7"
 
 var devcellDirRe = regexp.MustCompile(`^/devcell-\d+`)
 
@@ -47,42 +50,49 @@ func ThinBuildArgv(coreImage, containerName, volumeName, nixhomeRef, thinTag, st
 	// target as `stackName`, which conflated it with the user-facing stack
 	// name. New callers should use ThinBuildArgvFull and thread `stack` +
 	// `modules` separately.
-	return ThinBuildArgvFull(coreImage, containerName, volumeName, nixhomeRef, thinTag, stackName, arch, "", "", "")
+	return ThinBuildArgvFull(coreImage, containerName, volumeName, nixhomeRef, thinTag, stackName, arch, "", "", "unknown")
 }
 
 // ThinBuildArgvFull is the canonical builder argv. hmTarget is the
 // home-manager flake target name (typically "local" for thin); stack is the
 // user-facing stack name written to DEVCELL_STACK/metadata.json; modules is a
-// CSV of module names written to DEVCELL_MODULES (CELL-41).
-//
-// cellBinaryPath (CELL-293): when non-empty, the host filesystem path of the
-// goreleaser-built `cell` binary. The runner bind-mounts it read-only into
-// the thin-builder, stages it into the inner docker build context, and the
-// generated Dockerfile COPYs it into /opt/devcell/.local/bin/cell so every
-// produced devcell image ships the CLI without a separate distribution step.
-func ThinBuildArgvFull(coreImage, containerName, volumeName, nixhomeRef, thinTag, hmTarget, arch, stack, modules, cellBinaryPath string) []string {
+// CSV of module names written to DEVCELL_MODULES (CELL-41); projectName is
+// the project directory basename used to scope GC roots so different projects
+// don't overwrite each other's nix store references (CELL-320).
+func ThinBuildArgvFull(coreImage, containerName, volumeName, nixhomeRef, thinTag, hmTarget, arch, stack, modules, projectName string) []string {
 	archSuffix := ""
 	if arch == "aarch64" {
 		archSuffix = "-aarch64"
 	}
+	platform := DockerPlatform(arch)
 	remote := isFlakeRef(nixhomeRef)
 	flakeArg := "/opt/nixhome"
 	if remote {
 		flakeArg = nixhomeRef
 	}
 
-	// CELL-293: optional cell-binary plumbing. When cellBinaryPath is set,
-	// the runner mounts the host's prebuilt `cell` into the thin-builder,
-	// the script stages it into the inner docker build context, and the
-	// generated Dockerfile COPYs it into /opt/devcell/.local/bin/cell.
-	cellStageCmd := ""
-	cellCopyLine := ""
-	if cellBinaryPath != "" {
-		cellStageCmd = `cp /opt/cell-host-bin "$CTX/cell" && chmod +x "$CTX/cell"`
-		cellCopyLine = "COPY cell /opt/devcell/.local/bin/cell\nRUN chmod +x /opt/devcell/.local/bin/cell\n"
+	sandbox := "true"
+	extraPlatforms := ""
+	if isCrossArch(arch) {
+		sandbox = "false"
+		extraPlatforms = "extra-platforms ="
 	}
 
 	script := fmt.Sprintf(`set -e
+# Newer nixos/nix images symlink /etc/{passwd,group,shadow,nix/nix.conf} into
+# /nix/store. When we mount the shared nix-store volume over /nix these symlinks
+# dangle. Materialise them from the image's base-system store path BEFORE
+# anything else touches /etc.
+BASE_SYSTEM=$(find /nix/store -maxdepth 1 -name '*-base-system' -type d 2>/dev/null | head -1)
+if [ -n "$BASE_SYSTEM" ]; then
+  for f in /etc/passwd /etc/group /etc/shadow /etc/nix/nix.conf; do
+    if [ -L "$f" ] && ! [ -e "$f" ]; then
+      src="$BASE_SYSTEM$f"
+      [ -f "$src" ] && { mkdir -p "$(dirname "$f")"; rm -f "$f"; cp "$src" "$f"; }
+    fi
+  done
+fi
+
 # Save coreutils + nix + cacert store paths BEFORE anything else — they resolve
 # through the default profile which we delete later.
 COREUTILS_DIR=$(dirname "$(readlink -f "$(which mkdir)")")
@@ -100,15 +110,22 @@ if [ -n "$CACERT" ]; then
   export SSL_CERT_FILE="$CACERT"
 fi
 
-# Nix config — must include ssl-cert-file so the daemon can reach cache.nixos.org.
-cat >> /etc/nix/nix.conf <<NIXCONF
+# Nix config — /etc/nix/nix.conf may be a symlink into the read-only nix store
+# (resolves when the volume already has the base-system path from a prior build).
+# Remove whatever exists and write a complete config from scratch.
+rm -f /etc/nix/nix.conf
+mkdir -p /etc/nix
+cat > /etc/nix/nix.conf <<NIXCONF
+build-users-group = nixbld
 experimental-features = nix-command flakes
 # 64+ concurrent downloads caused cache.nixos.org throttling — see CELL-293.
 # 16 is the upstream default; stays under the CDN's throttle threshold.
 max-substitution-jobs = 16
 http-connections = 16
-max-jobs = auto
-sandbox = true
+max-jobs = ${DEVCELL_NIX_MAX_JOBS:-auto}
+sandbox = %s
+filter-syscalls = %s
+%s
 ssl-cert-file = $CACERT
 NIXCONF
 
@@ -228,12 +245,22 @@ fi
 # shared-volume slot. -T: replace the link itself, never create inside dir.
 ln -sfT "$HM_PROFILE" /opt/devcell/.local/state/nix/profiles/profile
 
-# Pin the resolved store path as a persistent GC root on the shared volume
-# so nix-collect-garbage from another container cannot reap the target our
-# baked-in symlink depends on. Named per-hmTarget + arch so concurrent stacks
-# preserve their own home-manager-path independently.
+# Resolve the home-manager generation — it transitively references
+# home-manager-files (configs: .zshenv, .zshrc, etc.) and home-manager-path
+# (the profile bin dir). Without a GC root the home-manager-files derivation
+# gets reaped by nix-collect-garbage from a later build, leaving dangling
+# symlinks in /opt/devcell/ and breaking shell init across containers.
+HM_GENERATION=$(readlink -f /opt/devcell/.local/state/nix/profiles/home-manager)
+
+# Pin the resolved store paths as persistent GC roots on the shared volume
+# so nix-collect-garbage from another container cannot reap the targets our
+# baked-in symlinks depend on (CELL-320). Named per-project + hmTarget + arch
+# so different projects preserve their own derivations independently.
 mkdir -p /nix/var/nix/gcroots/devcell
-ln -sfT "$HM_PROFILE" /nix/var/nix/gcroots/devcell/%s%s
+ln -sfT "$HM_PROFILE" /nix/var/nix/gcroots/devcell/%s-%s%s-profile
+if [ -n "$HM_GENERATION" ] && [ -d "$HM_GENERATION" ]; then
+  ln -sfT "$HM_GENERATION" /nix/var/nix/gcroots/devcell/%s-%s%s-generation
+fi
 
 # Source home-manager session vars (sets NIX_LD for nix-ld)
 HM_VARS="$HM_PROFILE/etc/profile.d/hm-session-vars.sh"
@@ -274,10 +301,10 @@ cp -a /etc/codex/ "$CTX/etc_codex/" 2>/dev/null || mkdir -p "$CTX/etc_codex/"
 cp -a /etc/opencode/ "$CTX/etc_opencode/" 2>/dev/null || mkdir -p "$CTX/etc_opencode/"
 cp -a /etc/gemini/ "$CTX/etc_gemini/" 2>/dev/null || mkdir -p "$CTX/etc_gemini/"
 cp /opt/nixhome/entrypoint.sh "$CTX/entrypoint.sh" 2>/dev/null || true
-%s
+
 # Inner Dockerfile: minimal config image. All tools live on the /nix volume.
 cat > "$CTX/Dockerfile" <<'DKEOF'
-FROM nixos/nix:latest
+FROM %s
 ARG DEVCELL_BUILD_DATE=1970-01-01T00:00:00Z
 ARG NIX_LD
 RUN for f in /etc/passwd /etc/group /etc/shadow; do \
@@ -306,7 +333,7 @@ COPY etc_codex/ /etc/codex/
 COPY etc_opencode/ /etc/opencode/
 COPY etc_gemini/ /etc/gemini/
 COPY entrypoint.sh /opt/devcell/.local/bin/entrypoint.sh
-%sENV HOME=/opt/devcell
+ENV HOME=/opt/devcell
 ENV USER=devcell
 ENV DEVCELL_PROFILE=devcell-%s
 ENV PATH="/nix/var/nix/profiles/devcell-tools/bin:/opt/devcell/.local/state/nix/profiles/profile/bin:/opt/devcell/.local/bin:/nix/var/nix/profiles/default/bin:/usr/local/bin:/usr/bin:/bin"
@@ -330,31 +357,35 @@ CMD ["tail", "-f", "/dev/null"]
 DKEOF
 
 echo "Building thin image via docker socket..."
-docker build --no-cache --build-arg "DEVCELL_BUILD_DATE=$BUILD_DATE" --build-arg "NIX_LD=$NIX_LD" -t %s -f "$CTX/Dockerfile" "$CTX"
+docker build --no-cache --platform %s --build-arg "DEVCELL_BUILD_DATE=$BUILD_DATE" --build-arg "NIX_LD=$NIX_LD" -t %s -f "$CTX/Dockerfile" "$CTX"
 rm -rf "$CTX"
 echo "Done — thin image: %s"`,
+		sandbox,         // sandbox = true|false
+		sandbox,         // filter-syscalls = true|false (both must be false under QEMU — seccomp BPF uses guest syscall numbers)
+		extraPlatforms,  // extra-platforms = (empty for cross-arch: QEMU can't handle personality() for i686)
 		stack,           // export DEVCELL_STACK
 		modules,         // export DEVCELL_MODULES
 		flakeArg, hmTarget, archSuffix, // home-manager switch
-		hmTarget, archSuffix, // /nix/var/nix/gcroots/devcell/<hmTarget><arch>
-		cellStageCmd,    // stage cell binary into $CTX (or empty)
-		cellCopyLine,    // COPY cell ... into Dockerfile (or empty)
+		projectName, hmTarget, archSuffix, // /nix/var/nix/gcroots/devcell/<project>-<hmTarget><arch>-profile
+		projectName, hmTarget, archSuffix, // /nix/var/nix/gcroots/devcell/<project>-<hmTarget><arch>-generation
+		coreImage,       // FROM <coreImage> (inner Dockerfile)
 		hmTarget,        // ENV DEVCELL_PROFILE=devcell-<hmTarget>
 		stack,           // ENV DEVCELL_STACK
 		modules,         // ENV DEVCELL_MODULES
 		stack,           // LABEL devcell.stack=<stack>
-		thinTag, thinTag)
+		platform, thinTag, thinTag)
 
 	args := []string{
 		"docker", "run", "--rm", "--privileged", "--name", containerName,
+		"--platform", platform,
 		"--user", "0",
 		"-v", volumeName + ":/nix",
 	}
 	if !remote {
 		args = append(args, "-v", nixhomeRef+":/opt/nixhome")
 	}
-	if cellBinaryPath != "" {
-		args = append(args, "-v", cellBinaryPath+":/opt/cell-host-bin:ro")
+	if v := os.Getenv("DEVCELL_NIX_MAX_JOBS"); v != "" {
+		args = append(args, "-e", "DEVCELL_NIX_MAX_JOBS="+v)
 	}
 	args = append(args,
 		"-v", "/var/run/docker.sock:/var/run/docker.sock",
@@ -363,6 +394,16 @@ echo "Done — thin image: %s"`,
 		"-c", script,
 	)
 	return args
+}
+
+// isCrossArch returns true when arch (uname convention: x86_64, aarch64)
+// differs from the host Go binary's architecture.
+func isCrossArch(arch string) bool {
+	host := "x86_64"
+	if runtime.GOARCH == "arm64" {
+		host = "aarch64"
+	}
+	return arch != "" && arch != host
 }
 
 // isFlakeRef returns true when the value looks like a nix flake reference

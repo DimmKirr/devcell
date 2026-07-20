@@ -21,7 +21,21 @@ vars:
     sh: git rev-parse --short HEAD 2>/dev/null || echo "unknown"
   BUILD_DATE:
     sh: date -u +%Y%m%dT%H%M%SZ
-  CELL_LDFLAGS: -s -w -X github.com/DimmKirr/devcell/internal/version.GitCommit={{.GIT_COMMIT_HASH}} -X github.com/DimmKirr/devcell/internal/version.BuildDate={{.BUILD_DATE}}
+  # Version resolution order:
+  #   1. explicit VERSION= override (e.g. release workflow passing the tag)
+  #   2. `git describe` — nearest annotated tag + commits-ahead + short SHA,
+  #      -dirty suffix when the working tree has uncommitted changes
+  #   3. "v0.0.0" fallback when the repo is unavailable / shallow with no tags
+  # Result is stamped into version.Version so `cell --version` reports it
+  # regardless of the build path (Taskfile / goreleaser / flake all agree).
+  CELL_VERSION:
+    sh: |
+      if [ -n "${VERSION:-}" ]; then
+        echo "$VERSION"
+      else
+        git describe --tags --always --dirty 2>/dev/null || echo "v0.0.0"
+      fi
+  CELL_LDFLAGS: -s -w -X github.com/DimmKirr/devcell/internal/version.Version={{.CELL_VERSION}} -X github.com/DimmKirr/devcell/internal/version.GitCommit={{.GIT_COMMIT_HASH}} -X github.com/DimmKirr/devcell/internal/version.BuildDate={{.BUILD_DATE}}
 
 env:
   BUILDKIT_PROGRESS: plain
@@ -91,11 +105,28 @@ tasks:
     dir: "{{.TASKFILE_DIR}}"
     silent: true
     cmds:
-      # nix-update reads flake.nix, sets vendorHash to fakeHash, builds
-      # .#cell, extracts the "got: sha256-…" line from Nix's mismatch
-      # error, and rewrites flake.nix. --version=skip prevents version
-      # bumps; we only want the hash refresh.
-      - nix-update --flake --version=skip cell
+      - |
+        FLAKE="{{.TASKFILE_DIR}}/flake.nix"
+        replace_hash() { local tmp=$(mktemp); sed "s|vendorHash = \"sha256-[^\"]*\"|vendorHash = \"$1\"|" "$FLAKE" > "$tmp" && cat "$tmp" > "$FLAKE" && rm -f "$tmp"; }
+        OLD_HASH=$(grep 'vendorHash = "sha256-' "$FLAKE" | sed 's/.*"\(sha256-[^"]*\)".*/\1/')
+        BACKUP=$(mktemp)
+        cp "$FLAKE" "$BACKUP"
+        replace_hash "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+        echo "Building .#cell to compute vendorHash (this may take a minute)..."
+        NEW_HASH=$(nix build .#cell 2>&1 | grep 'got:' | awk '{print $2}')
+        if [ -z "$NEW_HASH" ]; then
+          cp "$BACKUP" "$FLAKE"
+          rm -f "$BACKUP"
+          echo "nix build succeeded — vendorHash is already correct"
+          exit 0
+        fi
+        rm -f "$BACKUP"
+        replace_hash "$NEW_HASH"
+        if [ "$OLD_HASH" != "$NEW_HASH" ]; then
+          echo "vendorHash updated: $OLD_HASH → $NEW_HASH"
+          echo "flake.nix was modified — re-stage and re-commit"
+          exit 1
+        fi
 
   bake:validate:
     desc: Print resolved docker-bake config (HCL parse check, no build)
@@ -119,9 +150,9 @@ tasks:
     silent: true
     cmds:
       - mkdir -p bin
-      - CGO_ENABLED=0 go build -ldflags "{{.CELL_LDFLAGS}}" -o ./bin/cell ./cmd/
+      - CGO_ENABLED={{if eq OS "darwin"}}1{{else}}0{{end}} go build -ldflags "{{.CELL_LDFLAGS}}" -o ./bin/cell ./cmd/
       - '[ "$(uname -s)" != "Darwin" ] || xattr -c ./bin/cell'
-      - '[ "$(uname -s)" != "Darwin" ] || codesign --force --sign - ./bin/cell'
+      - '[ "$(uname -s)" != "Darwin" ] || codesign --force --sign - --entitlements entitlements.plist ./bin/cell'
 
   cell:install:
     aliases: [install]
@@ -136,7 +167,7 @@ tasks:
       # keyed, so the just-copied file needs its own re-registration even
       # though the source was already cleaned.
       - '[ "$(uname -s)" != "Darwin" ] || xattr -c ~/.local/bin/cell'
-      - '[ "$(uname -s)" != "Darwin" ] || codesign --force --sign - ~/.local/bin/cell'
+      - '[ "$(uname -s)" != "Darwin" ] || codesign --force --sign - --entitlements entitlements.plist ~/.local/bin/cell'
       - echo "Installed to ~/.local/bin/cell"
 
   # ── image (CI/release aggregates) ──────────────────────────────────────
@@ -378,11 +409,10 @@ tasks:
       - go test -v -count=1 -run TestCacheRoundtrip ./test/...
 
   # ── Nix-store GHCR cache pipeline ──────────────────────────────────────
-  # Stream the populated /nix volume to GHCR as a single-layer cache image.
-  # `cell nix-store push` uses pkg/v1/stream.NewLayer from go-containerregistry:
-  # stdin is gzipped lazily, the digest is computed incrementally, and the
-  # blob is uploaded via the OCI chunked-upload protocol — peak runner disk
-  # is the pipe buffer, not the volume size.
+  # Stream the populated /nix volume to GHCR as a multi-layer cache image.
+  # `cell nix-store push` splits the tar into ~1 GB chunks (CELL-297), each
+  # uploaded as a separate OCI layer via stream.NewLayer — per-layer size
+  # stays small enough to avoid GHCR throttling / stall-abort cycles.
   #
   # Used by CI (build.dev.yml + build.release.yml) AND reproducible locally
   # against a populated devcell-nix-store-<arch> volume.
@@ -401,24 +431,517 @@ tasks:
       BASE: 'gcr.io/distroless/static-debian12:latest'
     cmds:
       - |
-        set -eo pipefail
-        SIZE_KB=$(docker run --rm -v "{{.VOL}}:/nix:ro" alpine du -s /nix 2>/dev/null | awk '{print $1}')
-        if [ "${SIZE_KB:-0}" -lt 1000000 ]; then
-          echo "[{{.STAGE}}] skipping publish: /nix is only ${SIZE_KB}KB"
-          exit 0
-        fi
-        echo "[{{.STAGE}}] publishing /nix (${SIZE_KB}KB)"
-
-        docker run --rm -v "{{.VOL}}:/nix:ro" alpine \
-          tar -cf - \
-            --exclude='nix/var/nix/daemon-socket' \
-            -C / nix \
-          | ./bin/cell nix-store push \
-              --base "{{.BASE}}" \
-              --image "{{.LATEST}}"
-
-        docker buildx imagetools create --tag "{{.EXACT}}" "{{.LATEST}}"
-
+        ./bin/cell nix-store push \
+          --volume "{{.VOL}}" \
+          --base "{{.BASE}}" \
+          --image "{{.LATEST}}" \
+          --tag-alias "{{.EXACT}}" \
+          --retries 3 \
+          --min-size 1GB
         echo "[{{.STAGE}}] pushed nix-cache images:"
         echo "  {{.EXACT}}"
         echo "  {{.LATEST}}"
+
+  debug:
+    cmds:
+      - task: debug:macos
+  # ── macOS VM debugging ────────────────────────────────────────────────
+  debug:macos:
+    desc: Mount a stopped macOS VM disk and dump diagnostics to .devcell/debug/<datetime>-macos.log
+    platforms: [darwin]
+    silent: true
+    vars:
+      CELL_NAME: '{{.CELL_NAME | default "DIMM"}}'
+      VM_USER: '{{.VM_USER | default .USER}}'
+      DISK: '{{.HOME}}/.devcell/{{.CELL_NAME}}/darwin/disk.img'
+      DEBUG_DIR: '{{.TASKFILE_DIR}}/.devcell/debug'
+    preconditions:
+      - sh: test -f "{{.DISK}}"
+        msg: "No disk image at {{.DISK}} — set CELL_NAME if not DIMM"
+    cmds:
+      - |
+        set -euo pipefail
+        mkdir -p "{{.DEBUG_DIR}}"
+        LOG="{{.DEBUG_DIR}}/$(date -u +%Y%m%dT%H%M%SZ)-macos.log"
+        DISK="{{.DISK}}"
+        MNT="$(mktemp -d)/devcell-inspect"
+        mkdir -p "$MNT"
+
+        _dump() {
+        echo "devcell macOS VM — offline disk diagnostic"
+        echo "==========================================="
+        echo "  date:  $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        echo "  cell:  {{.CELL_NAME}}"
+        echo "  user:  {{.VM_USER}}"
+        echo "  disk:  $DISK"
+        echo ""
+
+        echo "--- attaching disk image ---"
+        DEVNODE=$(hdiutil attach "$DISK" -nomount -noverify 2>&1 | head -1 | awk '{print $1}')
+        echo "  device: $DEVNODE"
+        diskutil list "$DEVNODE"
+        echo ""
+
+        DATA_PART=$(diskutil list "$DEVNODE" | grep -i Data | awk '{print $NF}')
+        if [ -z "$DATA_PART" ]; then
+          echo "ERROR: could not find Data partition on $DEVNODE"
+          hdiutil detach "$DEVNODE" -force 2>/dev/null
+          exit 1
+        fi
+        diskutil mount -mountPoint "$MNT" "/dev/$DATA_PART" >/dev/null
+        echo "  mounted /dev/$DATA_PART at $MNT"
+        echo ""
+
+        # ---------- provisioning files ----------
+
+        echo "[1/12] SSH host keys (/etc/ssh/ssh_host_*)"
+        echo "  expect: ed25519 + rsa key pairs, owned 0:0, mode 0600"
+        ls -ln "$MNT/private/etc/ssh/ssh_host_"* 2>/dev/null || echo "  MISSING — sshd cannot start without host keys"
+        echo ""
+
+        echo "[2/12] sshd_config (relevant directives)"
+        grep -Ei '^(Port|PermitRootLogin|PubkeyAuth|PasswordAuth|UsePAM|AuthorizedKeysFile)' \
+          "$MNT/private/etc/ssh/sshd_config" 2>/dev/null | sed 's/^/  /' || echo "  no sshd_config or no matching directives"
+        echo ""
+
+        echo "[3/12] LaunchDaemons (com.devcell.*)"
+        echo "  expect: enable-sshd, serial-console, setup-skip — all owned 0:0"
+        ls -ln "$MNT/Library/LaunchDaemons/com.devcell."* 2>/dev/null | sed 's/^/  /' || echo "  none present (cleaned up after first boot)"
+        echo ""
+
+        echo "[4/12] launchd disabled.plist"
+        echo "  expect: com.openssh.sshd => false"
+        plutil -p "$MNT/private/var/db/com.apple.xpc.launchd/disabled.plist" 2>/dev/null | sed 's/^/  /' || echo "  no disabled.plist"
+        echo ""
+
+        echo "[5/12] dslocal user record ({{.VM_USER}})"
+        echo "  expect: uid=501, gid=20, shell=/bin/zsh, ShadowHashData present"
+        plutil -p "$MNT/private/var/db/dslocal/nodes/Default/users/{{.VM_USER}}.plist" 2>/dev/null | sed 's/^/  /' || echo "  MISSING — user not provisioned"
+        echo ""
+
+        echo "[6/12] authorized_keys ({{.VM_USER}})"
+        echo "  expect: one ssh-ed25519 public key, owned 501:20, mode 0600"
+        cat "$MNT/Users/{{.VM_USER}}/.ssh/authorized_keys" 2>/dev/null | sed 's/^/  /' || echo "  no authorized_keys"
+        ls -ln "$MNT/Users/{{.VM_USER}}/.ssh/" 2>/dev/null | sed 's/^/  /' || echo "  no .ssh dir"
+        echo ""
+
+        echo "[7/12] sudoers.d/{{.VM_USER}}"
+        echo "  expect: {{.VM_USER}} ALL=(ALL) NOPASSWD: ALL, owned 0:0, mode 0440"
+        cat "$MNT/private/etc/sudoers.d/{{.VM_USER}}" 2>/dev/null | sed 's/^/  /' || echo "  MISSING"
+        ls -ln "$MNT/private/etc/sudoers.d/{{.VM_USER}}" 2>/dev/null | sed 's/^/  /' || true
+        echo ""
+
+        echo "[8/12] .AppleSetupDone + kcpassword"
+        echo "  expect: both present, owned 0:0"
+        ls -ln "$MNT/private/var/db/.AppleSetupDone" 2>/dev/null | sed 's/^/  /' || echo "  .AppleSetupDone MISSING — Setup Assistant will launch"
+        ls -ln "$MNT/private/etc/kcpassword" 2>/dev/null | sed 's/^/  /' || echo "  kcpassword MISSING — auto-login won't work"
+        echo ""
+
+        # ---------- runtime logs (only present after first boot) ----------
+
+        echo "[9/12] enable-sshd execution log (/var/log/devcell-sshd-enable.log)"
+        echo "  expect: step 1-6 output after first boot"
+        cat "$MNT/private/var/log/devcell-sshd-enable.log" 2>/dev/null | sed 's/^/  /' || echo "  no log yet (VM has not booted, or script did not run)"
+        echo ""
+
+        echo "[10/12] system.log — sshd / launchd / devcell entries"
+        grep -iE '(sshd|com\.devcell|ssh-keygen|remotelogin)' "$MNT/private/var/log/system.log" 2>/dev/null | tail -30 | sed 's/^/  /' || echo "  no system.log or no matches"
+        echo ""
+
+        echo "[11/12] install.log — ssh entries"
+        grep -iE '(sshd|ssh)' "$MNT/private/var/log/install.log" 2>/dev/null | tail -10 | sed 's/^/  /' || echo "  no install.log or no matches"
+        echo ""
+
+        echo "[12/12] /var/log/devcell-*.log (all devcell runtime logs)"
+        for f in "$MNT/private/var/log/devcell-"*.log; do
+          [ -f "$f" ] || continue
+          echo "  --- $(basename "$f") ---"
+          cat "$f" | sed 's/^/  /'
+        done
+        ls "$MNT/private/var/log/devcell-"*.log >/dev/null 2>&1 || echo "  none"
+        echo ""
+
+        # ---------- cleanup ----------
+        hdiutil detach "$DEVNODE" -force 2>/dev/null
+        rm -rf "$(dirname "$MNT")"
+        echo "=== done ==="
+        }
+
+        _dump 2>&1 | tee "$LOG"
+        echo ""
+        echo "saved to: $LOG"
+
+  # ── Host Nix installation debugging ──────────────────────────────────
+  debug:nix:
+    desc: Collect comprehensive info about the host Nix/Lix installation (run on macOS)
+    platforms: [darwin]
+    silent: true
+    vars:
+      LOG: '{{.TASKFILE_DIR}}/.context/debug/nix.log'
+    cmds:
+      - |
+        set -euo pipefail
+        mkdir -p "$(dirname "{{.LOG}}")"
+
+        _dump() {
+        section() { echo ""; echo "===== $1 ====="; }
+        item()    { echo "--- $1 ---"; }
+
+        section "NIX/LIX VERSION & BINARY"
+        item "which nix"
+        which nix 2>/dev/null && file "$(which nix)" || echo "  nix not found in PATH"
+        item "nix --version"
+        nix --version 2>/dev/null || echo "  nix --version failed"
+        item "readlink nix binary"
+        ls -la "$(which nix 2>/dev/null)" 2>/dev/null || true
+        readlink -f "$(which nix 2>/dev/null)" 2>/dev/null || true
+
+        section "NIX PROFILE PATHS"
+        item "~/.nix-profile"
+        ls -la ~/.nix-profile 2>/dev/null || echo "  no ~/.nix-profile"
+        item "/nix/var/nix/profiles/default"
+        ls -la /nix/var/nix/profiles/default 2>/dev/null || echo "  no /nix/var/nix/profiles/default"
+        item "/nix/var/nix/profiles/per-user/$USER"
+        ls -la "/nix/var/nix/profiles/per-user/$USER" 2>/dev/null || echo "  no per-user profile"
+        item "nix profile list"
+        nix profile list 2>/dev/null || echo "  nix profile list failed"
+
+        section "NIX DAEMON STATUS"
+        item "launchctl list | grep nix"
+        launchctl list 2>/dev/null | grep -i nix || echo "  no nix LaunchDaemons loaded"
+        item "nix-daemon plist"
+        ls -la /Library/LaunchDaemons/org.nixos.nix-daemon.plist 2>/dev/null || echo "  no nix-daemon plist"
+        item "nix-daemon process"
+        ps aux | grep -v grep | grep nix-daemon || echo "  nix-daemon not running"
+        item "nix.conf daemon setting"
+        grep -i 'daemon\|build-users-group' /etc/nix/nix.conf 2>/dev/null || echo "  no daemon config in /etc/nix/nix.conf"
+
+        section "BUILD USERS (multi-user indicator)"
+        item "nixbld group"
+        dscl . -read /Groups/nixbld 2>/dev/null | head -20 || echo "  no nixbld group (single-user install)"
+        item "nixbld users count"
+        dscl . -list /Users | grep nixbld | wc -l | xargs echo "  nixbld users:"
+
+        section "NIX STORE MOUNT"
+        item "/etc/synthetic.conf"
+        cat /etc/synthetic.conf 2>/dev/null || echo "  no /etc/synthetic.conf"
+        item "/etc/fstab (nix entries)"
+        grep -i nix /etc/fstab 2>/dev/null || echo "  no nix entries in /etc/fstab"
+        item "mount | grep nix"
+        mount | grep nix || echo "  /nix not mounted as separate volume"
+        item "diskutil info on Nix Store volume"
+        diskutil info "Nix Store" 2>/dev/null | grep -E 'Name|Mount|File System|Volume UUID' || echo "  no 'Nix Store' APFS volume"
+        item "df /nix"
+        df -h /nix 2>/dev/null || echo "  cannot stat /nix"
+        item "ls -la /nix (top-level)"
+        ls -la /nix 2>/dev/null | head -15 || echo "  /nix does not exist or not readable"
+
+        section "NIX CONFIGURATION"
+        item "/etc/nix/nix.conf"
+        cat /etc/nix/nix.conf 2>/dev/null || echo "  no /etc/nix/nix.conf"
+        item "~/.config/nix/nix.conf"
+        cat ~/.config/nix/nix.conf 2>/dev/null || echo "  no ~/.config/nix/nix.conf"
+        item "nix show-config (key settings)"
+        nix show-config 2>/dev/null | grep -E 'experimental-features|build-users-group|sandbox|trusted-users|allowed-users|store' || echo "  nix show-config failed"
+
+        section "NIX-DARWIN"
+        item "darwin-rebuild --version"
+        darwin-rebuild --version 2>/dev/null || echo "  darwin-rebuild not found (nix-darwin not installed)"
+        item "nix-darwin generation"
+        ls -la /run/current-system 2>/dev/null || echo "  no /run/current-system (nix-darwin not active)"
+        item "/etc/nix/nix.conf managed-by comment"
+        head -3 /etc/nix/nix.conf 2>/dev/null || true
+        item "nix-darwin flake (if discoverable)"
+        ls -la ~/.config/darwin/ 2>/dev/null || ls -la ~/.nixpkgs/darwin-configuration.nix 2>/dev/null || echo "  no standard nix-darwin config location found"
+
+        section "NIX-DARWIN /etc/ FOOTPRINT"
+        item "/etc/static (nix-darwin's managed etc link)"
+        ls -la /etc/static 2>/dev/null || echo "  no /etc/static"
+        ls -la /etc/static/ 2>/dev/null | head -20 || true
+        item "/etc/bashrc — symlink or file?"
+        ls -la /etc/bashrc 2>/dev/null || echo "  no /etc/bashrc"
+        ls -la /private/etc/bashrc 2>/dev/null || true
+        file /private/etc/bashrc 2>/dev/null || true
+        item "/etc/bashrc.before-nix-darwin (backup from mv)"
+        ls -la /etc/bashrc.before-nix-darwin 2>/dev/null || echo "  no .before-nix-darwin backup"
+        cat /etc/bashrc.before-nix-darwin 2>/dev/null | head -5 || true
+        item "/etc/zshrc — symlink or file?"
+        ls -la /etc/zshrc 2>/dev/null || echo "  no /etc/zshrc"
+        ls -la /etc/zshrc.before-nix-darwin 2>/dev/null || echo "  no zshrc.before-nix-darwin backup"
+        item "/etc/zshenv — symlink or file?"
+        ls -la /etc/zshenv 2>/dev/null || echo "  no /etc/zshenv"
+        ls -la /etc/zshenv.before-nix-darwin 2>/dev/null || echo "  no zshenv.before-nix-darwin backup"
+        item "all .before-nix-darwin backups"
+        ls -la /etc/*.before-nix-darwin 2>/dev/null || echo "  no .before-nix-darwin backups found"
+        item "xattr on /etc/bashrc"
+        xattr -l /private/etc/bashrc 2>/dev/null || echo "  no xattrs"
+        item "xattr on /etc/nix"
+        xattr -l /private/etc/nix 2>/dev/null || echo "  no xattrs on /etc/nix"
+        xattr -l /private/etc/nix/nix.conf 2>/dev/null || echo "  no xattrs on nix.conf"
+        item "/etc/nix/nix.conf — symlink or file?"
+        ls -la /etc/nix/nix.conf 2>/dev/null || true
+        file /private/etc/nix/nix.conf 2>/dev/null || true
+
+        section "HOME-MANAGER"
+        item "home-manager --version"
+        home-manager --version 2>/dev/null || echo "  home-manager not found"
+        item "home-manager generations (last 5)"
+        home-manager generations 2>/dev/null | head -5 || echo "  no home-manager generations"
+        item "home-manager profile"
+        ls -la ~/.local/state/nix/profiles/home-manager 2>/dev/null || echo "  no home-manager profile"
+
+        section "SHELL INTEGRATION"
+        item "PATH nix entries"
+        echo "$PATH" | tr ':' '\n' | grep nix || echo "  no nix in PATH"
+        item "/etc/bashrc nix source"
+        grep -n nix /etc/bashrc 2>/dev/null || echo "  no nix in /etc/bashrc"
+        item "/etc/zshrc nix source"
+        grep -n nix /etc/zshrc 2>/dev/null || echo "  no nix in /etc/zshrc"
+        item "nix-daemon.sh"
+        ls -la /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh 2>/dev/null || echo "  no nix-daemon.sh"
+
+        section "NIX INSTALLER DETECTION"
+        item "Determinate Systems: receipt.json"
+        cat /nix/receipt.json 2>/dev/null | head -30 || echo "  no /nix/receipt.json (not Determinate installer)"
+        item "Determinate Systems: determinate-nixd"
+        which determinate-nixd 2>/dev/null || echo "  no determinate-nixd"
+        ps aux | grep -v grep | grep determinate-nixd || echo "  determinate-nixd not running"
+        ls -la /Library/LaunchDaemons/systems.determinate.* 2>/dev/null || echo "  no Determinate Systems LaunchDaemons"
+        item "Official Nix installer: nix-daemon plist"
+        cat /Library/LaunchDaemons/org.nixos.nix-daemon.plist 2>/dev/null || echo "  no org.nixos.nix-daemon.plist"
+        item "Official Nix installer: default profile etc"
+        ls -la /nix/var/nix/profiles/default/etc/profile.d/ 2>/dev/null || echo "  no default profile etc"
+        item "Manual tarball: .reginfo"
+        ls -la /nix/.reginfo 2>/dev/null || echo "  no .reginfo (not a manual tarball install)"
+        item "/nix ownership (root:nixbld = multi-user, user:staff = single-user)"
+        ls -la / | grep nix || true
+        ls -la /nix/ | head -5 || true
+        item "nix store DB"
+        ls -la /nix/var/nix/db/ 2>/dev/null | head -10 || true
+        item "nix-channel --list"
+        nix-channel --list 2>/dev/null || echo "  no channels"
+        item "nix registry list (first 10)"
+        nix registry list 2>/dev/null | head -10 || echo "  nix registry list failed"
+        item "nix store path for nix binary"
+        readlink -f "$(which nix 2>/dev/null)" 2>/dev/null || true
+
+        section "NIX-DARWIN INTERNALS"
+        item "current system derivation"
+        readlink /run/current-system 2>/dev/null || echo "  no /run/current-system"
+        item "system profile generations (last 5)"
+        ls -lt /nix/var/nix/profiles/system-*-link 2>/dev/null | head -5 || echo "  no system profile generations"
+        item "activate script (full)"
+        cat /run/current-system/activate 2>/dev/null || echo "  no activate script"
+        item "activate-user script"
+        cat /run/current-system/activate-user 2>/dev/null || echo "  no activate-user script"
+        item "systemConfig etc contents"
+        ls -laR /run/current-system/etc/ 2>/dev/null || echo "  no /run/current-system/etc"
+        item "systemConfig etc static targets"
+        for f in /run/current-system/etc/*; do
+          [ -L "$f" ] && echo "  $(basename "$f") -> $(readlink "$f")" || true
+        done 2>/dev/null
+        item "sw/bin (system packages, first 30)"
+        ls /run/current-system/sw/bin/ 2>/dev/null | head -30 || true
+        item "darwin-rebuild path & origin"
+        which darwin-rebuild 2>/dev/null || true
+        readlink -f "$(which darwin-rebuild 2>/dev/null)" 2>/dev/null || true
+
+        section "NIXHOME REPO"
+        for d in "{{.ROOT_DIR}}/.context/examples/nixhome" ~/dev/dimmkirr/nixhome ~/dev/n0mad/nixhome ~/nixhome ~/.config/nixhome; do
+          if [ -d "$d" ]; then
+            echo "  found: $d"
+            ls -la "$d/" | head -15
+            echo ""
+            echo "  --- git log (last 5) ---"
+            git -C "$d" log --oneline -5 2>/dev/null || true
+            echo ""
+            echo "  --- flake inputs ---"
+            grep 'url = ' "$d/flake.nix" 2>/dev/null | head -15 || true
+            echo ""
+            echo "  --- darwinConfigurations ---"
+            grep -A3 'darwinConfigurations' "$d/flake.nix" 2>/dev/null | head -10 || true
+            echo ""
+            echo "  --- homeConfigurations ---"
+            grep -A3 'homeConfigurations' "$d/flake.nix" 2>/dev/null | head -10 || true
+            break
+          fi
+        done
+        echo "  (searched .context/examples/nixhome, ~/dev/dimmkirr/nixhome, ~/dev/n0mad/nixhome, ~/nixhome, ~/.config/nixhome)"
+
+        section "/etc/ MODIFICATION ARCHAEOLOGY"
+        echo "Goal: determine if Nix installer used mv (rename) or append (tee/echo >>)"
+        echo "Evidence chain: original macOS file → Nix installer modification → nix-darwin takeover"
+        echo ""
+
+        for f in bashrc zshrc zshenv zprofile; do
+          item "/etc/$f — full chain"
+          echo "  current:"
+          ls -la /etc/$f 2>/dev/null || echo "    missing"
+          if [ -L /etc/$f ]; then
+            echo "  symlink target: $(readlink /etc/$f)"
+            echo "  final target: $(readlink -f /etc/$f 2>/dev/null)"
+            echo "  STATUS: nix-darwin owns this (symlink → /etc/static → nix store)"
+          elif [ -f /etc/$f ]; then
+            echo "  STATUS: regular file (NOT managed by nix-darwin)"
+          fi
+          echo "  .before-nix-darwin backup (= what Nix installer left behind):"
+          if [ -f /etc/$f.before-nix-darwin ]; then
+            echo "    $(ls -la /private/etc/$f.before-nix-darwin 2>/dev/null)"
+            echo "    content:"
+            sed 's/^/    /' < /etc/$f.before-nix-darwin
+            if grep -q '# Nix' /etc/$f.before-nix-darwin 2>/dev/null; then
+              echo "    >>> EVIDENCE: backup contains '# Nix' lines = installer APPENDED to original file"
+              echo "    >>> This means installer used echo/tee (not mv) — the file was modified in-place"
+            else
+              echo "    >>> No '# Nix' marker found in backup"
+            fi
+          else
+            echo "    no .before-nix-darwin backup"
+          fi
+
+          echo "  .backup-before-nix (Nix installer's own backup, if any):"
+          ls -la /etc/$f.backup-before-nix 2>/dev/null || echo "    none"
+
+          echo ""
+        done
+
+        item "/etc/nix/nix.conf — ownership chain"
+        echo "  current:"
+        ls -la /etc/nix/nix.conf 2>/dev/null || echo "    missing"
+        if [ -L /etc/nix/nix.conf ]; then
+          echo "  symlink: $(readlink /etc/nix/nix.conf) → $(readlink -f /etc/nix/nix.conf 2>/dev/null)"
+          echo "  STATUS: nix-darwin owns this"
+        fi
+        echo "  .before-nix-darwin backup:"
+        if [ -f /etc/nix/nix.conf.before-nix-darwin ]; then
+          echo "    $(ls -la /private/etc/nix/nix.conf.before-nix-darwin 2>/dev/null)"
+          echo "    content:"
+          sed 's/^/    /' < /etc/nix/nix.conf.before-nix-darwin
+          echo "    >>> This was the Nix INSTALLER's nix.conf before nix-darwin replaced it"
+        else
+          echo "    none"
+        fi
+        echo "  nix.custom.conf backup (nix-darwin moves this aside):"
+        ls -la /etc/nix/nix.custom.conf.before-nix-darwin 2>/dev/null || echo "    none"
+
+        item "/etc/synthetic.conf — who wrote it?"
+        ls -la /etc/synthetic.conf 2>/dev/null || echo "  missing"
+        if [ -f /etc/synthetic.conf ]; then sed 's/^/  /' < /etc/synthetic.conf; fi
+        if [ -L /etc/synthetic.conf ]; then
+          echo "  STATUS: symlink (nix-darwin manages)"
+        elif [ -f /etc/synthetic.conf ]; then
+          echo "  STATUS: regular file (Nix installer created, nix-darwin left it alone)"
+        fi
+
+        item "/etc/fstab — nix entries"
+        ls -la /etc/fstab 2>/dev/null || echo "  missing"
+        if ! grep -i nix /etc/fstab 2>/dev/null | sed 's/^/  /'; then echo "  no nix entries"; fi
+        echo "  .before-nix-darwin backup:"
+        if [ -f /etc/fstab.before-nix-darwin ]; then
+          ls -la /etc/fstab.before-nix-darwin | sed 's/^/  /'
+          sed 's/^/  /' < /etc/fstab.before-nix-darwin
+        else
+          echo "    none"
+        fi
+
+        item "all .before-nix-darwin backups (complete list)"
+        nix_backups=$(find /private/etc -maxdepth 3 -name "*.before-nix-darwin" 2>/dev/null) || true
+        if [ -n "$nix_backups" ]; then
+          echo "$nix_backups" | while read -r bf; do
+            ls -la "$bf" 2>/dev/null | sed 's/^/  /'
+          done || true
+          echo "  count: $(echo "$nix_backups" | wc -l | xargs)"
+        else
+          echo "  none found"
+        fi
+
+        item "all .backup-before-nix files (Nix installer backups)"
+        nix_installer_backups=$(find /private/etc -maxdepth 3 -name "*.backup-before-nix" 2>/dev/null) || true
+        if [ -n "$nix_installer_backups" ]; then
+          echo "$nix_installer_backups" | while read -r bf; do
+            ls -la "$bf" 2>/dev/null | sed 's/^/  /'
+          done || true
+          echo "  count: $(echo "$nix_installer_backups" | wc -l | xargs)"
+        else
+          echo "  none found"
+        fi
+
+        section "NIXHOME DECLARED /etc/ FILES"
+        echo "Cross-referencing nixhome config with actual /etc/ state"
+        echo ""
+        NIXHOME=""
+        for d in "{{.ROOT_DIR}}/.context/examples/nixhome" ~/dev/dimmkirr/nixhome ~/dev/n0mad/nixhome ~/nixhome ~/.config/nixhome; do
+          [ -d "$d/hosts" ] && NIXHOME="$d" && break
+        done
+        if [ -n "$NIXHOME" ]; then
+          echo "  nixhome repo: $NIXHOME"
+          item "environment.etc entries in nixhome"
+          if ! grep -rn 'environment.etc\.' "$NIXHOME" --include="*.nix" 2>/dev/null | sed 's/^/  /'; then echo "  none"; fi
+          item "security.pam entries"
+          if ! grep -rn 'security.pam\|pam.services' "$NIXHOME" --include="*.nix" 2>/dev/null | sed 's/^/  /'; then echo "  none"; fi
+          item "security.sudo entries"
+          if ! grep -rn 'security.sudo\|sudoers' "$NIXHOME" --include="*.nix" 2>/dev/null | sed 's/^/  /'; then echo "  none"; fi
+          item "nix.settings (generates nix.conf)"
+          if ! grep -A5 'nix.settings' "$NIXHOME/hosts/automationd/default.nix" 2>/dev/null | sed 's/^/  /'; then echo "  none"; fi
+          item "services.openssh / sshd config"
+          if ! grep -rn 'openssh\|sshd' "$NIXHOME" --include="*.nix" 2>/dev/null | sed 's/^/  /'; then echo "  none"; fi
+          item "nix-darwin etc module output (nix eval)"
+          echo "  Evaluating darwinConfigurations.automationd.config.environment.etc (may take a moment)..."
+          if ! nix eval "$NIXHOME#darwinConfigurations.automationd.config.environment.etc" --apply 'e: builtins.attrNames e' 2>/dev/null | sed 's/^/  /'; then
+            echo "  nix eval failed (may need --impure or local path inputs)"
+          fi
+        else
+          echo "  nixhome repo not found"
+          echo "  (searched .context/examples/nixhome, ~/dev/dimmkirr/nixhome, ~/dev/n0mad/nixhome, ~/nixhome, ~/.config/nixhome)"
+        fi
+
+        section "TCC / FDA CONTEXT"
+        item "sshd FDA status (tccutil)"
+        if tccutil 2>&1 | head -3; then true; else echo "  tccutil not available"; fi
+        item "TCC.db schema and sshd entries (system-level)"
+        echo "  system TCC.db:"
+        if sudo sqlite3 "/Library/Application Support/com.apple.TCC/TCC.db" \
+          ".schema access" 2>/dev/null | head -5 | sed 's/^/    /'; then
+          true
+        else
+          echo "    cannot read system TCC.db"
+        fi
+        echo "  sshd FDA entries (system TCC.db) — with csreq:"
+        if sudo sqlite3 "/Library/Application Support/com.apple.TCC/TCC.db" \
+          "SELECT service,client,client_type,auth_value,auth_reason,hex(csreq) FROM access WHERE client LIKE '%ssh%' OR client LIKE '%sshd%'" 2>/dev/null | sed 's/^/    /'; then
+          true
+        else
+          echo "    none or cannot query"
+        fi
+        echo "  sshd FDA entries (user TCC.db):"
+        if sqlite3 ~/Library/Application\ Support/com.apple.TCC/TCC.db \
+          "SELECT service,client,client_type,auth_value,auth_reason,hex(csreq) FROM access WHERE client LIKE '%ssh%' OR client LIKE '%sshd%'" 2>/dev/null | sed 's/^/    /'; then
+          true
+        else
+          echo "    none or cannot query"
+        fi
+        echo "  ALL FDA entries (kTCCServiceSystemPolicyAllFiles) — system:"
+        if sudo sqlite3 "/Library/Application Support/com.apple.TCC/TCC.db" \
+          "SELECT client,auth_value,auth_reason,CASE WHEN csreq IS NULL THEN 'NULL' ELSE 'BLOB('||length(csreq)||'b)' END FROM access WHERE service='kTCCServiceSystemPolicyAllFiles'" 2>/dev/null | sed 's/^/    /'; then
+          true
+        else
+          echo "    cannot query"
+        fi
+        echo "  ALL FDA entries (kTCCServiceSystemPolicyAllFiles) — user:"
+        if sqlite3 ~/Library/Application\ Support/com.apple.TCC/TCC.db \
+          "SELECT client,auth_value,auth_reason,CASE WHEN csreq IS NULL THEN 'NULL' ELSE 'BLOB('||length(csreq)||'b)' END FROM access WHERE service='kTCCServiceSystemPolicyAllFiles'" 2>/dev/null | sed 's/^/    /'; then
+          true
+        else
+          echo "    cannot query"
+        fi
+        item "TCC.db location on disk (for offline patching)"
+        if ! ls -la "/Library/Application Support/com.apple.TCC/TCC.db" 2>/dev/null | sed 's/^/  /'; then echo "  not found at system level"; fi
+        if ! ls -la ~/Library/Application\ Support/com.apple.TCC/TCC.db 2>/dev/null | sed 's/^/  /'; then echo "  not found at user level"; fi
+
+        section "DONE"
+        echo "Paste this output to help diagnose Nix installation state."
+        }
+
+        _dump 2>&1 | tee "{{.LOG}}"
+        echo ""
+        echo "saved to: {{.LOG}}"

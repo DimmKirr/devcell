@@ -19,6 +19,7 @@
     # OCI images alongside images/Dockerfile. See ./packages/image.nix.
     nix2container.url = "github:nlewo/nix2container";
     nix2container.inputs.nixpkgs.follows = "nixpkgs";
+
   };
 
   outputs = {
@@ -88,7 +89,7 @@
       build          = { description = "C/C++ build toolchain: clang/cmake/make/llvm/lld"; mcpServers = []; sizeMb = 1500; };
       desktop        = { description = "GUI desktop: Fluxbox WM, Xvfb display, VNC + RDP servers, PulseAudio, screenshot tools"; mcpServers = []; sizeMb = 1200; };
       electronics    = { description = "KiCad EDA, SPICE simulation, ESP32/Arduino dev, hardware sim, PCB MCP"; mcpServers = ["kicad-mcp"]; sizeMb = 800; };
-      financial      = { description = "Yahoo Finance, SEC EDGAR, FRED — market data, filings, economic time series"; mcpServers = ["yahoo-finance" "edgartools" "mcp-fredapi"]; sizeMb = 500; };
+      financial      = { description = "Yahoo Finance, SEC EDGAR, FRED — market data, filings, economic time series"; mcpServers = ["yahoo-finance" "edgartools" "mcp-fredapi" "firefly-iii"]; sizeMb = 500; };
       go             = { description = "Go toolchain: mise-managed runtime + golangci-lint, gopls, gotools"; mcpServers = []; sizeMb = 350; };
       graphics       = { description = "Vector graphics (Inkscape), raster (GIMP), Draw.io headless; MCP for Inkscape + GIMP"; mcpServers = ["inkscape-mcp" "gimp-mcp"]; sizeMb = 900; };
       infra          = { description = "IaC + Cloud: Terraform/OpenTofu, AWS CLI v2, Helm, Packer, Porter, MCPs for AWS API/CloudWatch/OpenTofu/Notion"; mcpServers = ["aws-api" "cloudwatch" "opentofu" "notion-api"]; sizeMb = 1200; };
@@ -103,7 +104,9 @@
       qa-tools       = { description = "MailSlurp — create inboxes, read/list/clear emails programmatically for QA"; mcpServers = ["mailslurp"]; sizeMb = 60; };
       scraping       = { description = "Patchright stealth browser MCP — anti-bot Chromium for Cloudflare/Kasada-grade sites"; mcpServers = ["playwright"]; sizeMb = 700; };
       security       = { description = "Vuln scanners + fuzzers + recon + RE + forensics (nuclei, nmap, sqlmap, ghidra, ...)"; mcpServers = []; sizeMb = 3500; };
+      social         = { description = "Mastodon — post, reply, follow, search, trending, timelines via MCP"; mcpServers = ["mastodon"]; sizeMb = 50; };
       travel         = { description = "Google Maps (geocoding, routing, places) + TripIt (trips, itineraries)"; mcpServers = ["google-maps" "tripit"]; sizeMb = 100; };
+      wine           = { description = "Wine (staging) + winetricks + deps for running Wails3 Windows apps under Wine"; mcpServers = []; sizeMb = 1800; };
     };
 
     # Modules 2.0 profiles — named compositions (CELL-63).
@@ -115,8 +118,8 @@
         # from fullstack
         "build" "go" "apple" "infra" "node" "project-management" "python" "qa-tools" "scraping"
         # ultimate additions
-        "android" "desktop" "electronics" "graphics" "news" "nixos"
-        "postgresql" "publishing" "security" "travel" "plex"
+        "desktop" "electronics" "graphics" "news" "nixos"
+        "postgresql" "publishing" "security" "social" "travel" "wine" "plex"
       ];
     };
 
@@ -132,6 +135,45 @@
           acc
           // {"${name}" = mkHome "x86_64-linux" mods;}
           // {"${name}-aarch64" = mkHome "aarch64-linux" mods;}
+      )
+      {}
+      stacks;
+
+    # macOS VM configs — same stacks for the 'devcell' user at /Users/devcell.
+    # Applied by cell init --engine=tart provisioning:
+    #   home-manager switch --flake .#devcell-ultimate-darwin
+    darwinVMUser = {username = "devcell"; homeDirectory = "/Users/devcell";};
+    mkDarwinVMHome = modules: let
+      system = "aarch64-darwin";
+      nixCfg = {
+        inherit system;
+        config.allowUnfree = true;
+        config.android_sdk.accept_license = true;
+      };
+      pkgsUnstable = import nixpkgs-unstable nixCfg;
+      pkgsEdge = import nixpkgs-edge nixCfg;
+    in
+      home-manager.lib.homeManagerConfiguration {
+        pkgs = import nixpkgs nixCfg;
+        extraSpecialArgs = {inherit self mcp-nixos pkgsUnstable pkgsEdge;};
+        modules =
+          [
+            {
+              home.stateVersion = "25.11";
+              home.username = darwinVMUser.username;
+              home.homeDirectory = darwinVMUser.homeDirectory;
+            }
+          ]
+          ++ modules;
+      };
+    mkAllDarwinVMConfigs =
+      lib.foldlAttrs
+      (
+        acc: name: mods: let
+          shortName = lib.removePrefix "devcell-" name;
+        in
+          acc
+          // {"${name}-darwin" = mkDarwinVMHome mods;}
       )
       {}
       stacks;
@@ -213,12 +255,107 @@
       python = [./modules/python.nix];
       qa-tools = [./modules/qa-tools.nix];
       scraping = [./modules/scraping];
+      publishing = [./modules/publishing.nix];
       security = [./modules/security.nix];
       shell = [./modules/shell.nix];
+      social = [./modules/social.nix];
       travel = [./modules/travel.nix];
+      wine = [./modules/wine.nix];
     };
 
-    homeConfigurations = mkAllConfigs // mkAllVagrantConfigs;
+    homeConfigurations = mkAllConfigs // mkAllVagrantConfigs // mkAllDarwinVMConfigs;
+
+    # ── cross-platform compatibility check ────────────────────────────────────
+    # Two-phase check, both keyed by eval system (aarch64-linux, aarch64-darwin).
+    #
+    # Phase 1 — platformCheck (inventory):
+    #   allowUnsupportedSystem=true so nothing errors out. Reports direct
+    #   home.packages meta.platforms against all target systems. Fast, but
+    #   misses transitive deps.
+    #
+    # Phase 2 — platformStrictCheck (deep eval):
+    #   NO allowUnsupportedSystem. Forces drvPath evaluation on every package,
+    #   which recursively evaluates all buildInputs/propagatedBuildInputs.
+    #   If a transitive dep doesn't support the target platform, nix throws.
+    #   Returns package count on success.
+    #
+    # Usage:
+    #   nix eval ./nixhome#platformCheck.aarch64-linux --json | jq '.[] | select(.platforms["aarch64-darwin"] == false)'
+    #   nix eval ./nixhome#platformStrictCheck.aarch64-darwin   # throws if any transitive dep is incompatible
+    platformCheck = let
+      targetSystems = ["aarch64-linux" "x86_64-linux" "aarch64-darwin"];
+      mkCheck = evalSystem: let
+        isDarwin = builtins.match ".*-darwin" evalSystem != null;
+        evalUser = if isDarwin then darwinVMUser else user;
+        nixCfg = {
+          system = evalSystem;
+          config = {
+            allowUnfree = true;
+            allowUnsupportedSystem = true;
+            android_sdk.accept_license = true;
+          };
+        };
+        cfg = home-manager.lib.homeManagerConfiguration {
+          pkgs = import nixpkgs nixCfg;
+          extraSpecialArgs = {
+            inherit self mcp-nixos;
+            pkgsUnstable = import nixpkgs-unstable nixCfg;
+            pkgsEdge = import nixpkgs-edge nixCfg;
+          };
+          modules = [
+            {
+              home.stateVersion = "25.11";
+              home.username = evalUser.username;
+              home.homeDirectory = evalUser.homeDirectory;
+            }
+          ] ++ stacks.devcell-ultimate;
+        };
+        packages = cfg.config.home.packages;
+        check = pkg: {
+          name = pkg.pname or pkg.name or "unknown";
+          platforms = builtins.listToAttrs (map (sys: {
+            name = sys;
+            value = let p = pkg.meta.platforms or []; in p == [] || builtins.elem sys p;
+          }) targetSystems);
+        };
+      in map check packages;
+    in {
+      aarch64-linux = mkCheck "aarch64-linux";
+      aarch64-darwin = mkCheck "aarch64-darwin";
+    };
+
+    platformStrictCheck = let
+      mkStrictCheck = evalSystem: let
+        isDarwin = builtins.match ".*-darwin" evalSystem != null;
+        evalUser = if isDarwin then darwinVMUser else user;
+        nixCfg = {
+          system = evalSystem;
+          config = {
+            allowUnfree = true;
+            android_sdk.accept_license = true;
+          };
+        };
+        cfg = home-manager.lib.homeManagerConfiguration {
+          pkgs = import nixpkgs nixCfg;
+          extraSpecialArgs = {
+            inherit self mcp-nixos;
+            pkgsUnstable = import nixpkgs-unstable nixCfg;
+            pkgsEdge = import nixpkgs-edge nixCfg;
+          };
+          modules = [
+            {
+              home.stateVersion = "25.11";
+              home.username = evalUser.username;
+              home.homeDirectory = evalUser.homeDirectory;
+            }
+          ] ++ stacks.devcell-ultimate;
+        };
+        packages = cfg.config.home.packages;
+      in builtins.deepSeq (map (p: p.drvPath) packages) (builtins.length packages);
+    in {
+      aarch64-linux = mkStrictCheck "aarch64-linux";
+      aarch64-darwin = mkStrictCheck "aarch64-darwin";
+    };
 
     # ── nix2container parallel image build (spike) ─────────────────────────────
     # Outputs (keyed on HOST system, not image target):
@@ -361,30 +498,40 @@
       "aarch64-darwin" = mkImagePackagesFor "aarch64-darwin" (linuxTargetFor "aarch64-darwin");
     };
 
-    # macOS VM (Vagrant/UTM) — applied via: darwin-rebuild switch --flake .#macOS
-    darwinConfigurations.macOS = nix-darwin.lib.darwinSystem {
-      system = "aarch64-darwin";
-      modules = [
-        ./hosts/macos/default.nix
-        home-manager.darwinModules.home-manager
-        {
-          # Pass flake inputs into home-manager modules (needed by base.nix → managed-*.nix)
-          home-manager.extraSpecialArgs = {
-            inherit self mcp-nixos;
-            pkgsUnstable = import nixpkgs-unstable {
-              system = "aarch64-darwin";
-              config.allowUnfree = true;
+    # macOS VM (cell init/build --engine=tart) — per-stack nix-darwin configs.
+    # Applied by provisioning: nix run nix-darwin -- switch --flake .#<stack>
+    # Each config uses the devcell user and imports the stack's module list.
+    darwinConfigurations = let
+      mkDarwinVMSystem = stackModules: nix-darwin.lib.darwinSystem {
+        system = "aarch64-darwin";
+        modules = [
+          ./hosts/macos/default.nix
+          home-manager.darwinModules.home-manager
+          {
+            home-manager.extraSpecialArgs = {
+              inherit self mcp-nixos;
+              pkgsUnstable = import nixpkgs-unstable {
+                system = "aarch64-darwin";
+                config.allowUnfree = true;
+              };
+              pkgsEdge = import nixpkgs-edge {
+                system = "aarch64-darwin";
+                config.allowUnfree = true;
+              };
             };
-            pkgsEdge = import nixpkgs-edge {
-              system = "aarch64-darwin";
-              config.allowUnfree = true;
+            home-manager.useGlobalPkgs = true;
+            home-manager.useUserPackages = true;
+            home-manager.users.${darwinVMUser.username} = {
+              imports = stackModules;
+              home.username = darwinVMUser.username;
+              home.homeDirectory = darwinVMUser.homeDirectory;
+              home.stateVersion = "25.11";
             };
-          };
-          home-manager.useGlobalPkgs = true;
-          home-manager.useUserPackages = true;
-          home-manager.users.vagrant = import ./hosts/macos/home.nix;
-        }
-      ];
-    };
+          }
+        ];
+      };
+    in lib.mapAttrs' (name: mods:
+      lib.nameValuePair (lib.removePrefix "devcell-" name) (mkDarwinVMSystem mods)
+    ) stacks;
   };
 }

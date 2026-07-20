@@ -54,7 +54,7 @@ Examples:
     cell models --source=cloud   # cloud models only
     cell models --debug`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		applyOutputFlags()
+		applyOutputFlagsWithLog("models")
 		ctx := context.Background()
 		baseURL := ollama.DefaultBaseURL
 

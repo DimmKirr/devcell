@@ -288,7 +288,10 @@ modules = ["yahoo-finance"]
 
 	// Drive LoadLayered with no env overrides — the only state that matters
 	// is the two TOMLs on disk.
-	merged := cfg.LoadLayered(globalPath, projectPath, func(string) string { return "" })
+	merged, err := cfg.LoadLayered(globalPath, projectPath, func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Stack from global (project didn't set one) — proves global was read.
 	if got := merged.Cell.ResolvedStack(); got != "dev" {
@@ -386,7 +389,10 @@ modules = ["`+innerModule+`"]
 	}
 
 	// ── Step 2: merge ────────────────────────────────────────────────────
-	merged := cfg.LoadLayered(globalPath, projectPath, func(string) string { return "" })
+	merged, err := cfg.LoadLayered(globalPath, projectPath, func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !contains(merged.Cell.Modules, outerModule) {
 		t.Fatalf("merged modules missing outer %q: %v", outerModule, merged.Cell.Modules)
 	}

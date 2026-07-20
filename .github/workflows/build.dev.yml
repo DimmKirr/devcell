@@ -30,7 +30,7 @@ env:
 jobs:
   secrets:
     name: Detect Secrets
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
         with:
@@ -57,10 +57,10 @@ jobs:
         include:
           # amd64 temporarily disabled while we debug the post-base
           # cache-publish hang on arm64. Re-enable once arm64 is healthy.
-          # - runner: ubuntu-latest
+          # - runner: ubuntu-24.04
           #   arch: amd64
           #   platform: linux/amd64
-          - runner: blacksmith-4vcpu-ubuntu-2404-arm
+          - runner: ubuntu-24.04-arm
             arch: arm64
             platform: linux/arm64
     runs-on: ${{ matrix.runner }}
@@ -76,9 +76,8 @@ jobs:
           sudo docker image prune -af
           df -h
 
-
-      - name: Setup Blacksmith Builder
-        uses: useblacksmith/setup-docker-builder@v1
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
@@ -107,52 +106,22 @@ jobs:
 
       # Cache push/pull goes through `cell nix-store {push,pull}` — a
       # cell subcommand using `pkg/v1/stream.NewLayer` from
-      # go-containerregistry. Layer is streamed (no temp file) and
-      # always single-gzipped on the wire — see CELL-293.
+      # go-containerregistry. Push splits the tar into ~1 GB chunks,
+      # each uploaded as a separate OCI layer (CELL-297). Pull
+      # extracts all non-base layers in order.
 
       # Cache the nix-store as a GHCR image. Lives in the SAME
       # `devcell-sh/devcell` GHCR package as the runtime images, with tag
       # prefix `nix-cache-` so it doesn't collide with stack tags.
-      - name: Stream-hydrate /nix volume from prior GHCR cache (if available)
+      - name: Hydrate /nix volume from GHCR cache
         if: inputs.skip_nix_cache != true
         run: |
-          set -eo pipefail
           HASH=${{ hashFiles('nixhome/**') }}
-          EXACT="${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:nix-cache-${{ matrix.arch }}-${HASH}"
-          LATEST="${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:nix-cache-${{ matrix.arch }}-latest"
-          # Pick the first candidate that resolves a manifest. `cell
-          # nix-store pull` itself fails cleanly on a missing/poisoned
-          # cache, and the workflow falls back to MISS — no upfront
-          # size probe needed.
-          IMG=""
-          for c in "$EXACT" "$LATEST"; do
-            if docker manifest inspect "$c" >/dev/null 2>&1; then
-              IMG="$c"
-              break
-            fi
-          done
-          if [ -z "$IMG" ]; then
-            echo "cache MISS — starting from empty volume"
-            exit 0
-          fi
-          echo "cache HIT: $IMG"
-          # `cell nix-store pull` streams $IMG's last layer directly
-          # into the named docker volume (internal gunzip + tar -x).
-          # On failure, fall back to MISS — the next publish overwrites
-          # the cache with the current encoding.
-          docker volume rm devcell-nix-store-${{ matrix.arch }} 2>/dev/null || true
-          docker volume create devcell-nix-store-${{ matrix.arch }} >/dev/null
-          if ./bin/cell nix-store pull \
-               --image "$IMG" \
-               --volume "devcell-nix-store-${{ matrix.arch }}"; then
-            docker run --rm -v devcell-nix-store-${{ matrix.arch }}:/nix:ro alpine \
-              sh -c 'echo "hydrated $(du -sh /nix | cut -f1)"'
-          else
-            echo "WARN: cache pull failed (likely encoding mismatch with legacy cache image)"
-            echo "      falling back to MISS — will rebuild and publish a fresh cache"
-            docker volume rm devcell-nix-store-${{ matrix.arch }} 2>/dev/null || true
-            docker volume create devcell-nix-store-${{ matrix.arch }} >/dev/null
-          fi
+          ./bin/cell nix-store pull \
+            --image "${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:nix-cache-${{ matrix.arch }}-${HASH}" \
+            --fallback "${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:nix-cache-${{ matrix.arch }}-latest" \
+            --volume "devcell-nix-store-${{ matrix.arch }}" \
+          || echo "WARN: cache pull failed, continuing with empty volume"
 
       # Build both stacks sequentially in the same job so the nix-store
       # volume accumulates derivations from both — single tar dump at job
@@ -163,6 +132,7 @@ jobs:
         env:
           DEVCELL_NIX_VOLUME: devcell-nix-store-${{ matrix.arch }}
           DEVCELL_NIXHOME_PATH: ${{ github.workspace }}/nixhome
+          DEVCELL_NIX_MAX_JOBS: "4"
         run: |
           BASE_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:v0.0.0-${{ matrix.arch }}-base"
           ./bin/cell build --thin --stack base --image "$BASE_TAG" --debug
@@ -176,16 +146,19 @@ jobs:
       # cache-bust mode is on or volume is empty.
       - name: Publish nix cache (post-base, interim)
         if: ${{ !cancelled() && inputs.skip_nix_cache != true }}
+        timeout-minutes: 45
         env:
           ARCH: ${{ matrix.arch }}
           HASH: ${{ hashFiles('nixhome/**') }}
           STAGE: post-base
+          DEVCELL_NIX_PUSH_DEBUG: "1"
         run: task nix-cache:publish
 
       - name: Build thin image (ultimate stack)
         env:
           DEVCELL_NIX_VOLUME: devcell-nix-store-${{ matrix.arch }}
           DEVCELL_NIXHOME_PATH: ${{ github.workspace }}/nixhome
+          DEVCELL_NIX_MAX_JOBS: "4"
         run: |
           ULT_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:v0.0.0-${{ matrix.arch }}-ultimate"
           ./bin/cell build --thin --stack ultimate --image "$ULT_TAG" --debug
@@ -201,10 +174,12 @@ jobs:
       # fuller closure. Idempotent — same composite action as above.
       - name: Publish nix cache (post-ultimate, final)
         if: ${{ !cancelled() && inputs.skip_nix_cache != true }}
+        timeout-minutes: 120
         env:
           ARCH: ${{ matrix.arch }}
           HASH: ${{ hashFiles('nixhome/**') }}
           STAGE: post-ultimate
+          DEVCELL_NIX_PUSH_DEBUG: "1"
         run: task nix-cache:publish
 
   docker-test:
@@ -215,9 +190,9 @@ jobs:
       matrix:
         include:
           # amd64 disabled in step with docker-build above.
-          # - runner: ubuntu-latest
+          # - runner: ubuntu-24.04
           #   arch: amd64
-          - runner: blacksmith-4vcpu-ubuntu-2404-arm
+          - runner: ubuntu-24.04-arm
             arch: arm64
     runs-on: ${{ matrix.runner }}
     steps:
@@ -251,42 +226,14 @@ jobs:
       - name: Build cell binary
         run: task cell:build
 
-      # Stream-pull the nix-store cache image's last layer into the
-      # per-arch volume via `cell nix-store pull` — same binary the
-      # publish step in docker-build uses, so push/pull encoding
-      # divergence is impossible by construction.
-      - name: Stream-pull /nix cache from GHCR into volume
+      - name: Hydrate /nix volume from GHCR cache
         run: |
-          set -eo pipefail
           HASH=${{ hashFiles('nixhome/**') }}
-          EXACT="${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:nix-cache-${{ matrix.arch }}-${HASH}"
-          LATEST="${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:nix-cache-${{ matrix.arch }}-latest"
-          # Pick the first candidate that resolves a manifest. cell
-          # nix-store pull fails cleanly on a missing cache, and the
-          # workflow falls back to MISS — no upfront probe needed.
-          IMG=""
-          for c in "$EXACT" "$LATEST"; do
-            if docker manifest inspect "$c" >/dev/null 2>&1; then
-              IMG="$c"
-              break
-            fi
-          done
-          if [ -z "$IMG" ]; then
-            echo "cache MISS — tests will run on empty /nix volume (lazy build during cell shell)"
-            exit 0
-          fi
-          echo "cache HIT: $IMG"
-          # If pull fails, tests fall back to an empty volume (lazy
-          # build during cell shell).
-          docker volume rm devcell-nix-store-${{ matrix.arch }} 2>/dev/null || true
-          docker volume create devcell-nix-store-${{ matrix.arch }} >/dev/null
-          if ! ./bin/cell nix-store pull \
-                 --image "$IMG" \
-                 --volume "devcell-nix-store-${{ matrix.arch }}"; then
-            echo "WARN: cache pull failed — tests will run on empty /nix"
-            docker volume rm devcell-nix-store-${{ matrix.arch }} 2>/dev/null || true
-            docker volume create devcell-nix-store-${{ matrix.arch }} >/dev/null
-          fi
+          ./bin/cell nix-store pull \
+            --image "${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:nix-cache-${{ matrix.arch }}-${HASH}" \
+            --fallback "${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:nix-cache-${{ matrix.arch }}-latest" \
+            --volume "devcell-nix-store-${{ matrix.arch }}" \
+          || echo "WARN: cache pull failed, tests will use empty volume"
 
       - name: Pull test images (base + ultimate)
         run: |
@@ -320,7 +267,7 @@ jobs:
     name: Docker Manifests
     needs: [docker-build]
     if: always() && needs.docker-build.result == 'success'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
       - name: Set lowercase image name
         run: echo "IMAGE_NAME_LC=${IMAGE_NAME,,}" >> $GITHUB_ENV
@@ -354,7 +301,7 @@ jobs:
   cell-build:
     name: Cell CLI Dev Build
     needs: secrets
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     env:
       RELEASE_VERSION: v0.0.0
     steps:
@@ -407,9 +354,9 @@ jobs:
       matrix:
         include:
           # amd64 disabled in step with docker-build matrix above.
-          # - runner: ubuntu-latest
+          # - runner: ubuntu-24.04
           #   arch: amd64
-          - runner: blacksmith-4vcpu-ubuntu-2404-arm
+          - runner: ubuntu-24.04-arm
             arch: arm64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
@@ -471,9 +418,9 @@ jobs:
       matrix:
         include:
           # amd64 disabled in step with docker-build matrix above.
-          # - runner: ubuntu-latest
+          # - runner: ubuntu-24.04
           #   arch: amd64
-          - runner: blacksmith-4vcpu-ubuntu-2404-arm
+          - runner: ubuntu-24.04-arm
             arch: arm64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 15

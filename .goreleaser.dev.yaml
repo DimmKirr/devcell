@@ -21,6 +21,7 @@ builds:
       - -s -w
         -X 'github.com/DimmKirr/devcell/internal/version.Version={{.Version}}'
         -X 'github.com/DimmKirr/devcell/internal/version.GitCommit={{.Env.SHORT_SHA}}'
+        -X 'github.com/DimmKirr/devcell/internal/version.BuildDate={{.Date}}'
 
 archives:
   - id: release_archive

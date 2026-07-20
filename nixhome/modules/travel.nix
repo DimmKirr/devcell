@@ -1,5 +1,11 @@
 # travel.nix — Travel and geospatial tools
-{pkgs, config, lib, ...}: let
+{
+  pkgs,
+  config,
+  lib,
+  ...
+}:
+let
   cfg = config.devcell.modules.travel;
   bin = config.devcell.managedMcp.nixBinPrefix;
   py = pkgs.python312Packages;
@@ -31,7 +37,7 @@
       hash = "sha256-DJQj0Xc6mFeoT7kv6vHPlojZZdOLHSF0DhRM+K2JKVY=";
     };
     pyproject = true;
-    build-system = [py.setuptools];
+    build-system = [ py.setuptools ];
     # Remove non-Python dirs that confuse setuptools flat-layout discovery
     postPatch = ''
       rm -rf nix docs scripts tests
@@ -43,7 +49,8 @@
     ];
     doCheck = false;
   };
-in {
+in
+{
   options.devcell.modules.travel = {
     enable = lib.mkEnableOption "Google Maps + TripIt MCP servers";
     meta = lib.mkOption {
@@ -51,7 +58,10 @@ in {
       readOnly = true;
       default = {
         description = "Google Maps (geocoding, routing, places) + TripIt (trips, itineraries)";
-        mcpServers = [ "google-maps" "tripit" ];
+        mcpServers = [
+          "google-maps"
+          "tripit"
+        ];
         sizeMb = 100;
       };
     };
@@ -67,7 +77,7 @@ in {
     # Requires GOOGLE_MAPS_API_KEY env var at runtime.
     devcell.managedMcp.servers."google-maps" = {
       command = "${bin}/mcp-google-map";
-      args = ["--stdio"];
+      args = [ "--stdio" ];
       env.GOOGLE_MAPS_API_KEY = "\${GOOGLE_MAPS_API_KEY}";
     };
 
@@ -75,7 +85,13 @@ in {
     # Requires TRIPIT_USERNAME, TRIPIT_PASSWORD, TRIPIT_CLIENT_ID, TRIPIT_CLIENT_SECRET env vars at runtime.
     devcell.managedMcp.servers."tripit" = {
       command = "${bin}/tripit-mcp";
-      args = [];
+      args = [ ];
+      env = {
+        TRIPIT_USERNAME = "\${TRIPIT_USERNAME}";
+        TRIPIT_PASSWORD = "\${TRIPIT_PASSWORD}";
+        TRIPIT_CLIENT_ID = "\${TRIPIT_CLIENT_ID}";
+        TRIPIT_CLIENT_SECRET = "\${TRIPIT_CLIENT_SECRET}";
+      };
     };
   };
 }

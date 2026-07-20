@@ -1011,3 +1011,45 @@ func TestArgv_PassesHostProjectDir(t *testing.T) {
 		t.Errorf("should pass DEVCELL_HOST_PROJECT_DIR for thin build path resolution, argv: %v", argv)
 	}
 }
+
+// --- DEVCELL_ARCH override ---
+
+func TestDetectArch_RespectsEnvOverrideAmd64(t *testing.T) {
+	t.Setenv("DEVCELL_ARCH", "amd64")
+	got := runner.DetectArch()
+	if got != "x86_64" {
+		t.Errorf("DEVCELL_ARCH=amd64 should yield x86_64, got %q", got)
+	}
+}
+
+func TestDetectArch_RespectsEnvOverrideArm64(t *testing.T) {
+	t.Setenv("DEVCELL_ARCH", "arm64")
+	got := runner.DetectArch()
+	if got != "aarch64" {
+		t.Errorf("DEVCELL_ARCH=arm64 should yield aarch64, got %q", got)
+	}
+}
+
+func TestDetectArch_IgnoresUnknownValue(t *testing.T) {
+	t.Setenv("DEVCELL_ARCH", "riscv64")
+	got := runner.DetectArch()
+	// Unknown values fall through to runtime detection
+	if got != "x86_64" && got != "aarch64" {
+		t.Errorf("unknown DEVCELL_ARCH should fall through to host detection, got %q", got)
+	}
+}
+
+func TestDockerPlatform_MatchesArch(t *testing.T) {
+	tests := []struct {
+		arch, want string
+	}{
+		{"x86_64", "linux/amd64"},
+		{"aarch64", "linux/arm64"},
+	}
+	for _, tt := range tests {
+		got := runner.DockerPlatform(tt.arch)
+		if got != tt.want {
+			t.Errorf("DockerPlatform(%q) = %q, want %q", tt.arch, got, tt.want)
+		}
+	}
+}

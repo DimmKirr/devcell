@@ -134,36 +134,36 @@ func TestApplyEnv_ImageTagOverride(t *testing.T) {
 func TestLoadFile_NixhomePath(t *testing.T) {
 	dir := t.TempDir()
 	p := writeTOML(t, dir, "test.toml", `
-[cell]
+[nix]
 nixhome = "~/dev/nixhome"
 `)
 	c, err := cfg.LoadFile(p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Cell.NixhomePath != "~/dev/nixhome" {
-		t.Errorf("want ~/dev/nixhome, got %q", c.Cell.NixhomePath)
+	if c.Nix.NixhomePath != "~/dev/nixhome" {
+		t.Errorf("want ~/dev/nixhome, got %q", c.Nix.NixhomePath)
 	}
 }
 
 func TestApplyEnv_NixhomePathOverride(t *testing.T) {
-	c := cfg.CellConfig{Cell: cfg.CellSection{NixhomePath: "~/dev/nixhome"}}
+	c := cfg.CellConfig{Nix: cfg.NixSection{NixhomePath: "~/dev/nixhome"}}
 	cfg.ApplyEnv(&c, func(k string) string {
 		if k == "DEVCELL_NIXHOME_PATH" {
 			return "/override/nixhome"
 		}
 		return ""
 	})
-	if c.Cell.NixhomePath != "/override/nixhome" {
-		t.Errorf("env should override toml: want /override/nixhome, got %q", c.Cell.NixhomePath)
+	if c.Nix.NixhomePath != "/override/nixhome" {
+		t.Errorf("env should override toml: want /override/nixhome, got %q", c.Nix.NixhomePath)
 	}
 }
 
 func TestApplyEnv_NixhomePathNoOverrideWhenEnvEmpty(t *testing.T) {
-	c := cfg.CellConfig{Cell: cfg.CellSection{NixhomePath: "~/dev/nixhome"}}
+	c := cfg.CellConfig{Nix: cfg.NixSection{NixhomePath: "~/dev/nixhome"}}
 	cfg.ApplyEnv(&c, func(string) string { return "" })
-	if c.Cell.NixhomePath != "~/dev/nixhome" {
-		t.Errorf("toml value should persist: want ~/dev/nixhome, got %q", c.Cell.NixhomePath)
+	if c.Nix.NixhomePath != "~/dev/nixhome" {
+		t.Errorf("toml value should persist: want ~/dev/nixhome, got %q", c.Nix.NixhomePath)
 	}
 }
 
@@ -190,7 +190,10 @@ image_tag = "v0.0.0-go"
 SHARED = "project"
 EXTRA = "yes"
 `)
-	c := cfg.LoadLayered(globalPath, projectPath, func(string) string { return "" })
+	c, err := cfg.LoadLayered(globalPath, projectPath, func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
 	if c.Cell.ImageTag != "v0.0.0-go" {
 		t.Errorf("image_tag: want v0.0.0-go, got %q", c.Cell.ImageTag)
 	}
@@ -949,7 +952,10 @@ modules = ["desktop"]
 stack = "go"
 modules = ["electronics"]
 `)
-	c := cfg.LoadLayered(globalPath, projectPath, func(string) string { return "" })
+	c, err := cfg.LoadLayered(globalPath, projectPath, func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
 	if c.Cell.Stack != "go" {
 		t.Errorf("stack: want go, got %q", c.Cell.Stack)
 	}
@@ -1494,5 +1500,443 @@ func TestMerge_StealthProjectWins(t *testing.T) {
 	}
 	if merged.Stealth.Platform != "macOS" {
 		t.Errorf("stealth.platform: project should win, got %q", merged.Stealth.Platform)
+	}
+}
+
+// --- [nix] section ---
+
+func TestLoadFile_NixSection(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[nix]
+image = "nixos/nix:2.35.0"
+nixhome = "~/dev/nixhome"
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Nix.Image != "nixos/nix:2.35.0" {
+		t.Errorf("nix.image: want nixos/nix:2.35.0, got %q", c.Nix.Image)
+	}
+	if c.Nix.NixhomePath != "~/dev/nixhome" {
+		t.Errorf("nix.nixhome: want ~/dev/nixhome, got %q", c.Nix.NixhomePath)
+	}
+}
+
+func TestLoadFile_NixSectionDefaultsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `[cell]`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Nix.Image != "" {
+		t.Errorf("expected empty nix.image when not set, got %q", c.Nix.Image)
+	}
+	if c.Nix.NixhomePath != "" {
+		t.Errorf("expected empty nix.nixhome when not set, got %q", c.Nix.NixhomePath)
+	}
+}
+
+func TestNixSection_ResolvedImage_Default(t *testing.T) {
+	n := cfg.NixSection{}
+	got := n.ResolvedImage()
+	if got != cfg.DefaultNixImage {
+		t.Errorf("want %q, got %q", cfg.DefaultNixImage, got)
+	}
+}
+
+func TestNixSection_ResolvedImage_Explicit(t *testing.T) {
+	n := cfg.NixSection{Image: "nixos/nix:2.35.0"}
+	got := n.ResolvedImage()
+	if got != "nixos/nix:2.35.0" {
+		t.Errorf("want nixos/nix:2.35.0, got %q", got)
+	}
+}
+
+func TestNixSection_ResolvedImage_EnvOverride(t *testing.T) {
+	t.Setenv("DEVCELL_NIX_IMAGE", "nixos/nix:2.36.0")
+	n := cfg.NixSection{Image: "nixos/nix:2.35.0"}
+	got := n.ResolvedImage()
+	if got != "nixos/nix:2.36.0" {
+		t.Errorf("env should win over toml, got %q", got)
+	}
+}
+
+func TestMerge_NixProjectWins(t *testing.T) {
+	global := cfg.CellConfig{Nix: cfg.NixSection{Image: "nixos/nix:2.34.7", NixhomePath: "/global/nixhome"}}
+	project := cfg.CellConfig{Nix: cfg.NixSection{Image: "nixos/nix:2.35.0", NixhomePath: "/project/nixhome"}}
+	merged := cfg.Merge(global, project)
+	if merged.Nix.Image != "nixos/nix:2.35.0" {
+		t.Errorf("project nix.image should win, got %q", merged.Nix.Image)
+	}
+	if merged.Nix.NixhomePath != "/project/nixhome" {
+		t.Errorf("project nix.nixhome should win, got %q", merged.Nix.NixhomePath)
+	}
+}
+
+func TestMerge_NixGlobalKeptWhenProjectEmpty(t *testing.T) {
+	global := cfg.CellConfig{Nix: cfg.NixSection{Image: "nixos/nix:2.34.7", NixhomePath: "/global/nixhome"}}
+	project := cfg.CellConfig{}
+	merged := cfg.Merge(global, project)
+	if merged.Nix.Image != "nixos/nix:2.34.7" {
+		t.Errorf("global nix.image should be preserved, got %q", merged.Nix.Image)
+	}
+	if merged.Nix.NixhomePath != "/global/nixhome" {
+		t.Errorf("global nix.nixhome should be preserved, got %q", merged.Nix.NixhomePath)
+	}
+}
+
+func TestApplyEnv_NixImageOverride(t *testing.T) {
+	c := cfg.CellConfig{Nix: cfg.NixSection{Image: "nixos/nix:2.34.7"}}
+	cfg.ApplyEnv(&c, func(k string) string {
+		if k == "DEVCELL_NIX_IMAGE" {
+			return "nixos/nix:2.36.0"
+		}
+		return ""
+	})
+	if c.Nix.Image != "nixos/nix:2.36.0" {
+		t.Errorf("env should override toml: want nixos/nix:2.36.0, got %q", c.Nix.Image)
+	}
+}
+
+func TestApplyEnv_NixhomePathOnNixSection(t *testing.T) {
+	c := cfg.CellConfig{}
+	cfg.ApplyEnv(&c, func(k string) string {
+		if k == "DEVCELL_NIXHOME_PATH" {
+			return "/env/nixhome"
+		}
+		return ""
+	})
+	if c.Nix.NixhomePath != "/env/nixhome" {
+		t.Errorf("DEVCELL_NIXHOME_PATH should set Nix.NixhomePath, got %q", c.Nix.NixhomePath)
+	}
+}
+
+func TestLoadFile_NixhomeFromNixSection(t *testing.T) {
+	dir := t.TempDir()
+	p := writeTOML(t, dir, "test.toml", `
+[nix]
+nixhome = "~/dev/nixhome"
+`)
+	c, err := cfg.LoadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Nix.NixhomePath != "~/dev/nixhome" {
+		t.Errorf("want ~/dev/nixhome, got %q", c.Nix.NixhomePath)
+	}
+}
+
+// --- TOML parse error surfacing ---
+
+// When the project .devcell.toml has an invalid TOML escape (e.g. \~ in a
+// volume mount path copied from a shell), LoadLayered must return an error
+// instead of silently discarding the entire project config. Without this,
+// [cell] stack = "ultimate" is silently dropped and the build falls back to
+// "base" — the user gets the wrong image with no warning.
+func TestLoadLayered_ProjectParseError_ReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	globalPath := writeTOML(t, dir, "global.toml", `[cell]`)
+	// \~ is an invalid TOML escape inside a basic (double-quoted) string
+	projectPath := writeTOML(t, dir, "project.toml", `[cell]
+stack = "ultimate"
+
+[[volumes]]
+mount = "/Users/dmitry/Library/Mobile\ Documents/com\~apple\~CloudDocs/foo:/bar"
+`)
+	_, err := cfg.LoadLayered(globalPath, projectPath, func(string) string { return "" })
+	if err == nil {
+		t.Fatal("LoadLayered must return an error when project TOML has a parse error; got nil")
+	}
+	if !strings.Contains(err.Error(), "project.toml") && !strings.Contains(err.Error(), "parse") {
+		t.Errorf("error should mention the file or parse failure: %v", err)
+	}
+}
+
+// Missing project file is NOT an error — it's the normal case for projects
+// without a .devcell.toml.
+func TestLoadLayered_MissingProjectFile_NoError(t *testing.T) {
+	dir := t.TempDir()
+	globalPath := writeTOML(t, dir, "global.toml", `[cell]
+stack = "go"
+`)
+	_, err := cfg.LoadLayered(globalPath, dir+"/nonexistent.toml", func(string) string { return "" })
+	if err != nil {
+		t.Errorf("missing project file should not be an error: %v", err)
+	}
+}
+
+// LoadFromOS must propagate project parse errors.
+// --- Background field (CELL-314) ---
+
+func TestResolvedBackground_DefaultFalse(t *testing.T) {
+	t.Setenv("DEVCELL_BACKGROUND", "")
+	c := cfg.CellSection{}
+	if c.ResolvedBackground() {
+		t.Error("ResolvedBackground() should default to false")
+	}
+}
+
+func TestResolvedBackground_TOMLTrue(t *testing.T) {
+	t.Setenv("DEVCELL_BACKGROUND", "")
+	c := cfg.CellSection{Background: boolPtr(true)}
+	if !c.ResolvedBackground() {
+		t.Error("ResolvedBackground() should return true when TOML sets background=true")
+	}
+}
+
+func TestResolvedBackground_TOMLFalse(t *testing.T) {
+	t.Setenv("DEVCELL_BACKGROUND", "")
+	c := cfg.CellSection{Background: boolPtr(false)}
+	if c.ResolvedBackground() {
+		t.Error("ResolvedBackground() should return false when TOML sets background=false")
+	}
+}
+
+func TestResolvedBackground_EnvOverridesToTrue(t *testing.T) {
+	t.Setenv("DEVCELL_BACKGROUND", "1")
+	c := cfg.CellSection{Background: boolPtr(false)}
+	if !c.ResolvedBackground() {
+		t.Error("DEVCELL_BACKGROUND=1 should override TOML background=false")
+	}
+}
+
+func TestResolvedBackground_EnvOverridesToFalse(t *testing.T) {
+	t.Setenv("DEVCELL_BACKGROUND", "0")
+	c := cfg.CellSection{Background: boolPtr(true)}
+	if c.ResolvedBackground() {
+		t.Error("DEVCELL_BACKGROUND=0 should override TOML background=true")
+	}
+}
+
+func TestLoadFile_BackgroundTrue(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[cell]
+background = true
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Cell.Background == nil || !*c.Cell.Background {
+		t.Error("expected background=true after parsing")
+	}
+}
+
+func TestLoadFile_BackgroundFalse(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[cell]
+background = false
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Cell.Background == nil || *c.Cell.Background {
+		t.Error("expected background=false after parsing")
+	}
+}
+
+func TestLoadFile_BackgroundDefaultNil(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `[cell]`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Cell.Background != nil {
+		t.Error("expected Background=nil when not set in TOML")
+	}
+}
+
+func TestMerge_BackgroundProjectWins(t *testing.T) {
+	global := cfg.CellConfig{Cell: cfg.CellSection{Background: boolPtr(false)}}
+	project := cfg.CellConfig{Cell: cfg.CellSection{Background: boolPtr(true)}}
+	merged := cfg.Merge(global, project)
+	if merged.Cell.Background == nil || !*merged.Cell.Background {
+		t.Error("project background=true should override global false")
+	}
+}
+
+func TestMerge_BackgroundGlobalKeptWhenProjectUnset(t *testing.T) {
+	global := cfg.CellConfig{Cell: cfg.CellSection{Background: boolPtr(true)}}
+	project := cfg.CellConfig{}
+	merged := cfg.Merge(global, project)
+	if merged.Cell.Background == nil || !*merged.Cell.Background {
+		t.Error("global background=true should be preserved when project unset")
+	}
+}
+
+// --- Tart SSH config fields ---
+
+func TestResolvedTartSSHPort_Default22(t *testing.T) {
+	c := cfg.CellSection{}
+	if p := c.ResolvedTartSSHPort(); p != 22 {
+		t.Errorf("expected default port 22, got %d", p)
+	}
+}
+
+func TestResolvedTartSSHPort_TOML(t *testing.T) {
+	c := cfg.CellSection{TartSSHPort: 2222}
+	if p := c.ResolvedTartSSHPort(); p != 2222 {
+		t.Errorf("expected port 2222, got %d", p)
+	}
+}
+
+func TestResolvedTartSSHPort_EnvOverrides(t *testing.T) {
+	t.Setenv("DEVCELL_TART_SSH_PORT", "3333")
+	c := cfg.CellSection{TartSSHPort: 2222}
+	if p := c.ResolvedTartSSHPort(); p != 3333 {
+		t.Errorf("expected env port 3333, got %d", p)
+	}
+}
+
+func TestResolvedTartSSHHost_Default(t *testing.T) {
+	c := cfg.CellSection{}
+	if h := c.ResolvedTartSSHHost(); h != "localhost" {
+		t.Errorf("expected default host localhost, got %q", h)
+	}
+}
+
+func TestResolvedTartSSHHost_TOML(t *testing.T) {
+	c := cfg.CellSection{TartSSHHost: "192.168.64.2"}
+	if h := c.ResolvedTartSSHHost(); h != "192.168.64.2" {
+		t.Errorf("expected host 192.168.64.2, got %q", h)
+	}
+}
+
+func TestResolvedTartSSHHost_EnvOverrides(t *testing.T) {
+	t.Setenv("DEVCELL_TART_SSH_HOST", "10.0.0.5")
+	c := cfg.CellSection{TartSSHHost: "192.168.64.2"}
+	if h := c.ResolvedTartSSHHost(); h != "10.0.0.5" {
+		t.Errorf("expected env host 10.0.0.5, got %q", h)
+	}
+}
+
+func TestResolvedTartSSHUser_Default(t *testing.T) {
+	c := cfg.CellSection{}
+	if u := c.ResolvedTartSSHUser(); u != "admin" {
+		t.Errorf("expected default user admin, got %q", u)
+	}
+}
+
+func TestResolvedTartSSHUser_TOML(t *testing.T) {
+	c := cfg.CellSection{TartSSHUser: "admin"}
+	if u := c.ResolvedTartSSHUser(); u != "admin" {
+		t.Errorf("expected user admin, got %q", u)
+	}
+}
+
+func TestResolvedTartSSHKey_DefaultEmpty(t *testing.T) {
+	c := cfg.CellSection{}
+	if k := c.ResolvedTartSSHKey(); k != "" {
+		t.Errorf("expected empty default key, got %q", k)
+	}
+}
+
+func TestResolvedTartSSHKey_TOML(t *testing.T) {
+	c := cfg.CellSection{TartSSHKey: "/path/to/key"}
+	if k := c.ResolvedTartSSHKey(); k != "/path/to/key" {
+		t.Errorf("expected key /path/to/key, got %q", k)
+	}
+}
+
+func TestResolvedTartSSHKey_EnvOverrides(t *testing.T) {
+	t.Setenv("DEVCELL_TART_SSH_KEY", "/env/key")
+	c := cfg.CellSection{TartSSHKey: "/toml/key"}
+	if k := c.ResolvedTartSSHKey(); k != "/env/key" {
+		t.Errorf("expected env key /env/key, got %q", k)
+	}
+}
+
+func TestLoadFile_TartSSH(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[cell]
+tart_ssh_port = 2222
+tart_ssh_host = "192.168.64.2"
+tart_ssh_user = "admin"
+tart_ssh_key = "/path/to/key"
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Cell.TartSSHPort != 2222 {
+		t.Errorf("expected port 2222, got %d", c.Cell.TartSSHPort)
+	}
+	if c.Cell.TartSSHHost != "192.168.64.2" {
+		t.Errorf("expected host 192.168.64.2, got %q", c.Cell.TartSSHHost)
+	}
+	if c.Cell.TartSSHUser != "admin" {
+		t.Errorf("expected user admin, got %q", c.Cell.TartSSHUser)
+	}
+	if c.Cell.TartSSHKey != "/path/to/key" {
+		t.Errorf("expected key /path/to/key, got %q", c.Cell.TartSSHKey)
+	}
+}
+
+func TestMerge_TartSSHProjectWins(t *testing.T) {
+	global := cfg.CellConfig{Cell: cfg.CellSection{TartSSHPort: 22, TartSSHHost: "global-host"}}
+	project := cfg.CellConfig{Cell: cfg.CellSection{TartSSHPort: 2222, TartSSHHost: "project-host"}}
+	merged := cfg.Merge(global, project)
+	if merged.Cell.TartSSHPort != 2222 {
+		t.Errorf("expected project port 2222, got %d", merged.Cell.TartSSHPort)
+	}
+	if merged.Cell.TartSSHHost != "project-host" {
+		t.Errorf("expected project host, got %q", merged.Cell.TartSSHHost)
+	}
+}
+
+func TestResolvedTartOCIImage_Default(t *testing.T) {
+	c := cfg.CellSection{}
+	if got := c.ResolvedTartOCIImage(); got != cfg.DefaultTartOCIImage {
+		t.Errorf("expected default %q, got %q", cfg.DefaultTartOCIImage, got)
+	}
+}
+
+func TestResolvedTartOCIImage_TOML(t *testing.T) {
+	c := cfg.CellSection{TartOCIImage: "ghcr.io/custom/image:v1"}
+	if got := c.ResolvedTartOCIImage(); got != "ghcr.io/custom/image:v1" {
+		t.Errorf("expected TOML value, got %q", got)
+	}
+}
+
+func TestResolvedTartOCIImage_EnvOverrides(t *testing.T) {
+	t.Setenv("DEVCELL_TART_OCI_IMAGE", "ghcr.io/env/image:v2")
+	c := cfg.CellSection{TartOCIImage: "ghcr.io/toml/image:v1"}
+	if got := c.ResolvedTartOCIImage(); got != "ghcr.io/env/image:v2" {
+		t.Errorf("expected env override, got %q", got)
+	}
+}
+
+func TestMerge_TartOCIImageProjectWins(t *testing.T) {
+	global := cfg.CellConfig{Cell: cfg.CellSection{TartOCIImage: "ghcr.io/global:v1"}}
+	project := cfg.CellConfig{Cell: cfg.CellSection{TartOCIImage: "ghcr.io/project:v2"}}
+	merged := cfg.Merge(global, project)
+	if merged.Cell.TartOCIImage != "ghcr.io/project:v2" {
+		t.Errorf("expected project OCI image, got %q", merged.Cell.TartOCIImage)
+	}
+}
+
+func TestLoadFromOS_ProjectParseError_ReturnsError(t *testing.T) {
+	dir := t.TempDir()
+	// Write a valid global config
+	globalDir := t.TempDir()
+	writeTOML(t, globalDir, "devcell.toml", `[cell]`)
+	// Write a broken project .devcell.toml
+	writeTOML(t, dir, ".devcell.toml", `[cell]
+stack = "ultimate"
+
+[[volumes]]
+mount = "/path/with\~invalid/escape:/bar"
+`)
+	_, err := cfg.LoadFromOSWithDirs(globalDir, dir)
+	if err == nil {
+		t.Fatal("LoadFromOSWithDirs must return an error when project TOML has a parse error")
 	}
 }

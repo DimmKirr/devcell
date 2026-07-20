@@ -45,10 +45,12 @@ func init() {
 	buildCmd.Flags().Bool("thin", false, "build thin image (default; kept for explicitness)")
 	buildCmd.Flags().Bool("no-thin", false, "build thick image (nix store baked into image)")
 	buildCmd.Flags().Bool("thick", false, "alias for --no-thin")
+	buildCmd.Flags().Bool("force", false, "recreate VM even if it already exists (tart only)")
+	buildCmd.Flags().Bool("no-cache", false, "re-download OCI image, bypassing tart cache (tart only)")
 }
 
 func runBuild(cmd *cobra.Command, _ []string) error {
-	applyOutputFlags()
+	applyOutputFlagsWithLog("build")
 	update, _ := cmd.Flags().GetBool("update")
 	noGenerate, _ := cmd.Flags().GetBool("no-generate")
 	impure, _ := cmd.Flags().GetBool("impure")
@@ -79,7 +81,11 @@ func runBuild(cmd *cobra.Command, _ []string) error {
 		} else {
 			c2, _ := config.LoadFromOS()
 			if c2.ConfigDir != "" {
-				thin = cfg.LoadFromOS(c2.ConfigDir, c2.BaseDir).Cell.ResolvedThin()
+				thinCfg, thinCfgErr := cfg.LoadFromOSWithDirs(c2.ConfigDir, c2.BaseDir)
+				if thinCfgErr != nil {
+					return fmt.Errorf("loading config: %w", thinCfgErr)
+				}
+				thin = thinCfg.Cell.ResolvedThin()
 			} else {
 				thin = true
 			}
@@ -93,6 +99,69 @@ func runBuild(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
+
+	// ── Non-Docker engines: dispatch before thin/pure/impure logic ────────────
+	engine := scanStringFlag("--engine")
+	if scanFlag("--macos") {
+		engine = "vagrant"
+	}
+
+	// ── tart engine ──────────────────────────────────────────────────────────
+	if engine == "tart" {
+		cellCfgTart, cfgErr := cfg.LoadFromOSWithDirs(c.ConfigDir, c.BaseDir)
+		if cfgErr != nil {
+			return fmt.Errorf("loading config: %w", cfgErr)
+		}
+		stack := cellCfgTart.Cell.ResolvedStack()
+		if s := cmd.Flags().Lookup("stack").Value.String(); s != "" {
+			stack = s
+		}
+		nixhomePath := c.BaseDir + "/nixhome"
+		if cellCfgTart.Nix.NixhomePath != "" {
+			nixhomePath = cellCfgTart.Nix.NixhomePath
+		}
+		force, _ := cmd.Flags().GetBool("force")
+		noCache, _ := cmd.Flags().GetBool("no-cache")
+		tartOCIImage := cellCfgTart.Cell.ResolvedTartOCIImage()
+		return runBuildTart(c.CellName, c.HostHome, c.BaseDir, stack, nil, nixhomePath, force, noCache, scanFlag("--dry-run"), tartOCIImage)
+	}
+
+	// ── Vagrant engine ────────────────────────────────────────────────────────
+	if engine == "vagrant" {
+		cellCfgVagrant, cfgErr := cfg.LoadFromOSWithDirs(c.ConfigDir, c.BaseDir)
+		if cfgErr != nil {
+			return fmt.Errorf("loading config: %w", cfgErr)
+		}
+		vagrantBox := scanStringFlag("--vagrant-box")
+		if vagrantBox == "" {
+			vagrantBox = "utm/bookworm"
+		}
+		vagrantProvider := scanStringFlag("--vagrant-provider")
+		if vagrantProvider == "" {
+			vagrantProvider = "utm"
+		}
+		nixhomeDir := resolveVagrantNixhome(c.BaseDir)
+		if nixhomeDir == "" {
+			nixhomeDir = c.BaseDir + "/nixhome"
+		}
+		vmConfigDir := os.Getenv("DEVCELL_CONFIG_DIR")
+		if vmConfigDir == "" {
+			vmConfigDir = c.HostHome + "/.config/devcell"
+		}
+		os.Remove(c.BuildDir + "/Vagrantfile")
+		if err := scaffold.ScaffoldLinuxVagrantfile(
+			c.BuildDir, vagrantBox, vagrantProvider,
+			cellCfgVagrant.Cell.ResolvedStack(),
+			c.BaseDir, nixhomeDir,
+			c.VNCPort, c.RDPPort,
+			c.HostHome, vmConfigDir,
+		); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: vagrantfile scaffold failed: %v\n", err)
+		}
+		return runVagrantBuild(c.BuildDir, c.BaseDir, cellCfgVagrant, update, scanFlag("--dry-run"))
+	}
+
+	// ── Docker engine (thin/pure/impure) ─────────────────────────────────────
 
 	// ── Thin image mode (CELL-156): nix store on Docker volume ──
 	if thin {
@@ -116,59 +185,22 @@ func runBuild(cmd *cobra.Command, _ []string) error {
 		return runBuildPure(c, stackOverride)
 	}
 
-	// ── Vagrant engine ────────────────────────────────────────────────────────
-	// cell build --engine=vagrant   → vagrant provision (re-applies nixhome flake)
-	// cell build --update --engine=vagrant → nix flake update inside VM, then provision
-	engine := scanStringFlag("--engine")
-	if scanFlag("--macos") {
-		engine = "vagrant"
-	}
-	if engine == "vagrant" {
-		cellCfgVagrant := cfg.LoadFromOS(c.ConfigDir, c.BaseDir)
-		vagrantBox := scanStringFlag("--vagrant-box")
-		if vagrantBox == "" {
-			vagrantBox = "utm/bookworm"
-		}
-		vagrantProvider := scanStringFlag("--vagrant-provider")
-		if vagrantProvider == "" {
-			vagrantProvider = "utm"
-		}
-		// Scaffold Vagrantfile idempotently (same as runVagrantAgent step 1).
-		nixhomeDir := resolveVagrantNixhome(c.BaseDir)
-		if nixhomeDir == "" {
-			nixhomeDir = c.BaseDir + "/nixhome"
-		}
-		vmConfigDir := os.Getenv("DEVCELL_CONFIG_DIR")
-		if vmConfigDir == "" {
-			vmConfigDir = c.HostHome + "/.config/devcell"
-		}
-		// Always regenerate Vagrantfile on build (ports, stack may have changed).
-		os.Remove(c.BuildDir + "/Vagrantfile")
-		if err := scaffold.ScaffoldLinuxVagrantfile(
-			c.BuildDir, vagrantBox, vagrantProvider,
-			cellCfgVagrant.Cell.ResolvedStack(),
-			c.BaseDir, nixhomeDir,
-			c.VNCPort, c.RDPPort,
-			c.HostHome, vmConfigDir,
-		); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: vagrantfile scaffold failed: %v\n", err)
-		}
-		return runVagrantBuild(c.BuildDir, c.BaseDir, cellCfgVagrant, update, scanFlag("--dry-run"))
-	}
-
 	// ── Docker engine (default) ───────────────────────────────────────────────
 	if err := config.EnsureBuildDir(c.BuildDir); err != nil {
 		return fmt.Errorf("ensure build dir: %w", err)
 	}
 
-	cellCfg := cfg.LoadFromOS(c.ConfigDir, c.BaseDir)
+	cellCfg, cfgErr := cfg.LoadFromOSWithDirs(c.ConfigDir, c.BaseDir)
+	if cfgErr != nil {
+		return fmt.Errorf("loading config: %w", cfgErr)
+	}
 	ux.Debugf("BuildDir: %s", c.BuildDir)
-	if cellCfg.Cell.NixhomePath != "" {
-		ux.Debugf("NixhomePath: %s (from config/env)", cellCfg.Cell.NixhomePath)
+	if cellCfg.Nix.NixhomePath != "" {
+		ux.Debugf("NixhomePath: %s (from config/env)", cellCfg.Nix.NixhomePath)
 	}
 
 	// Sync local nixhome into build context when nixhome path is set.
-	if nixhomePath := cellCfg.Cell.NixhomePath; nixhomePath != "" {
+	if nixhomePath := cellCfg.Nix.NixhomePath; nixhomePath != "" {
 		ux.Debugf("Syncing nixhome: %s → %s/nixhome/", nixhomePath, c.BuildDir)
 		if err := scaffold.SyncNixhome(nixhomePath, c.BuildDir); err != nil {
 			return fmt.Errorf("sync nixhome: %w", err)
@@ -236,7 +268,10 @@ func resolveStackOverride(flagValue string, getenv func(string) string) (string,
 // happens at the caller (runBuild) so this function can stay focused on the
 // build itself.
 func runBuildPure(c config.Config, stackOverride string) error {
-	cellCfg := cfg.LoadFromOS(c.ConfigDir, c.BaseDir)
+	cellCfg, cfgErr := cfg.LoadFromOSWithDirs(c.ConfigDir, c.BaseDir)
+	if cfgErr != nil {
+		return fmt.Errorf("loading config: %w", cfgErr)
+	}
 	stack := cellCfg.Cell.ResolvedStack()
 	if stackOverride != "" {
 		stack = stackOverride
@@ -247,7 +282,7 @@ func runBuildPure(c config.Config, stackOverride string) error {
 	}
 
 	resolved := runner.ResolvePureNixhomeRef(runner.PureNixhomeInputs{
-		TomlNixhome: cellCfg.Cell.NixhomePath,
+		TomlNixhome: cellCfg.Nix.NixhomePath,
 		BaseDir:     c.BaseDir,
 		Version:     version.Version,
 	})
@@ -264,6 +299,18 @@ func runBuildPure(c config.Config, stackOverride string) error {
 		ux.Debugf("Pure build using local nixhome: %s (synced from %s)", flakeRef, resolved.LocalPath)
 	} else {
 		ux.Debugf("Pure build using remote nixhome: %s", flakeRef)
+	}
+
+	// ── Platform compatibility preflight ──────────────────────────────────
+	{
+		targetSystem := runner.DetectArch() + "-linux"
+		preLabel := fmt.Sprintf("Platform compatibility check (%s)", targetSystem)
+		sp := ux.NewProgressSpinner(preLabel)
+		if err := runner.PreflightPlatformCheck(context.Background(), flakeRef, targetSystem); err != nil {
+			sp.Fail(preLabel)
+			return err
+		}
+		sp.Success(preLabel)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -330,18 +377,21 @@ func runBuildThin(c config.Config, stackOverride, imageOverride string, forceRec
 		return err
 	}
 
-	cellCfg := cfg.LoadFromOS(c.ConfigDir, c.BaseDir)
+	cellCfg, cfgErr := cfg.LoadFromOSWithDirs(c.ConfigDir, c.BaseDir)
+	if cfgErr != nil {
+		return fmt.Errorf("loading config: %w", cfgErr)
+	}
 	stack := cellCfg.Cell.ResolvedStack()
 	if stackOverride != "" {
 		stack = stackOverride
 	}
 
 	// Resolve nixhome source — shared with pure path:
-	//   1. [cell].nixhome (TOML/env) — local path
+	//   1. [nix].nixhome (TOML/env) — local path
 	//   2. <BaseDir>/nixhome on disk — dev/dogfood convenience
 	//   3. github:DimmKirr/devcell/<ver>?dir=nixhome — prebaked upstream (CELL-38)
 	resolved := runner.ResolvePureNixhomeRef(runner.PureNixhomeInputs{
-		TomlNixhome: cellCfg.Cell.NixhomePath,
+		TomlNixhome: cellCfg.Nix.NixhomePath,
 		BaseDir:     c.BaseDir,
 		Version:     version.Version,
 	})
@@ -379,6 +429,19 @@ func runBuildThin(c config.Config, stackOverride, imageOverride string, forceRec
 		return fmt.Errorf("symlink entrypoint.sh: %w", err)
 	}
 
+	// ── Platform compatibility preflight ──────────────────────────────────
+	{
+		nixhomeFlake := "path:" + filepath.Join(c.BuildDir, "nixhome")
+		targetSystem := runner.DetectArch() + "-linux"
+		preLabel := fmt.Sprintf("Platform compatibility check (%s)", targetSystem)
+		sp := ux.NewProgressSpinner(preLabel)
+		if err := runner.PreflightPlatformCheck(context.Background(), nixhomeFlake, targetSystem); err != nil {
+			sp.Fail(preLabel)
+			return err
+		}
+		sp.Success(preLabel)
+	}
+
 	// What we hand ThinBuildArgv is the OVERLAY dir (.devcell), mounted at
 	// /opt/nixhome inside the builder. home-manager target becomes
 	// `devcell-local` (matches GenerateFlakeNix's homeConfigurations output).
@@ -388,7 +451,7 @@ func runBuildThin(c config.Config, stackOverride, imageOverride string, forceRec
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	coreImage := runner.NixCoreImage
+	coreImage := cellCfg.Nix.ResolvedImage()
 	tag := runner.ResolveBuildTag(imageOverride, runner.UserImageTagThin())
 	volumeName := runner.ThinStoreVolume()
 	containerName := "devcell-thin-builder"
@@ -423,12 +486,8 @@ func runBuildThin(c config.Config, stackOverride, imageOverride string, forceRec
 	// container's metadata.json reports them truthfully. The HM target stays
 	// "local" — that's a flake-output naming detail, not user content.
 	modulesCSV := strings.Join(cellCfg.Cell.Modules, ",")
-	// CELL-293: bake the host's already-built `cell` binary into every
-	// produced devcell image. Resolved to an absolute path so the runner's
-	// docker bind mount succeeds. Empty (skip COPY) when the binary can't
-	// be located — local dev `go run` flow without a built binary.
-	cellBinaryPath := resolveCellBinaryPath()
-	argv := runner.ThinBuildArgvFull(coreImage, containerName, volumeName, nixhomeRef, tag, homeManagerTarget, runner.DetectArch(), stack, modulesCSV, cellBinaryPath)
+	projectName := filepath.Base(c.BaseDir)
+	argv := runner.ThinBuildArgvFull(coreImage, containerName, volumeName, nixhomeRef, tag, homeManagerTarget, runner.DetectArch(), stack, modulesCSV, projectName)
 
 	var buf bytes.Buffer
 	var out io.Writer = &buf
@@ -453,28 +512,6 @@ func runBuildThin(c config.Config, stackOverride, imageOverride string, forceRec
 	}
 	sp.Success(successLabel)
 	return nil
-}
-
-// resolveCellBinaryPath returns the absolute filesystem path of the running
-// cell binary so the thin builder can bake it into every produced image.
-// Tries os.Executable() first (works for installed binaries); falls back to
-// `bin/cell` in cwd (CI's `task cell:build` output). Returns "" when no
-// binary can be located — runner skips the COPY in that case.
-func resolveCellBinaryPath() string {
-	if exe, err := os.Executable(); err == nil {
-		if abs, err := filepath.Abs(exe); err == nil {
-			if _, err := os.Stat(abs); err == nil {
-				return abs
-			}
-		}
-	}
-	if cwd, err := os.Getwd(); err == nil {
-		candidate := filepath.Join(cwd, "bin", "cell")
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
-		}
-	}
-	return ""
 }
 
 // printBuildDebugSummary prints the post-build debug block: image ID +

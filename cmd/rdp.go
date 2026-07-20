@@ -39,7 +39,7 @@ func init() {
 }
 
 func runRDP(cmd *cobra.Command, args []string) error {
-	applyOutputFlags()
+	applyOutputFlagsWithLog("rdp")
 	list, _ := cmd.Flags().GetBool("list")
 	rdpGlobal, _ = cmd.Flags().GetBool("global")
 	rdpFullscreen, _ = cmd.Flags().GetBool("fullscreen")

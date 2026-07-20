@@ -24,7 +24,11 @@ in {
   config = {
     # pkgsEdge: shared install dirs (MISE_SHARED_INSTALL_DIRS) need mise
     # ≥2026.3.9 (jdx/mise#8581); nixpkgs stable/unstable lag behind.
-    home.packages = [ pkgsEdge.mise ];
+    # doCheck disabled: oci::layer test fails on aarch64-darwin (permission
+    # bits differ on JHFS+/APFS vs ext4 — upstream nixpkgs issue).
+    home.packages = [
+      (pkgsEdge.mise.overrideAttrs (old: { doCheck = false; }))
+    ];
 
     # User shims only. Baked tools are resolved natively by mise through
     # MISE_SHARED_INSTALL_DIRS (read-only baked install dir, set as image
@@ -37,6 +41,7 @@ in {
     home.file.".config/mise/config.toml" = lib.mkIf (cfg.tools != {}) {
       text = ''
         [settings]
+        experimental = true
         idiomatic_version_file = true
         idiomatic_version_file_enable_tools = ["node", "go"]
         trusted_config_paths = ["/"]
@@ -54,8 +59,8 @@ in {
     home.activation.writeToolVersions = lib.mkIf (cfg.tools != {}) (
       lib.hm.dag.entryAfter ["writeBoundary"] ''
         export PATH="/usr/bin:/bin:$PATH"
-        $DRY_RUN_CMD mkdir -p /etc/devcell
-        echo ${lib.escapeShellArg (toolVersionsContent + "\n")} | $DRY_RUN_CMD tee /etc/devcell/tool-versions > /dev/null
+        $DRY_RUN_CMD sudo mkdir -p /etc/devcell
+        echo ${lib.escapeShellArg (toolVersionsContent + "\n")} | $DRY_RUN_CMD sudo tee /etc/devcell/tool-versions > /dev/null
         $DRY_RUN_CMD cp /etc/devcell/tool-versions "$HOME/.tool-versions" 2>/dev/null || true
       ''
     );

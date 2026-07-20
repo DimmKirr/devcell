@@ -3,6 +3,7 @@ package ux
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -282,10 +283,55 @@ func GetMultiSelection(message string, options []string, defaultOptions []string
 	return selected, nil
 }
 
+var (
+	debugLogMu   sync.Mutex
+	debugLogFile *os.File
+)
+
+// InitDebugLog opens a timestamped log file under projectDir/.devcell/debug/
+// when Verbose is set. All subsequent Debugf calls write to both stdout and
+// this file. No-op when Verbose is false.
+func InitDebugLog(projectDir, commandName string) {
+	if !Verbose {
+		return
+	}
+	dir := filepath.Join(projectDir, ".devcell", "debug")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return
+	}
+	ts := time.Now().UTC().Format("20060102T150405Z")
+	path := filepath.Join(dir, ts+"-"+commandName+".log")
+	f, err := os.Create(path)
+	if err != nil {
+		return
+	}
+	debugLogMu.Lock()
+	debugLogFile = f
+	debugLogMu.Unlock()
+}
+
+// CloseDebugLog flushes and closes the debug log file opened by InitDebugLog.
+func CloseDebugLog() {
+	debugLogMu.Lock()
+	f := debugLogFile
+	debugLogFile = nil
+	debugLogMu.Unlock()
+	if f != nil {
+		f.Close()
+	}
+}
+
 // Debugf prints a formatted debug message when Verbose (--debug) is enabled.
 func Debugf(format string, a ...any) {
 	if Verbose {
-		fmt.Printf(" %s %s\n", prefix(StyleDebug, "DBG"), fmt.Sprintf(format, a...))
+		msg := fmt.Sprintf(format, a...)
+		fmt.Printf(" %s %s\n", prefix(StyleDebug, "DBG"), msg)
+		debugLogMu.Lock()
+		f := debugLogFile
+		debugLogMu.Unlock()
+		if f != nil {
+			fmt.Fprintln(f, msg)
+		}
 	}
 }
 

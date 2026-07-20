@@ -19,6 +19,9 @@ in {
   config = lib.mkIf cfg.enable {
     home.packages = with pkgs; [
       swift
+    ] ++ lib.optionals pkgs.stdenv.isLinux [
+      apfs-fuse  # read-only APFS mount on Linux (use: apfs-fuse /dev/loopNpM /mnt)
+      apfsprogs  # APFS filesystem tools: apfsck, mkapfs (use: inspect macOS disk images)
     ];
   };
 }

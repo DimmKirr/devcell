@@ -5,7 +5,6 @@
 {
   imports = [
     ./fullstack.nix
-    ../modules/android.nix
     ../modules/desktop
     ../modules/electronics.nix
     # CELL-293: financial temporarily removed from ultimate — yahoo-finance-mcp
@@ -20,13 +19,14 @@
     ../modules/publishing.nix
     ../modules/security.nix
     ../modules/shell.nix
+    ../modules/social.nix
     ../modules/travel.nix
+    ../modules/wine.nix
   ];
 
   # Enable every opt-in module imported above (or transitively via fullstack).
   # fullstack already enables: build, go, apple, infra, node, project-management,
   # python, qa-tools, scraping.
-  devcell.modules.android.enable = true;
   devcell.modules.desktop.enable = true;
   devcell.modules.electronics.enable = true;
   devcell.modules.graphics.enable = true;
@@ -34,6 +34,8 @@
   devcell.modules.nixos.enable = true;
   devcell.modules.publishing.enable = true;
   devcell.modules.security.enable = true;
+  devcell.modules.social.enable = true;
   devcell.modules.travel.enable = true;
+  devcell.modules.wine.enable = true;
   devcell.modules.plex.enable = true;  # from ../modules/media
 }

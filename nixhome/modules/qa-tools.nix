@@ -1,5 +1,11 @@
 # qa-tools.nix — QA and testing MCP tools
-{pkgs, config, lib, ...}: let
+{
+  pkgs,
+  config,
+  lib,
+  ...
+}:
+let
   cfg = config.devcell.modules.qa-tools;
   bin = config.devcell.managedMcp.nixBinPrefix;
   py = pkgs.python312Packages;
@@ -14,7 +20,7 @@
       version = "17.3.0";
       hash = "sha256-HKkz22A8RURbd1CZwIseIcAUUSxd+hWgoIe4o6ztfo8=";
     };
-    build-system = [py.setuptools];
+    build-system = [ py.setuptools ];
     dependencies = with py; [
       urllib3
       six
@@ -36,7 +42,7 @@
       hash = "sha256-heKuX4e7k0eDoUiT+v4n6Ydh3qve5Up9fU26ejp95Tw=";
     };
     pyproject = true;
-    build-system = [py.setuptools];
+    build-system = [ py.setuptools ];
     postPatch = ''
       rm -rf nix docs scripts tests
     '';
@@ -46,7 +52,8 @@
     ];
     doCheck = false;
   };
-in {
+in
+{
   options.devcell.modules.qa-tools = {
     enable = lib.mkEnableOption "MailSlurp email testing MCP";
     meta = lib.mkOption {
@@ -69,7 +76,8 @@ in {
     # Requires MAILSLURP_API_KEY env var at runtime.
     devcell.managedMcp.servers."mailslurp" = {
       command = "${bin}/mailslurp-mcp";
-      args = [];
+      args = [ ];
+      env.MAILSLURP_API_KEY = "\${MAILSLURP_API_KEY}";
     };
   };
 }

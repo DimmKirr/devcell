@@ -1,5 +1,11 @@
 # project-management.nix — Project management, time-tracking, and workflow-automation MCP servers
-{pkgs, config, lib, ...}: let
+{
+  pkgs,
+  config,
+  lib,
+  ...
+}:
+let
   cfg = config.devcell.modules.project-management;
   bin = config.devcell.managedMcp.nixBinPrefix;
   # hubstaff-mcp: Python MCP server for Hubstaff time tracking and project management.
@@ -15,7 +21,7 @@
       hash = "sha256-zV1/SGezx2ZynK+YnhCiQWIqPQFxtVyy8jiWZx/PULA=";
     };
     pyproject = true;
-    build-system = [pkgs.python3Packages.hatchling];
+    build-system = [ pkgs.python3Packages.hatchling ];
     dependencies = with pkgs.python3Packages; [
       mcp
       httpx
@@ -45,10 +51,14 @@
     # its native binary; nixpkgs' esbuild version drifts from upstream's pin and
     # the script throws. The package's own `npm run build` still runs (driven
     # separately by buildNpmPackage), so TS→JS compilation is unaffected.
-    npmFlags = ["--legacy-peer-deps" "--ignore-scripts"];
+    npmFlags = [
+      "--legacy-peer-deps"
+      "--ignore-scripts"
+    ];
     nodejs = pkgs.nodejs_22;
   };
-in {
+in
+{
   options.devcell.modules.project-management = {
     enable = lib.mkEnableOption "Hubstaff + n8n + Linear + Atlassian MCP servers";
     meta = lib.mkOption {
@@ -56,7 +66,12 @@ in {
       readOnly = true;
       default = {
         description = "Hubstaff time tracking, n8n workflows, Linear (HTTP), Atlassian Jira/Confluence (HTTP)";
-        mcpServers = [ "hubstaff-mcp" "n8n" "linear-server" "atlassian" ];
+        mcpServers = [
+          "hubstaff-mcp"
+          "n8n"
+          "linear-server"
+          "atlassian"
+        ];
         sizeMb = 250;
       };
     };
@@ -64,14 +79,14 @@ in {
 
   config = lib.mkIf cfg.enable {
     home.packages = [
-      hubstaffMcp  # Hubstaff MCP server for time tracking (use: hubstaff-mcp)
-      n8nMcp       # n8n MCP server for workflow automation (use: n8n-mcp)
+      hubstaffMcp # Hubstaff MCP server for time tracking (use: hubstaff-mcp)
+      n8nMcp # n8n MCP server for workflow automation (use: n8n-mcp)
     ];
 
     devcell.managedMcp.servers."hubstaff-mcp" = {
       command = "${bin}/hubstaff-mcp";
-      args = [];
-      # Requires HUBSTAFF_REFRESH_TOKEN env var at runtime (personal access token)
+      args = [ ];
+      env.HUBSTAFF_REFRESH_TOKEN = "\${HUBSTAFF_REFRESH_TOKEN}";
     };
 
     # Linear — remote HTTP MCP server.
@@ -96,7 +111,7 @@ in {
     # The \${VAR} escape produces literal ${VAR} in the generated JSON, which Claude expands at spawn time.
     devcell.managedMcp.servers."n8n" = {
       command = "${bin}/n8n-mcp";
-      args = [];
+      args = [ ];
       env = {
         N8N_API_URL = "\${N8N_API_URL}";
         N8N_API_KEY = "\${N8N_API_KEY}";
