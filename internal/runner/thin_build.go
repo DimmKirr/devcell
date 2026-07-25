@@ -254,13 +254,21 @@ HM_GENERATION=$(readlink -f /opt/devcell/.local/state/nix/profiles/home-manager)
 
 # Pin the resolved store paths as persistent GC roots on the shared volume
 # so nix-collect-garbage from another container cannot reap the targets our
-# baked-in symlinks depend on (CELL-320). Named per-project + hmTarget + arch
-# so different projects preserve their own derivations independently.
+# baked-in symlinks depend on (CELL-320). Keyed by the nix store path hash
+# (CELL-331) — encodes stack+modules+arch+nixpkgs, dedupes identical configs.
+HM_PROFILE_HASH=$(basename "$HM_PROFILE" | cut -d- -f1)
 mkdir -p /nix/var/nix/gcroots/devcell
-ln -sfT "$HM_PROFILE" /nix/var/nix/gcroots/devcell/%s-%s%s-profile
+ln -sfT "$HM_PROFILE" /nix/var/nix/gcroots/devcell/${HM_PROFILE_HASH}-profile
 if [ -n "$HM_GENERATION" ] && [ -d "$HM_GENERATION" ]; then
-  ln -sfT "$HM_GENERATION" /nix/var/nix/gcroots/devcell/%s-%s%s-generation
+  ln -sfT "$HM_GENERATION" /nix/var/nix/gcroots/devcell/${HM_PROFILE_HASH}-generation
 fi
+cat > /nix/var/nix/gcroots/devcell/${HM_PROFILE_HASH}-meta <<METAEOF
+project=%s
+stack=$DEVCELL_STACK
+modules=$DEVCELL_MODULES
+profile=$HM_PROFILE
+built=$(date -u +%%Y-%%m-%%dT%%H:%%M:%%SZ)
+METAEOF
 
 # Source home-manager session vars (sets NIX_LD for nix-ld)
 HM_VARS="$HM_PROFILE/etc/profile.d/hm-session-vars.sh"
@@ -366,8 +374,7 @@ echo "Done — thin image: %s"`,
 		stack,           // export DEVCELL_STACK
 		modules,         // export DEVCELL_MODULES
 		flakeArg, hmTarget, archSuffix, // home-manager switch
-		projectName, hmTarget, archSuffix, // /nix/var/nix/gcroots/devcell/<project>-<hmTarget><arch>-profile
-		projectName, hmTarget, archSuffix, // /nix/var/nix/gcroots/devcell/<project>-<hmTarget><arch>-generation
+		projectName,     // ${HM_PROFILE_HASH}-meta: project=<projectName>
 		coreImage,       // FROM <coreImage> (inner Dockerfile)
 		hmTarget,        // ENV DEVCELL_PROFILE=devcell-<hmTarget>
 		stack,           // ENV DEVCELL_STACK

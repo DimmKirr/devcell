@@ -248,7 +248,16 @@ func TestBuildNixPruneSteps_Default_DarwinUsesSudoSSHToLinuxBuilder(t *testing.T
 	}
 }
 
-func TestBuildNixPruneSteps_Default_LinuxRunsLocally(t *testing.T) {
+// `cell build prune --pure` on Linux (default, no --force) runs safe
+// project-aware GC: remove only orphaned profile generations that aren't
+// protected by project-scoped GC roots under /nix/var/nix/gcroots/devcell/,
+// then `nix-store --gc`. This is safe for shared Docker volumes where
+// multiple containers use the same /nix store. See CELL-320.
+//
+// Blanket `nix-collect-garbage -d` is unsafe in this context because it
+// deletes all non-current generations, including home-manager-files
+// derivations that other containers' dotfiles symlink into.
+func TestBuildNixPruneSteps_Default_LinuxSafeGC(t *testing.T) {
 	opts := runner.PruneOpts{
 		GOOS: "linux",
 		Pure: true,
@@ -266,23 +275,36 @@ func TestBuildNixPruneSteps_Default_LinuxRunsLocally(t *testing.T) {
 		}
 	}
 
-	// Must run nix-collect-garbage -d and nix-store --optimise locally.
-	gotGC := false
-	gotOptimise := false
+	// The safe GC step runs via docker run with the nix volume (CELL-333).
+	var script string
 	for _, s := range steps {
 		joined := strings.Join(s.Argv, " ")
-		if strings.Contains(joined, "nix-collect-garbage") && strings.Contains(joined, "-d") {
-			gotGC = true
-		}
-		if strings.Contains(joined, "nix-store") && strings.Contains(joined, "--optimise") {
-			gotOptimise = true
+		if strings.Contains(joined, "docker") && strings.Contains(joined, "run") {
+			for i, a := range s.Argv {
+				if a == "-c" && i+1 < len(s.Argv) {
+					script = s.Argv[i+1]
+				}
+			}
 		}
 	}
-	if !gotGC {
-		t.Errorf("local nix-collect-garbage -d not found: %+v", steps)
+	if script == "" {
+		t.Fatalf("no docker run step with sh -c found: %+v", steps)
 	}
-	if !gotOptimise {
-		t.Errorf("local nix-store --optimise not found: %+v", steps)
+
+	// Script must reference project GC roots and use safe nix-store --gc.
+	mustContain := []string{
+		"gcroots/devcell",
+		"nix-store --gc",
+	}
+	for _, want := range mustContain {
+		if !strings.Contains(script, want) {
+			t.Errorf("safe GC script missing %q", want)
+		}
+	}
+
+	// Script must NOT use blanket nix-collect-garbage -d — that's force mode.
+	if strings.Contains(script, "nix-collect-garbage") {
+		t.Errorf("safe GC script must not use nix-collect-garbage (use --force for blanket cleanup)")
 	}
 }
 
@@ -490,8 +512,8 @@ func TestBuildPrunePrompt_AllModesContainWarningAndTarget(t *testing.T) {
 			name: "nix default linux",
 			opts: runner.PruneOpts{GOOS: "linux", Pure: true},
 			mustHave: []string{
-				"This will delete ALL",
-				"/nix/store",
+				"orphaned profile generations",
+				"project GC roots",
 				"Continue? [y/N]",
 			},
 		},
@@ -733,6 +755,100 @@ func TestRunPrune_NonIgnoredErrorAborts(t *testing.T) {
 	}
 	if calls != 2 {
 		t.Errorf("expected abort after step 2, got %d calls", calls)
+	}
+}
+
+// CELL-334: SafeNixGCScript should report stale roots (roots with metadata
+// files that have no matching running container). This enables drift detection.
+func TestSafeNixGCScript_ReportsStaleRoots(t *testing.T) {
+	if !strings.Contains(runner.SafeNixGCScript, "-meta") {
+		t.Error("SafeNixGCScript must read *-meta files to identify stale roots for cleanup (CELL-334)")
+	}
+}
+
+// CELL-334: SafeNixGCScript must clean up stale roots (roots whose -meta
+// file shows a project that no longer has a running container).
+func TestSafeNixGCScript_CleansStaleRoots(t *testing.T) {
+	if !strings.Contains(runner.SafeNixGCScript, "STALE") {
+		t.Error("SafeNixGCScript must track and report stale root count (CELL-334)")
+	}
+}
+
+// CELL-334: NixGCRootReportScript must report drift when multiple unique
+// hashes exist.
+func TestNixGCRootReportScript_ContainsDriftWarning(t *testing.T) {
+	if !strings.Contains(runner.NixGCRootReportScript, "drift") {
+		t.Error("NixGCRootReportScript must contain drift detection logic")
+	}
+	if !strings.Contains(runner.NixGCRootReportScript, "-meta") {
+		t.Error("NixGCRootReportScript must read -meta files for root attribution")
+	}
+}
+
+// CELL-334: Linux default nix prune plan must include a root report step
+// before the GC step.
+func TestBuildNixPruneSteps_Default_LinuxIncludesReportStep(t *testing.T) {
+	opts := runner.PruneOpts{
+		GOOS: "linux",
+		Pure: true,
+	}
+	steps := runner.BuildNixPruneSteps(opts)
+
+	var hasReport bool
+	for _, s := range steps {
+		joined := strings.Join(s.Argv, " ")
+		if strings.Contains(joined, "GC Root Report") {
+			hasReport = true
+		}
+	}
+	if !hasReport {
+		t.Error("Linux nix prune plan must include a GC root report step (CELL-334)")
+	}
+}
+
+// CELL-333: safe nix GC on Linux must run inside a container with the nix
+// volume mounted, not via `sudo sh -c` on the host. The host doesn't have
+// /nix or the GC roots — the script would either fail or operate in the
+// wrong namespace.
+func TestBuildNixPruneSteps_Default_LinuxRunsInContainer(t *testing.T) {
+	opts := runner.PruneOpts{
+		GOOS: "linux",
+		Pure: true,
+	}
+	steps := runner.BuildNixPruneSteps(opts)
+
+	// Must NOT use `sudo sh -c` for the safe GC step.
+	for _, s := range steps {
+		if len(s.Argv) >= 3 && s.Argv[0] == "sudo" && s.Argv[1] == "sh" && s.Argv[2] == "-c" {
+			t.Error("safe GC on Linux must NOT use `sudo sh -c` — " +
+				"runs in wrong mount namespace (CELL-333)")
+		}
+	}
+
+	// Must use `docker run` with the nix volume mounted.
+	var found bool
+	for _, s := range steps {
+		joined := strings.Join(s.Argv, " ")
+		if strings.Contains(joined, "docker") && strings.Contains(joined, "run") &&
+			strings.Contains(joined, "devcell-nix-store:/nix") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("safe GC step must run via `docker run` with devcell-nix-store:/nix volume")
+	}
+}
+
+// CELL-330: SafeNixGCScript must NOT touch gcroots/auto/ — those symlinks
+// point into per-container paths (/opt/devcell, /tmp/...) that are valid
+// inside the originating container but dangle from the host or any other
+// container. Deleting "broken" auto roots from the wrong namespace reaps
+// live containers' indirect roots.
+func TestSafeNixGCScript_DoesNotTouchAutoRoots(t *testing.T) {
+	if strings.Contains(runner.SafeNixGCScript, "gcroots/auto") {
+		t.Error("SafeNixGCScript must not reference gcroots/auto/ — " +
+			"auto roots are namespace-local and deleting them from " +
+			"a different container is destructive (CELL-330)")
 	}
 }
 

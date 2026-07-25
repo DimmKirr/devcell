@@ -236,6 +236,24 @@ SHIMEOF
           echo "ERROR: CELL-69 brand patch did NOT apply — CELL-150 patch signature may have changed"
           exit 1
         fi
+
+        # CELL-329: patchright's Chromium patches redirect page.evaluate()
+        # to an isolated V8 world. Init-script JS overrides (e.g.
+        # Object.defineProperty on Navigator.prototype) only take effect in
+        # the main world, so page.evaluate / browser_evaluate sees the real
+        # navigator.platform instead of the spoofed value.
+        # Fix: add the `platform` field to the Emulation.setUserAgentOverride
+        # CDP call. This overrides navigator.platform at the Chromium C++
+        # level, which applies to ALL execution contexts (main, isolated,
+        # workers). The legacy platform string is derived from
+        # userAgentMetadata.platform + .architecture.
+        ${pkgs.gnused}/bin/sed -i 's#acceptLanguage: options2.locale,#acceptLanguage: options2.locale, platform: (function(_m){return _m.platform==="macOS"?"MacIntel":_m.platform==="Windows"?"Win32":_m.platform==="Linux"?(_m.architecture==="arm"?"Linux aarch64":"Linux x86_64"):void 0})(Object.assign({},calculateUserAgentMetadata(options2),options2.userAgentMetadata||{})),#' "$CORE"
+        if ${pkgs.gnugrep}/bin/grep -q 'platform: (function(_m)' "$CORE"; then
+          echo "Patched coreBundle.js: _updateUserAgent injects navigator.platform CDP override (CELL-329)"
+        else
+          echo "ERROR: CELL-329 platform patch did NOT apply — acceptLanguage signature may have changed"
+          exit 1
+        fi
       else
         echo "WARNING: coreBundle.js not found at $CORE"
       fi

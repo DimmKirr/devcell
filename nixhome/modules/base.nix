@@ -113,6 +113,12 @@
         executable = true;
         source = ./fragments/05-shell-rc.sh;
       };
+      # GC root stamp — ensures every running container has its nix
+      # profile pinned on the shared volume (CELL-332).
+      ".config/devcell/entrypoint.d/07-gcroot.sh" = {
+        executable = true;
+        source = ./fragments/07-gcroot.sh;
+      };
       ".config/devcell/entrypoint.d/20-homedir.sh" = {
         executable = true;
         source = ./fragments/20-homedir.sh;

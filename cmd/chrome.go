@@ -32,6 +32,16 @@ cookies are exported as a Playwright storage-state.json that the cell
 mounts read-only — so authenticated sessions carry over to browser
 automation inside the container.
 
+Cookie flow:
+
+  1. You log in via a clean host-side Chrome (no CDP, no bot detection).
+  2. Cookies are extracted via CDP into ~/.devcell/<cell>/.playwright/storage-state.json.
+  3. patchright MCP is killed in every running cell that shares this cell-home.
+  4. Claude's MCP client respawns patchright, which reads --storage-state from
+     the fresh file and injects cookies into the in-memory BrowserContext.
+     The container's Chromium profile (~/.chrome/<app>/) receives the cookies
+     at runtime via Playwright — no file copy into the profile directory.
+
 Each app-name gets its own isolated Chrome profile stored at
 ~/.devcell/<cell>/.chrome/<app-name>/. When only one cell is running
 the app-name is optional. Pass a URL after -- to land directly on a
@@ -124,8 +134,6 @@ func runChrome(cmd *cobra.Command, args []string) error {
 	if chromeNoSync {
 		return nil
 	}
-
-	ux.Info("Cookies ready. Use Playwright to browse with your authenticated session.")
 
 	return nil
 }
@@ -250,6 +258,7 @@ func openExtractAndClose(profile, storageStatePath string, urls []string, noSync
 				sp.Fail(fmt.Sprintf("cookie extraction failed: %v", err))
 			} else {
 				sp.Success(fmt.Sprintf("Exported %d cookies for %s", count, sites))
+				ux.Info(fmt.Sprintf("Cookies saved to %s", storageStatePath))
 
 				// Kick patchright MCP in every running cell that shares this
 				// cell-home bind mount — they cached the pre-relog
@@ -270,7 +279,11 @@ func openExtractAndClose(profile, storageStatePath string, urls []string, noSync
 					killMcp:        dockerKillPatchrightMcp,
 				})
 				if len(kicked) > 0 {
-					ux.Debugf("kicked patchright MCP in %d cell(s): %v", len(kicked), kicked)
+					containerProfile := "/home/" + kickHostUser + "/.chrome/${APP_NAME:-cell}"
+					ux.Info(fmt.Sprintf("Restarted patchright MCP in %d cell(s) via `docker exec <id> pkill -f mcp-server-patchright`", len(kicked)))
+					ux.Info(fmt.Sprintf("MCP will inject cookies into %s on next browser tool call", containerProfile))
+				} else {
+					ux.Info("No running cells found — cookies will be loaded on next cell start")
 				}
 			}
 		}

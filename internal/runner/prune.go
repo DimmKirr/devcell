@@ -7,6 +7,94 @@ import (
 	"strings"
 )
 
+// SafeNixGCScript is the shell script that performs project-aware nix
+// garbage collection. It removes only orphaned profile generations that
+// aren't protected by project-scoped GC roots, then runs nix-store --gc.
+//
+// CELL-334: also reads *-meta files to identify and clean up stale roots
+// (roots whose metadata exists but whose profile target is dangling).
+// Reports stale root count for drift visibility.
+//
+// Exported for test assertions.
+const SafeNixGCScript = `set -e
+PROTECTED=""
+STALE=0
+if [ -d /nix/var/nix/gcroots/devcell ]; then
+  for root in /nix/var/nix/gcroots/devcell/*-profile; do
+    [ -L "$root" ] || continue
+    target=$(readlink "$root")
+    if [ -d "$target" ]; then
+      PROTECTED="$PROTECTED $target"
+    else
+      hash=$(basename "$root" | sed 's/-profile$//')
+      echo "stale root: $root -> $target (removing)"
+      rm -f "$root"
+      rm -f "/nix/var/nix/gcroots/devcell/${hash}-generation"
+      rm -f "/nix/var/nix/gcroots/devcell/${hash}-meta"
+      STALE=$((STALE + 1))
+    fi
+  done
+  for meta in /nix/var/nix/gcroots/devcell/*-meta; do
+    [ -f "$meta" ] || continue
+    hash=$(basename "$meta" | sed 's/-meta$//')
+    if [ ! -L "/nix/var/nix/gcroots/devcell/${hash}-profile" ]; then
+      echo "orphaned metadata: $meta (removing)"
+      rm -f "$meta"
+    fi
+  done
+fi
+if [ -z "$PROTECTED" ]; then
+  echo "No project GC roots found in /nix/var/nix/gcroots/devcell/ — skipping safe prune (use --force for blanket cleanup)"
+  exit 0
+fi
+if [ "$STALE" -gt 0 ]; then
+  echo "Cleaned $STALE stale root(s)"
+fi
+REMOVED=0
+for gen in /nix/var/nix/profiles/per-user/root/profile-*-link; do
+  [ -L "$gen" ] || continue
+  target=$(readlink "$gen")
+  if ! echo "$PROTECTED" | grep -qF "$target"; then
+    rm -v "$gen" && REMOVED=$((REMOVED + 1))
+  fi
+done
+echo "Removed $REMOVED orphaned profile generations"
+nix-store --gc`
+
+// NixGCRootReportScript prints the current GC root state: how many roots,
+// how many unique hashes, and details from each -meta file. Used by the
+// prune preflight to give drift visibility before destructive operations.
+// Exported for test assertions.
+const NixGCRootReportScript = `set -e
+echo "=== Nix GC Root Report ==="
+ROOT_COUNT=0
+HASHES=""
+for root in /nix/var/nix/gcroots/devcell/*-profile; do
+  [ -L "$root" ] || continue
+  ROOT_COUNT=$((ROOT_COUNT + 1))
+  h=$(basename "$root" | sed 's/-profile$//')
+  case " $HASHES " in
+    *" $h "*) ;;
+    *) HASHES="$HASHES $h" ;;
+  esac
+done
+UNIQUE=$(echo "$HASHES" | wc -w)
+echo "Roots: $ROOT_COUNT (${UNIQUE} unique profile hash(es))"
+for meta in /nix/var/nix/gcroots/devcell/*-meta; do
+  [ -f "$meta" ] || continue
+  h=$(basename "$meta" | sed 's/-meta$//')
+  proj=$(grep '^project=' "$meta" 2>/dev/null | cut -d= -f2)
+  stack=$(grep '^stack=' "$meta" 2>/dev/null | cut -d= -f2)
+  stamped=$(grep '^stamped=' "$meta" 2>/dev/null | cut -d= -f2)
+  echo "  $h: project=$proj stack=$stack stamped=$stamped"
+done
+if [ "$UNIQUE" -gt 1 ]; then
+  echo ""
+  echo "WARNING: config drift detected — $UNIQUE different profile hashes"
+  echo "  Different hashes mean different nixpkgs revisions anchored on disk."
+  echo "  Rebuild all cells with the same flake.lock to converge and reclaim space."
+fi`
+
 // `cell build prune` cleanup planner.
 //
 // Pure builders compose the ordered plan of commands for each prune mode.
@@ -126,14 +214,29 @@ func BuildNixPruneSteps(opts PruneOpts) []PruneStep {
 
 	if !opts.Force {
 		if opts.GOOS == "darwin" {
+			// Darwin: the linux-builder VM is isolated (not a shared Docker
+			// volume), so blanket GC is safe.
 			return []PruneStep{
 				{Argv: []string{"sudo", "ssh", host, "nix-collect-garbage -d && nix-store --optimise"}},
 				registryCleanup,
 			}
 		}
+		// Linux: show root report (drift detection, CELL-334), then run
+		// safe project-aware GC inside a container with the nix volume
+		// mounted (CELL-333).
 		return []PruneStep{
-			{Argv: []string{"sudo", "nix-collect-garbage", "-d"}},
-			{Argv: []string{"sudo", "nix-store", "--optimise"}},
+			{Argv: []string{
+				"docker", "run", "--rm",
+				"-v", DefaultThinStoreVolume + ":/nix",
+				NixCoreImage,
+				"sh", "-c", NixGCRootReportScript,
+			}, IgnoreError: true},
+			{Argv: []string{
+				"docker", "run", "--rm",
+				"-v", DefaultThinStoreVolume + ":/nix",
+				NixCoreImage,
+				"sh", "-c", SafeNixGCScript,
+			}},
 			registryCleanup,
 		}
 	}
@@ -317,8 +420,9 @@ func BuildPrunePrompt(opts PruneOpts) string {
 				host,
 			)
 		}
-		return "⚠  This will delete ALL unreferenced /nix/store paths and all but the\n" +
-			"   current profile generation.\n" +
+		return "⚠  This will remove orphaned profile generations not protected by\n" +
+			"   project GC roots in /nix/var/nix/gcroots/devcell/, then GC\n" +
+			"   unreferenced /nix/store paths. Use --force for blanket cleanup.\n" +
 			"   Target: local /nix/store\n" +
 			tail
 	}

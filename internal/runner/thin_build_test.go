@@ -396,7 +396,7 @@ func TestThinBuildArgv_ProfileSymlinkResolvesToStorePath(t *testing.T) {
 
 // A store path only reachable through a symlink baked inside an image is not
 // a GC root — `nix-collect-garbage` on the shared volume can't see through
-// image layers. Without a per-stack GC root, a later cleanup wipes the
+// image layers. Without a GC root, a later cleanup wipes the
 // home-manager-path our container depends on, breaking every already-built
 // image the next time it's started fresh.
 //
@@ -409,62 +409,67 @@ func TestThinBuildArgv_ProfilePinnedAsGCRoot(t *testing.T) {
 	if !strings.Contains(script, "/nix/var/nix/gcroots/devcell/") {
 		t.Error("builder must register the resolved home-manager profile as a GC root under /nix/var/nix/gcroots/devcell/ so the shared-volume GC does not reap it")
 	}
-
-	// Per-project + per-stack GC root name — different projects and stacks must
-	// not clobber each other's roots (CELL-320).
-	if !strings.Contains(script, "/nix/var/nix/gcroots/devcell/testproj-local-profile") {
-		t.Error("GC root name must be project-scoped: <project>-<hmTarget><arch>-profile")
-	}
 }
 
-// CELL-320: GC roots must be scoped by project name so containers from
-// different projects don't overwrite each other's roots. Without project
-// scoping, the last project to build wins — its ln -sfT overwrites the
-// previous project's root, and the next nix-collect-garbage reaps the
-// now-unrooted derivations.
-func TestThinBuildArgv_ProjectScopedGCRoots(t *testing.T) {
+// CELL-331: GC roots are keyed by the nix store path hash — the first
+// component of basename($HM_PROFILE). This encodes stack + modules + arch +
+// nixpkgs revision, so identical configs naturally dedupe while different
+// configs never clobber each other. Project name is NOT in the root name.
+func TestThinBuildArgv_HashKeyedGCRoots(t *testing.T) {
 	argv := ThinBuildArgvFull(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, "local", "x86_64", testStack, "", "myproject")
 	script := argv[len(argv)-1]
 
-	// Profile root must include project name.
-	if !strings.Contains(script, "/nix/var/nix/gcroots/devcell/myproject-local-profile") {
-		t.Error("GC root for profile must be project-scoped: /nix/var/nix/gcroots/devcell/<project>-<hmTarget><arch>-profile")
+	// Must derive hash from store path.
+	if !strings.Contains(script, `HM_PROFILE_HASH=$(basename "$HM_PROFILE" | cut -d- -f1)`) {
+		t.Error("builder must extract store path hash from HM_PROFILE basename")
 	}
 
-	// Generation root must include project name.
-	if !strings.Contains(script, "/nix/var/nix/gcroots/devcell/myproject-local-generation") {
-		t.Error("GC root for generation must be project-scoped: /nix/var/nix/gcroots/devcell/<project>-<hmTarget><arch>-generation")
+	// Root name must use the hash, not the project name.
+	if !strings.Contains(script, `gcroots/devcell/${HM_PROFILE_HASH}-profile`) {
+		t.Error("GC root for profile must be hash-keyed: ${HM_PROFILE_HASH}-profile")
+	}
+	if !strings.Contains(script, `gcroots/devcell/${HM_PROFILE_HASH}-generation`) {
+		t.Error("GC root for generation must be hash-keyed: ${HM_PROFILE_HASH}-generation")
+	}
+
+	// Must NOT contain project name in root path.
+	if strings.Contains(script, "gcroots/devcell/myproject-") {
+		t.Error("GC root name must NOT include project name (CELL-331 — hash-keyed)")
 	}
 }
 
-// Two different projects must produce different GC root paths.
-func TestThinBuildArgv_DifferentProjectsDifferentRoots(t *testing.T) {
+// CELL-331: identical configs from different projects produce the same
+// store path hash → same GC root symlinks (only metadata differs).
+func TestThinBuildArgv_IdenticalConfigsDedupeRoots(t *testing.T) {
 	argvA := ThinBuildArgvFull(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, "local", "x86_64", testStack, "", "alpha")
 	argvB := ThinBuildArgvFull(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, "local", "x86_64", testStack, "", "beta")
 	scriptA := argvA[len(argvA)-1]
 	scriptB := argvB[len(argvB)-1]
 
-	if !strings.Contains(scriptA, "alpha-local-profile") {
-		t.Error("project alpha must have its own GC root")
+	// Both scripts must use the same hash-based root naming (ln -sfT lines).
+	// The metadata file contains the project name so it differs, but the
+	// root symlinks themselves are identical.
+	rootLineA := extractBetween(scriptA, "HM_PROFILE_HASH=", "cat >")
+	rootLineB := extractBetween(scriptB, "HM_PROFILE_HASH=", "cat >")
+	if rootLineA == "" {
+		t.Fatal("could not extract GC root section from script A")
 	}
-	if !strings.Contains(scriptB, "beta-local-profile") {
-		t.Error("project beta must have its own GC root")
-	}
-	if strings.Contains(scriptA, "beta-local") {
-		t.Error("project alpha must not reference project beta's root")
+	if rootLineA != rootLineB {
+		t.Error("identical configs must produce identical GC root symlinks (hash-keyed, not project-keyed)")
 	}
 }
 
-// Arch suffix must appear in project-scoped GC root names.
-func TestThinBuildArgv_ProjectScopedGCRootsWithArch(t *testing.T) {
-	argv := ThinBuildArgvFull(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, "local", "aarch64", testStack, "", "myproject")
+// CELL-331: metadata file is stamped alongside the GC root so the reaper
+// can attribute roots to projects and detect lock drift.
+func TestThinBuildArgv_StampsMetadataFile(t *testing.T) {
+	argv := ThinBuildArgvFull(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, "local", "x86_64", testStack, "", "myproject")
 	script := argv[len(argv)-1]
 
-	if !strings.Contains(script, "/nix/var/nix/gcroots/devcell/myproject-local-aarch64-profile") {
-		t.Error("GC root for profile must include arch suffix for aarch64")
+	if !strings.Contains(script, "${HM_PROFILE_HASH}-meta") {
+		t.Error("builder must stamp a ${HM_PROFILE_HASH}-meta file alongside the GC root")
 	}
-	if !strings.Contains(script, "/nix/var/nix/gcroots/devcell/myproject-local-aarch64-generation") {
-		t.Error("GC root for generation must include arch suffix for aarch64")
+	if !strings.Contains(script, "myproject") {
+		t.Error("metadata file must contain the project name for attribution")
 	}
 }
 
@@ -473,6 +478,18 @@ func TestThinBuildArgv_ProjectScopedGCRootsWithArch(t *testing.T) {
 // by every `home-manager switch` from any container — leaving it on PATH
 // defeats the whole store-path-symlink fix because PATH lookup would still
 // resolve tools through the mutable slot before the immutable one.
+func extractBetween(s, start, end string) string {
+	i := strings.Index(s, start)
+	if i < 0 {
+		return ""
+	}
+	j := strings.Index(s[i:], end)
+	if j < 0 {
+		return s[i:]
+	}
+	return s[i : i+j]
+}
+
 func TestThinBuildArgv_RuntimePathExcludesSharedProfileSlot(t *testing.T) {
 	argv := ThinBuildArgv(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, testStack, "x86_64")
 	script := argv[len(argv)-1]
