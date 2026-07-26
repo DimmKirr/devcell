@@ -89,8 +89,9 @@ in
       fi
     done
 
-    # Stable symlink for mesa DRI drivers — avoids hardcoded nix store hash in 50-gui.sh.
+    # Stable symlinks for mesa — avoids hardcoded nix store hashes in 50-gui.sh.
     ln -sfT "${pkgs.mesa}/lib/dri" "$HOME/.mesa-dri"
+    ln -sfT "${pkgs.mesa}/share/glvnd/egl_vendor.d" "$HOME/.mesa-egl-vendor"
   '';
 
   # NIX_LD_LIBRARY_PATH for interactive shells (docker exec) that bypass the
@@ -157,6 +158,11 @@ in
     glew # OpenGL extension library (libglew2.2)
     libGLU # OpenGL utility library (libglu1-mesa)
     libtiff # TIFF image library (libtiff5)
+
+    # D-Bus session bus — SNI tray icons (Electron, modern GTK) need it
+    dbus
+    # SNI→XEmbed proxy — bridges modern tray icons (Wails, Electron, GTK3+) to IceWM's XEmbed tray
+    snixembed
 
     # GTK 3 — required by many GUI apps and dialogs
     gtk3
@@ -239,6 +245,15 @@ in
   # path; and register chromium-browser.desktop as the MIME default so the
   # xdg-open path also works for tools that bypass $BROWSER.
   home.sessionVariables.BROWSER = "chromium";
+
+  # Mesa llvmpipe software rendering — headless container has no GPU.
+  # Paths go through the profile symlink (stable across generations) rather
+  # than hardcoded store hashes that break on rebuild.
+  home.sessionVariables.LIBGL_ALWAYS_SOFTWARE = "1";
+  home.sessionVariables.GALLIUM_DRIVER = "llvmpipe";
+  home.sessionVariables.LIBGL_DRIVERS_PATH = "${config.home.profileDirectory}/lib/dri";
+  home.sessionVariables.__EGL_VENDOR_LIBRARY_DIRS = "${config.home.profileDirectory}/share/glvnd/egl_vendor.d";
+  home.sessionVariables.VK_ICD_FILENAMES = "${config.home.profileDirectory}/share/vulkan/icd.d/lvp_icd.${pkgs.stdenv.hostPlatform.uname.processor}.json";
 
   xdg.mimeApps = {
     enable = true;
@@ -437,7 +452,6 @@ in
     ".icewm/theme".text = "Theme=\"Icewm_Nord_style/default.theme\"\n";
     ".icewm/themes/Icewm_Nord_style".source = icewmTheme.themeDir;
     ".icewm/preferences".text = icewmTheme.preferences;
-    ".icewm/keys".text = icewmTheme.keys;
     ".icewm/menu".text = icewmTheme.mkMenu config;
     ".icewm/wallpaper.png".source = wallpaper;
     ".icewm/startup" = {

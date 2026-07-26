@@ -1541,7 +1541,7 @@ SHIMEOF
       export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
       export LD_LIBRARY_PATH="${runtimeLibPath}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
       # Mesa Lavapipe -- software Vulkan ICD for WebGL via ANGLE->Vulkan->lvp
-      export VK_ICD_FILENAMES="${pkgs.mesa.drivers}/share/vulkan/icd.d/lvp_icd.${pkgs.stdenv.hostPlatform.uname.processor}.json"
+      export VK_ICD_FILENAMES="${pkgs.mesa}/share/vulkan/icd.d/lvp_icd.${pkgs.stdenv.hostPlatform.uname.processor}.json"
 
       # Always use config and init-script from co-located share/ dir.
       # Strip any stale --config/--init-script from caller args (e.g. Claude Code

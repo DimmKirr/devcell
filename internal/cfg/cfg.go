@@ -421,8 +421,10 @@ func (a AwsSection) ResolvedReadOnly() bool {
 
 // GUISection holds [gui] config for desktop/window-manager settings.
 type GUISection struct {
-	Enabled *bool  `toml:"enabled"` // default: true (nil = not set → true)
-	WM      string `toml:"wm"`      // "icewm" (default) or "fluxbox"
+	Enabled    *bool  `toml:"enabled"`    // default: true (nil = not set → true)
+	WM         string `toml:"wm"`         // "icewm" (default) or "fluxbox"
+	Resolution string `toml:"resolution"` // logical resolution; default: "1920x1080x24"
+	Scale      int    `toml:"scale"`      // display scale factor (1=96dpi, 2=192dpi HiDPI); default: 1
 }
 
 // ResolvedEnabled returns the effective GUI setting: true unless explicitly set to false.
@@ -439,6 +441,54 @@ func (g GUISection) ResolvedWM() string {
 		return "icewm"
 	}
 	return g.WM
+}
+
+// ResolvedResolution returns the logical resolution: "1920x1080x24" unless explicitly set.
+func (g GUISection) ResolvedResolution() string {
+	if g.Resolution == "" {
+		return "1920x1080x24"
+	}
+	return g.Resolution
+}
+
+// ResolvedScale returns the display scale factor: 1 unless explicitly set.
+func (g GUISection) ResolvedScale() int {
+	if g.Scale <= 0 {
+		return 1
+	}
+	return g.Scale
+}
+
+// ResolvedDPI returns the X server DPI: 96 * scale.
+func (g GUISection) ResolvedDPI() int {
+	return 96 * g.ResolvedScale()
+}
+
+// ResolvedFramebufferResolution returns the physical Xvfb framebuffer size:
+// logical resolution multiplied by scale factor.
+func (g GUISection) ResolvedFramebufferResolution() string {
+	res := g.ResolvedResolution()
+	scale := g.ResolvedScale()
+	if scale == 1 {
+		return res
+	}
+	parts := strings.SplitN(res, "x", 3)
+	if len(parts) < 2 {
+		return res
+	}
+	w, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return res
+	}
+	h, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return res
+	}
+	depth := "24"
+	if len(parts) == 3 {
+		depth = parts[2]
+	}
+	return fmt.Sprintf("%dx%dx%s", w*scale, h*scale, depth)
 }
 
 // CellConfig is the merged configuration from all TOML layers.
@@ -652,6 +702,12 @@ func Merge(global, project CellConfig) CellConfig {
 	}
 	if project.GUI.WM != "" {
 		out.GUI.WM = project.GUI.WM
+	}
+	if project.GUI.Resolution != "" {
+		out.GUI.Resolution = project.GUI.Resolution
+	}
+	if project.GUI.Scale != 0 {
+		out.GUI.Scale = project.GUI.Scale
 	}
 
 	// Op documents: accumulate from both Documents and legacy Items, deduped.

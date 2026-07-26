@@ -10,15 +10,21 @@ notify gui.starting
 [ -f /etc/machine-id ] || dbus-uuidgen > /etc/machine-id 2>/dev/null || true
 
 DISPLAY_NUM=99
-RESOLUTION=1920x1080x24
+RESOLUTION="${DEVCELL_RESOLUTION:-1920x1080x24}"
+DPI="${DEVCELL_DPI:-96}"
+SCALE="${DEVCELL_SCALE:-1}"
+_PROFILE="/opt/devcell/.local/state/nix/profiles/profile"
 
 mkdir -p /tmp/.X11-unix
 chmod 1777 /tmp/.X11-unix
 
 # Mesa llvmpipe software rendering — enables GLX for GPU terminals (Kitty etc.)
+# These may already be set via OCI Env (pure) or home.sessionVariables (login shell);
+# re-export here for the entrypoint context where neither may have run yet.
 export LIBGL_ALWAYS_SOFTWARE=1
 export GALLIUM_DRIVER=llvmpipe
-export LIBGL_DRIVERS_PATH="/opt/devcell/.mesa-dri"
+export LIBGL_DRIVERS_PATH="$_PROFILE/lib/dri"
+export __EGL_VENDOR_LIBRARY_DIRS="${__EGL_VENDOR_LIBRARY_DIRS:-$_PROFILE/share/glvnd/egl_vendor.d}"
 
 # Root-cause fix moved to 06-nix-ldpath.sh + 05-shell-rc.sh: on pure images
 # the closure-based LD_LIBRARY_PATH is no longer exported at all (it was a
@@ -47,14 +53,56 @@ rm -f /tmp/.X${DISPLAY_NUM}-lock /tmp/.X11-unix/X${DISPLAY_NUM}
 # inherited controlling TTY makes Xvfb killable by signals the foreground
 # `cmd` (e.g. claude TUI) sends to its process group.
 # Output → /tmp/Xvfb.log so a crash isn't silent.
-setsid gosu "$USER" $_NIX_ENV Xvfb :${DISPLAY_NUM} -screen 0 ${RESOLUTION} -dpi 96 +extension GLX +render +iglx \
+setsid gosu "$USER" $_NIX_ENV Xvfb :${DISPLAY_NUM} -screen 0 ${RESOLUTION} -dpi ${DPI} +extension GLX +render +iglx \
     < /dev/null > /tmp/Xvfb.log 2>&1 &
 export DISPLAY=:${DISPLAY_NUM}
+export GDK_SCALE=${SCALE}
+export GDK_DPI_SCALE=1
+export QT_SCALE_FACTOR=${SCALE}
 # Wait for X server to accept connections (socket file appears before server is ready)
 for i in $(seq 1 40); do
     xset -display :${DISPLAY_NUM} q >/dev/null 2>&1 && break
     sleep 0.05
 done
+
+# D-Bus session bus — required for SNI tray icons (Electron, modern GTK/Qt apps).
+# Started before the WM so it and all child processes inherit the address.
+DBUS_DIR="/tmp/dbus"
+mkdir -p "$DBUS_DIR"
+pkill -u "$USER" -x dbus-daemon 2>/dev/null
+sleep 0.1
+rm -f "$DBUS_DIR/session_bus_socket"
+setsid gosu "$USER" $_NIX_ENV dbus-daemon \
+    --config-file="$_PROFILE/share/dbus-1/session.conf" \
+    --nofork --address="unix:path=$DBUS_DIR/session_bus_socket" \
+    < /dev/null > /tmp/dbus-session.log 2>&1 &
+export DBUS_SESSION_BUS_ADDRESS="unix:path=$DBUS_DIR/session_bus_socket"
+for i in $(seq 1 20); do
+    [ -S "$DBUS_DIR/session_bus_socket" ] && break
+    sleep 0.05
+done
+if [ -S "$DBUS_DIR/session_bus_socket" ]; then
+    log "D-Bus session bus ready (socket: $DBUS_DIR/session_bus_socket)"
+else
+    log "WARNING: D-Bus session bus socket not found — SNI tray icons may not work"
+fi
+
+_DBUS_RC_BLOCK="
+# -- D-Bus session bus (appended by 50-gui.sh) --
+export DBUS_SESSION_BUS_ADDRESS=\"unix:path=$DBUS_DIR/session_bus_socket\""
+for _rcfile in .zshrc .zshenv .profile .bashrc; do
+    [ -f "$HOME/$_rcfile" ] && echo "$_DBUS_RC_BLOCK" >> "$HOME/$_rcfile"
+done
+
+# SNI→XEmbed proxy — bridges modern tray icons (Wails, Electron, GTK3+/Qt)
+# to IceWM's XEmbed-only system tray. Must start after D-Bus, before the WM.
+if command -v snixembed >/dev/null 2>&1; then
+    log "Starting snixembed (SNI→XEmbed proxy)..."
+    pkill -u "$USER" -x snixembed 2>/dev/null
+    sleep 0.1
+    setsid gosu "$USER" $_NIX_ENV snixembed \
+        < /dev/null > /tmp/snixembed.log 2>&1 &
+fi
 
 # Load X resources (xterm dark theme, cursor color, fonts)
 # Deferred via background process: xrdb ChangeProperty requests sent from
@@ -111,8 +159,25 @@ export XDG_RUNTIME_DIR=\"$PULSE_DIR\""
     done
 fi
 
+# Persist HiDPI scale env vars for shells spawned outside the entrypoint
+_SCALE_RC_BLOCK="
+# -- HiDPI scaling (appended by 50-gui.sh) --
+export GDK_SCALE=${SCALE}
+export GDK_DPI_SCALE=1
+export QT_SCALE_FACTOR=${SCALE}"
+for _rcfile in .zshrc .zshenv .profile .bashrc; do
+    [ -f "$HOME/$_rcfile" ] && echo "$_SCALE_RC_BLOCK" >> "$HOME/$_rcfile"
+done
+
 if [ -f "$DEVCELL_HOME/.Xresources" ]; then
-    (sleep 1; xrdb -display :${DISPLAY_NUM} -merge "$DEVCELL_HOME/.Xresources" 2>/dev/null) &
+    _XRDB_OVERRIDE="Xft.dpi: ${DPI}"
+    if [ "$SCALE" -gt 1 ] 2>/dev/null; then
+        _XRDB_OVERRIDE="${_XRDB_OVERRIDE}
+XTerm*faceSize: $((11 * SCALE))
+XTerm*internalBorder: $((8 * SCALE))"
+    fi
+    (sleep 1; xrdb -display :${DISPLAY_NUM} -merge "$DEVCELL_HOME/.Xresources" 2>/dev/null; \
+     echo "$_XRDB_OVERRIDE" | xrdb -display :${DISPLAY_NUM} -merge 2>/dev/null) &
     disown
 fi
 
@@ -145,6 +210,35 @@ case "$DEVCELL_WM" in
     else
         echo "session.screen0.workspaceNames: ${WORKSPACE_NAME}" >> "$FLUXBOX_RC"
     fi
+
+    # HiDPI overrides for Fluxbox theme (appended to overlay)
+    if [ "$SCALE" -gt 1 ] 2>/dev/null; then
+        FLUXBOX_OVERLAY=/tmp/fluxbox-overlay
+        cp "$DEVCELL_HOME/.fluxbox/overlay" "$FLUXBOX_OVERLAY" 2>/dev/null || touch "$FLUXBOX_OVERLAY"
+        chmod u+w "$FLUXBOX_OVERLAY"
+        cat >> "$FLUXBOX_OVERLAY" <<HIDPI
+! -- HiDPI overrides (scale=${SCALE}, injected by 50-gui.sh) --
+toolbar.height:  $((35 * SCALE))
+window.title.height:  $((30 * SCALE))
+window.borderWidth:  $((3 * SCALE))
+menu.borderWidth:  $((3 * SCALE))
+menu.itemHeight:  $((28 * SCALE))
+menu.titleHeight:  $((32 * SCALE))
+toolbar.borderWidth:  0
+toolbar.clock.font:  Fira Sans-$((10 * SCALE)):semibold
+toolbar.iconbar.focused.font:  Fira Sans-$((10 * SCALE)):semibold
+toolbar.iconbar.unfocused.font:  Fira Sans-$((10 * SCALE)):semibold
+toolbar.workspace.font:  Fira Sans-$((10 * SCALE)):semibold
+window.label.focus.font:  Fira Sans-$((11 * SCALE)):bold
+window.label.unfocus.font:  Fira Sans-$((11 * SCALE))
+menu.frame.font:  Fira Sans-$((12 * SCALE))
+menu.title.font:  Fira Sans-$((14 * SCALE)):bold
+HIDPI
+        sed -i "s|session.styleOverlay:.*|session.styleOverlay: $FLUXBOX_OVERLAY|" "$FLUXBOX_RC"
+        sed -i "s|session.screen0.tab.width:.*|session.screen0.tab.width: $((64 * SCALE))|" "$FLUXBOX_RC"
+        sed -i "s|session.screen0.iconbar.iconTextPadding:.*|session.screen0.iconbar.iconTextPadding: $((10 * SCALE))|" "$FLUXBOX_RC"
+    fi
+
     log "Starting fluxbox (workspace: ${WORKSPACE_NAME})..."
     pkill -u "$USER" -x fluxbox 2>/dev/null
     sleep 0.2
@@ -167,11 +261,47 @@ case "$DEVCELL_WM" in
         gosu "$USER" $_NIX_ENV xsetroot -solid '#1e1e2e' 2>/dev/null || true
     fi
 
-    # Inject workspace name into preferences at runtime
+    # Inject workspace name and HiDPI overrides into preferences at runtime
     ICEWM_PREFS=/tmp/icewm-preferences
     cp "$DEVCELL_HOME/.icewm/preferences" "$ICEWM_PREFS"
     chmod u+w "$ICEWM_PREFS"
     echo "WorkspaceNames=\"${WORKSPACE_NAME}\"" >> "$ICEWM_PREFS"
+
+    if [ "$SCALE" -gt 1 ] 2>/dev/null; then
+        cat >> "$ICEWM_PREFS" <<HIDPI
+# -- HiDPI overrides (scale=${SCALE}, injected by 50-gui.sh) --
+TitleBarHeight=$((26 * SCALE))
+MenuIconSize=$((24 * SCALE))
+SmallIconSize=$((24 * SCALE))
+LargeIconSize=$((32 * SCALE))
+HugeIconSize=$((48 * SCALE))
+BorderSizeX=$((1 * SCALE))
+BorderSizeY=$((1 * SCALE))
+DlgBorderSizeX=$((1 * SCALE))
+DlgBorderSizeY=$((1 * SCALE))
+ScrollBarX=$((16 * SCALE))
+ScrollBarY=$((16 * SCALE))
+TitleBarJustify=$((54 * SCALE))
+TitleFontNameXft="Fira Sans:size=$((11 * SCALE)):bold"
+MenuFontNameXft="Fira Sans:size=$((12 * SCALE))"
+StatusFontNameXft="Fira Sans:size=$((10 * SCALE)):bold"
+QuickSwitchFontNameXft="Fira Sans:size=$((10 * SCALE))"
+NormalButtonFontNameXft="Fira Sans:size=$((10 * SCALE))"
+ActiveButtonFontNameXft="Fira Sans:size=$((10 * SCALE))"
+NormalTaskBarFontNameXft="Fira Sans:size=$((10 * SCALE))"
+ActiveTaskBarFontNameXft="Fira Sans:size=$((10 * SCALE)):bold"
+ToolButtonFontNameXft="Fira Sans:size=$((10 * SCALE))"
+NormalWorkspaceFontNameXft="Fira Sans:size=$((10 * SCALE))"
+ActiveWorkspaceFontNameXft="Fira Sans:size=$((10 * SCALE)):bold"
+MinimizedWindowFontNameXft="Fira Sans:size=$((10 * SCALE))"
+ListBoxFontNameXft="Fira Sans:size=$((10 * SCALE))"
+ToolTipFontNameXft="Fira Sans:size=$((10 * SCALE))"
+ClockFontNameXft="Fira Sans:size=$((10 * SCALE)):bold"
+ApmFontNameXft="Fira Sans:size=$((10 * SCALE)):bold"
+InputFontNameXft="Fira Sans:size=$((10 * SCALE))"
+LabelFontNameXft="Fira Sans:size=$((10 * SCALE))"
+HIDPI
+    fi
 
     log "Starting icewm (workspace: ${WORKSPACE_NAME})..."
     pkill -u "$USER" -x icewm 2>/dev/null
@@ -277,7 +407,7 @@ if [ -n "$XRDP_BIN" ]; then
         -e "s|^LogFile=.*|LogFile=/var/log/xrdp.log|" \
         -e "s|^LogLevel=.*|LogLevel=$XRDP_LOG_LEVEL|" \
         -e "s|^#*EnableSyslog=.*|EnableSyslog=false|" \
-        -e "s|^#*default_dpi=.*|default_dpi=96|" \
+        -e "s|^#*default_dpi=.*|default_dpi=${DPI}|" \
         -e "s|^cliprdr=.*|cliprdr=true|" \
         "$XRDP_CFG/xrdp.ini"
 

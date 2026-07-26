@@ -143,6 +143,7 @@
       fi
     done < "$closureInfo/store-paths"
     ln -sfn ${pkgs.mesa}/lib/dri $out/opt/devcell/.mesa-dri
+    ln -sfn ${pkgs.mesa}/share/glvnd/egl_vendor.d $out/opt/devcell/.mesa-egl-vendor
 
     # ── /lib/ld-linux-<arch>.so.<n> → nix-ld shim ───────────────────────────
     # mise-downloaded precompiled binaries (node, go, terraform, …) and any
@@ -861,18 +862,12 @@ in
         # ~/.local/share/mise take precedence. Replaces the cross-bind
         # symlink design (CELL-75). Ignored by mise if the dir is absent.
         "MISE_SHARED_INSTALL_DIRS=/opt/devcell/.local/share/mise/installs"
-        # Mesa / GLX software rendering — chromium (with sandbox) and any
-        # GL-using app fails to find a renderer without these. /opt/devcell/.mesa-dri
-        # is a stable symlink to pkgs.mesa's DRI drivers (created in homeRoot).
+        # Mesa 26.x software rendering — headless container, no GPU.
+        # `mesa.drivers` is deprecated; everything lives in `mesa` (out) now.
         "LIBGL_ALWAYS_SOFTWARE=1"
         "GALLIUM_DRIVER=llvmpipe"
         "LIBGL_DRIVERS_PATH=/opt/devcell/.mesa-dri"
-        # Vulkan ICD — playwright launches chromium with `--use-angle=vulkan`
-        # (see modules/scraping/default.nix). Without VK_ICD_FILENAMES,
-        # chromium's Vulkan probe fails → falls back to error pages with no
-        # GPU context → some Web APIs (Canvas, WebGL) render blank.
-        # lvp_icd = LLVMpipe Vulkan, the software Vulkan implementation.
-        # Arch-specific suffix is baked at flake-eval time.
+        "__EGL_VENDOR_LIBRARY_DIRS=${pkgs.mesa}/share/glvnd/egl_vendor.d"
         "VK_ICD_FILENAMES=${pkgs.mesa}/share/vulkan/icd.d/lvp_icd.${pkgs.stdenv.hostPlatform.uname.processor}.json"
       ];
       Labels = {

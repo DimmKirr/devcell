@@ -438,6 +438,137 @@ func TestMerge_GUISectionGlobalWMKeptWhenProjectUnset(t *testing.T) {
 	}
 }
 
+func TestLoadFile_GUISectionResolution(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[gui]
+resolution = "2560x1440x24"
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.GUI.ResolvedResolution() != "2560x1440x24" {
+		t.Errorf("expected resolution=2560x1440x24, got %q", c.GUI.ResolvedResolution())
+	}
+}
+
+func TestLoadFile_GUISectionDefaultResolution(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[gui]
+enabled = true
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.GUI.ResolvedResolution() != "1920x1080x24" {
+		t.Errorf("expected default resolution=1920x1080x24, got %q", c.GUI.ResolvedResolution())
+	}
+}
+
+func TestMerge_GUISectionProjectResolutionOverridesGlobal(t *testing.T) {
+	global := cfg.CellConfig{GUI: cfg.GUISection{Resolution: "1920x1080x24"}}
+	project := cfg.CellConfig{GUI: cfg.GUISection{Resolution: "2560x1440x24"}}
+	merged := cfg.Merge(global, project)
+	if merged.GUI.ResolvedResolution() != "2560x1440x24" {
+		t.Errorf("expected project resolution to win, got %q", merged.GUI.ResolvedResolution())
+	}
+}
+
+func TestMerge_GUISectionGlobalResolutionKeptWhenProjectUnset(t *testing.T) {
+	global := cfg.CellConfig{GUI: cfg.GUISection{Resolution: "2560x1440x24"}}
+	project := cfg.CellConfig{}
+	merged := cfg.Merge(global, project)
+	if merged.GUI.ResolvedResolution() != "2560x1440x24" {
+		t.Errorf("expected global resolution preserved, got %q", merged.GUI.ResolvedResolution())
+	}
+}
+
+func TestLoadFile_GUISectionScale(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[gui]
+resolution = "1800x1169x24"
+scale = 2
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.GUI.ResolvedScale() != 2 {
+		t.Errorf("expected scale=2, got %d", c.GUI.ResolvedScale())
+	}
+	if c.GUI.ResolvedDPI() != 192 {
+		t.Errorf("expected DPI=192, got %d", c.GUI.ResolvedDPI())
+	}
+	if c.GUI.ResolvedFramebufferResolution() != "3600x2338x24" {
+		t.Errorf("expected framebuffer=3600x2338x24, got %q", c.GUI.ResolvedFramebufferResolution())
+	}
+}
+
+func TestLoadFile_GUISectionDefaultScale(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[gui]
+enabled = true
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.GUI.ResolvedScale() != 1 {
+		t.Errorf("expected default scale=1, got %d", c.GUI.ResolvedScale())
+	}
+	if c.GUI.ResolvedDPI() != 96 {
+		t.Errorf("expected default DPI=96, got %d", c.GUI.ResolvedDPI())
+	}
+	if c.GUI.ResolvedFramebufferResolution() != "1920x1080x24" {
+		t.Errorf("expected default framebuffer=1920x1080x24, got %q", c.GUI.ResolvedFramebufferResolution())
+	}
+}
+
+func TestLoadFile_GUISectionScale1(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[gui]
+resolution = "1800x1169x24"
+scale = 1
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.GUI.ResolvedScale() != 1 {
+		t.Errorf("expected scale=1, got %d", c.GUI.ResolvedScale())
+	}
+	if c.GUI.ResolvedDPI() != 96 {
+		t.Errorf("expected DPI=96, got %d", c.GUI.ResolvedDPI())
+	}
+	if c.GUI.ResolvedFramebufferResolution() != "1800x1169x24" {
+		t.Errorf("expected framebuffer=1800x1169x24, got %q", c.GUI.ResolvedFramebufferResolution())
+	}
+}
+
+func TestMerge_GUISectionProjectScaleOverridesGlobal(t *testing.T) {
+	global := cfg.CellConfig{GUI: cfg.GUISection{Scale: 1}}
+	project := cfg.CellConfig{GUI: cfg.GUISection{Scale: 2}}
+	merged := cfg.Merge(global, project)
+	if merged.GUI.ResolvedScale() != 2 {
+		t.Errorf("expected project scale to win, got %d", merged.GUI.ResolvedScale())
+	}
+}
+
+func TestMerge_GUISectionGlobalScaleKeptWhenProjectUnset(t *testing.T) {
+	global := cfg.CellConfig{GUI: cfg.GUISection{Scale: 3}}
+	project := cfg.CellConfig{}
+	merged := cfg.Merge(global, project)
+	if merged.GUI.ResolvedScale() != 3 {
+		t.Errorf("expected global scale preserved, got %d", merged.GUI.ResolvedScale())
+	}
+}
+
 func TestMerge_GUISectionLegacyCellGUIMigrates(t *testing.T) {
 	global := cfg.CellConfig{Cell: cfg.CellSection{GUI: boolPtr(false)}}
 	project := cfg.CellConfig{}

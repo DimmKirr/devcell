@@ -329,6 +329,9 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 	if spec.CellCfg.GUI.ResolvedEnabled() {
 		argv = append(argv, "-e", "DEVCELL_GUI_ENABLED=true")
 		argv = append(argv, "-e", "DEVCELL_WM="+spec.CellCfg.GUI.ResolvedWM())
+		argv = append(argv, "-e", "DEVCELL_RESOLUTION="+spec.CellCfg.GUI.ResolvedFramebufferResolution())
+		argv = append(argv, "-e", fmt.Sprintf("DEVCELL_DPI=%d", spec.CellCfg.GUI.ResolvedDPI()))
+		argv = append(argv, "-e", fmt.Sprintf("DEVCELL_SCALE=%d", spec.CellCfg.GUI.ResolvedScale()))
 		argv = append(argv, "-e", "EXT_VNC_PORT="+c.VNCPort)
 		argv = append(argv, "-e", "EXT_RDP_PORT="+c.RDPPort)
 	}
