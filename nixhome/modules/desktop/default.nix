@@ -2,8 +2,11 @@
 # Nix equivalents of the base-gui apt packages, for stages that need GUI
 # support (e.g., ultimate) without inheriting from the apt-based base-gui stage.
 #
+# Window manager: configurable via `devcell.modules.desktop.windowManager`.
+#   "icewm"   (default) — IceWM 4.x, built-in systray, EWMH 1.5, Wine-compatible
+#   "fluxbox"           — Fluxbox 1.3.x, lighter closure, text-based config
+#
 # Apt → nix mapping:
-#   fluxbox                    → xsession.windowManager.fluxbox (HM module)
 #   x11vnc                     → pkgs.x11vnc
 #   xvfb                       → pkgs.xorg.xorgserver  (provides Xvfb binary)
 #   x11-apps                   → pkgs.xorg.xrandr (+ xorg.xset etc.)
@@ -22,18 +25,29 @@
 {pkgs, lib, config, ...}:
 let
   modCfg = config.devcell.modules.desktop;
-  # Import theme — palette (c), fonts (f), and generated fluxbox cfg.
-  theme = import ./themes/main/theme.nix { inherit lib pkgs; };
-  inherit (theme) c f cfg init xresources wallpaper pixmaps;
+  wm = modCfg.windowManager;
+
+  # Import themes — palette (c), fonts (f) shared across all WMs.
+  fluxboxTheme = import ./themes/main/theme.nix { inherit lib pkgs; };
+  inherit (fluxboxTheme) c f cfg init xresources wallpaper pixmaps;
+
+  icewmTheme = import ./themes/main/icewm-theme.nix {
+    inherit lib pkgs c f wallpaper;
+  };
 in
 {
   options.devcell.modules.desktop = {
-    enable = lib.mkEnableOption "X11/VNC/RDP desktop environment (Fluxbox + Xvfb + PulseAudio)";
+    enable = lib.mkEnableOption "X11/VNC/RDP desktop environment (Xvfb + PulseAudio)";
+    windowManager = lib.mkOption {
+      type = lib.types.enum [ "icewm" "fluxbox" ];
+      default = "icewm";
+      description = "Window manager: icewm (default, Wine systray, EWMH 1.5) or fluxbox (lighter)";
+    };
     meta = lib.mkOption {
       type = lib.types.attrs;
       readOnly = true;
       default = {
-        description = "GUI desktop: Fluxbox WM, Xvfb display, VNC + RDP servers, PulseAudio, screenshot tools";
+        description = "GUI desktop: ${wm} WM, Xvfb display, VNC + RDP servers, PulseAudio, screenshot tools";
         mcpServers = [ ];
         sizeMb = 1200;
       };
@@ -89,6 +103,8 @@ in
   '';
 
   home.packages = with pkgs; [
+    # Window manager — selected via devcell.modules.desktop.windowManager
+    icewm
     # Audio — PulseAudio with null sink for headless audio (Chromium AudioContext)
     pulseaudio # (use: pulseaudio --start --exit-idle-time=-1)
     pulseaudio-module-xrdp # RDP audio redirection — routes PulseAudio → xrdp rdpsnd channel
@@ -106,7 +122,7 @@ in
     xorg.xsetroot # solid color / background setter
     xorg.xrdb     # X resource database — loads .Xresources (xterm colors, fonts)
 
-    # Background image setter — sets wallpaper before/after fluxbox starts
+    # Background image setter — sets wallpaper before/after WM starts
     feh
 
     # Clipboard utilities — used by entrypoint.sh clipboard sync daemon
@@ -123,7 +139,7 @@ in
     # browser for OAuth flows. Without xdg-utils they fail with ENOENT.
     xdg-utils # provides xdg-open, xdg-mime, xdg-settings
 
-    # Terminal emulator — launched from fluxbox menu
+    # Terminal emulator — launched from WM menu
     xterm
 
     # X11 client libraries
@@ -235,20 +251,16 @@ in
     };
   };
 
-  # ── Fluxbox configuration ──────────────────────────────────────────────────
+  # ── Fluxbox configuration (when windowManager = "fluxbox") ────────────────
   # Declared via the home-manager fluxbox module — generates ~/.fluxbox/{init,menu,...}.
   # homeDirectory is /opt/devcell so ~/.fluxbox is at /opt/devcell/.fluxbox (stable).
   # entrypoint.sh launches fluxbox with: fluxbox -rc /opt/devcell/.fluxbox/init
 
-  xsession.windowManager.fluxbox = {
+  xsession.windowManager.fluxbox = lib.mkIf (wm == "fluxbox") {
     enable = true;
 
     inherit init;
 
-    # Full keybindings. home-manager replaces the entire default keys file,
-    # so we must include useful defaults here. Scroll-to-cycle-workspaces
-    # is deliberately mapped to :NOP — macOS trackpad momentum scrolling
-    # floods VNC with Button4/5 events causing a "doom scroll" effect.
     keys = ''
       # Window focus and movement
       Mod1 Tab :NextWindow {groups} (workspace=[current])
@@ -283,12 +295,6 @@ in
       OnToolbar Mouse5 :NOP
     '';
 
-    # Chromium via the home-manager profile wrapper (includes --no-sandbox, --disable-gpu,
-    # --user-data-dir etc. set in scraping/default.nix). The wrapper enforces a singleton
-    # via fixed --user-data-dir, so a bare `chromium` on a second click hits the existing
-    # SingletonLock and silently prints "Opening in existing browser session." with no
-    # visible window. `--new-window` makes the IPC request a fresh window every click
-    # (and falls back to a normal cold start when chromium isn't running).
     menu = let
       hasPkg = name: lib.any (p: (p.pname or "") == name) config.home.packages;
       optEntry = cond: entry: lib.optionalString cond entry;
@@ -390,20 +396,11 @@ in
   };
 
   # ── Theme file deployment ─────────────────────────────────────────────────
-  # All visual assets: wallpaper, Xresources, fluxbox style + overlay, button pixmaps.
+  # Shared assets (wallpaper, Xresources) + WM-specific config files.
   home.file = {
-    ".fluxbox/wallpaper.png".source = wallpaper;
     ".Xresources".text = xresources;
-    ".fluxbox/styles/devcell-ocean/theme.cfg".text = cfg;
-    ".fluxbox/overlay".text = cfg;
-    ".fluxbox/apps".text = ''
-      [app] (name=.*)
-        [Tab] {no}
-        [Deco] {NORMAL}
-      [end]
-    '';
+
     # ── Entrypoint fragment: LD_LIBRARY_PATH from full nix closure ──────────
-    # Sourced by entrypoint.sh BEFORE 50-gui.sh. All services inherit this export.
     ".config/devcell/entrypoint.d/06-nix-ldpath.sh" = {
       executable = true;
       source = ../fragments/06-nix-ldpath.sh;
@@ -416,11 +413,40 @@ in
     };
 
     # ── Entrypoint fragment: GUI service startup ────────────────────────────
-    # Sourced by entrypoint.sh from /etc/devcell/entrypoint.d/ at container start.
     ".config/devcell/entrypoint.d/50-gui.sh" = {
       executable = true;
       source = ../fragments/50-gui.sh;
     };
-  } // pixmaps;
+    # WM selector — read by 50-gui.sh to decide which WM to launch
+    ".config/devcell/window-manager".text = wm;
+  }
+  # ── Fluxbox theme files (when windowManager = "fluxbox") ──────────────────
+  // lib.optionalAttrs (wm == "fluxbox") ({
+    ".fluxbox/wallpaper.png".source = wallpaper;
+    ".fluxbox/styles/devcell-ocean/theme.cfg".text = cfg;
+    ".fluxbox/overlay".text = cfg;
+    ".fluxbox/apps".text = ''
+      [app] (name=.*)
+        [Tab] {no}
+        [Deco] {NORMAL}
+      [end]
+    '';
+  } // pixmaps)
+  # ── IceWM theme + config files (when windowManager = "icewm") ─────────────
+  // lib.optionalAttrs (wm == "icewm") {
+    ".icewm/theme".text = "Theme=\"Icewm_Nord_style/default.theme\"\n";
+    ".icewm/themes/Icewm_Nord_style".source = icewmTheme.themeDir;
+    ".icewm/preferences".text = icewmTheme.preferences;
+    ".icewm/keys".text = icewmTheme.keys;
+    ".icewm/menu".text = icewmTheme.mkMenu config;
+    ".icewm/wallpaper.png".source = wallpaper;
+    ".icewm/startup" = {
+      executable = true;
+      text = ''
+        #!/bin/bash
+        feh --bg-fill "$HOME/.icewm/wallpaper.png" 2>/dev/null &
+      '';
+    };
+  };
   };
 }

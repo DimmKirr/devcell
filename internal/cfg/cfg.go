@@ -419,6 +419,28 @@ func (a AwsSection) ResolvedReadOnly() bool {
 	return *a.ReadOnly
 }
 
+// GUISection holds [gui] config for desktop/window-manager settings.
+type GUISection struct {
+	Enabled *bool  `toml:"enabled"` // default: true (nil = not set → true)
+	WM      string `toml:"wm"`      // "icewm" (default) or "fluxbox"
+}
+
+// ResolvedEnabled returns the effective GUI setting: true unless explicitly set to false.
+func (g GUISection) ResolvedEnabled() bool {
+	if g.Enabled == nil {
+		return true
+	}
+	return *g.Enabled
+}
+
+// ResolvedWM returns the effective window manager: "icewm" unless explicitly set.
+func (g GUISection) ResolvedWM() string {
+	if g.WM == "" {
+		return "icewm"
+	}
+	return g.WM
+}
+
 // CellConfig is the merged configuration from all TOML layers.
 type CellConfig struct {
 	Cell     CellSection
@@ -429,6 +451,7 @@ type CellConfig struct {
 	Op       OpSection      `toml:"op"`
 	Aws      AwsSection     `toml:"aws"`
 	Stealth  StealthSection `toml:"stealth"`
+	GUI      GUISection     `toml:"gui"`
 	Env      map[string]string
 	Mise     map[string]string `toml:"mise"` // [mise] — keys map to MISE_<UPPER_KEY> env vars
 	Volumes  []VolumeMount
@@ -449,7 +472,17 @@ func LoadFile(path string) (CellConfig, error) {
 	if _, err := toml.Decode(string(data), &c); err != nil {
 		return CellConfig{}, err
 	}
+	migrateGUIField(&c)
 	return c, nil
+}
+
+// migrateGUIField copies legacy [cell] gui into [gui] enabled when the new
+// section is not explicitly set. This preserves backward compatibility with
+// configs that use [cell] gui = false instead of [gui] enabled = false.
+func migrateGUIField(c *CellConfig) {
+	if c.Cell.GUI != nil && c.GUI.Enabled == nil {
+		c.GUI.Enabled = c.Cell.GUI
+	}
 }
 
 // unionDedupStrings returns a + b with duplicates removed, preserving the
@@ -612,6 +645,15 @@ func Merge(global, project CellConfig) CellConfig {
 		out.Nix.NixhomePath = project.Nix.NixhomePath
 	}
 
+	// GUI: project wins when non-zero
+	out.GUI = global.GUI
+	if project.GUI.Enabled != nil {
+		out.GUI.Enabled = project.GUI.Enabled
+	}
+	if project.GUI.WM != "" {
+		out.GUI.WM = project.GUI.WM
+	}
+
 	// Op documents: accumulate from both Documents and legacy Items, deduped.
 	// ResolvedDocuments() merges documents+items per layer; then we dedup across layers.
 	globalDocs := global.Op.ResolvedDocuments()
@@ -662,6 +704,7 @@ func Merge(global, project CellConfig) CellConfig {
 		}
 	}
 
+	migrateGUIField(&out)
 	return out
 }
 

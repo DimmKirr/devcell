@@ -182,7 +182,7 @@ func TestArgv_HostnameEnvOverridesTOML(t *testing.T) {
 
 func TestArgv_MandatoryEnvVars(t *testing.T) {
 	argv := buildArgv(t, func(s *runner.RunSpec) {
-		s.CellCfg.Cell.GUI = boolPtr(true)
+		s.CellCfg.GUI.Enabled = boolPtr(true)
 	})
 	mustHaveEnv := []string{
 		"APP_NAME=myproject-3",
@@ -451,7 +451,7 @@ func TestArgv_CfgPortsMappedUDP(t *testing.T) {
 
 func TestArgv_CfgPortsEmpty(t *testing.T) {
 	argv := buildArgv(t, func(s *runner.RunSpec) {
-		s.CellCfg.Cell.GUI = boolPtr(false)
+		s.CellCfg.GUI.Enabled = boolPtr(false)
 	})
 	// No -p flags when no ports configured and GUI explicitly off
 	for i, a := range argv {
@@ -465,7 +465,7 @@ func TestArgv_CfgPortsEmpty(t *testing.T) {
 
 func TestArgv_VNCPort(t *testing.T) {
 	argv := buildArgv(t, func(s *runner.RunSpec) {
-		s.CellCfg.Cell.GUI = boolPtr(true)
+		s.CellCfg.GUI.Enabled = boolPtr(true)
 	})
 	if !hasConsecutive(argv, "-p", "0.0.0.0:350:5900") {
 		t.Errorf("expected -p 0.0.0.0:350:5900 in argv: %v", argv)
@@ -532,16 +532,18 @@ func TestArgv_UserArgsAppended(t *testing.T) {
 func boolPtr(b bool) *bool { return &b }
 
 func TestArgv_GUIEnabledByDefault(t *testing.T) {
-	// GUI defaults to true when not set (nil)
 	argv := buildArgv(t)
 	if !hasArg(argv, "DEVCELL_GUI_ENABLED=true") {
 		t.Errorf("expected DEVCELL_GUI_ENABLED=true by default: %v", argv)
+	}
+	if !hasArg(argv, "DEVCELL_WM=icewm") {
+		t.Errorf("expected DEVCELL_WM=icewm by default: %v", argv)
 	}
 }
 
 func TestArgv_GUIExplicitTrue(t *testing.T) {
 	argv := buildArgv(t, func(s *runner.RunSpec) {
-		s.CellCfg.Cell.GUI = boolPtr(true)
+		s.CellCfg.GUI.Enabled = boolPtr(true)
 	})
 	if !hasArg(argv, "DEVCELL_GUI_ENABLED=true") {
 		t.Errorf("expected DEVCELL_GUI_ENABLED=true in argv: %v", argv)
@@ -550,10 +552,24 @@ func TestArgv_GUIExplicitTrue(t *testing.T) {
 
 func TestArgv_GUIExplicitFalse(t *testing.T) {
 	argv := buildArgv(t, func(s *runner.RunSpec) {
-		s.CellCfg.Cell.GUI = boolPtr(false)
+		s.CellCfg.GUI.Enabled = boolPtr(false)
 	})
 	if hasArg(argv, "DEVCELL_GUI_ENABLED=true") {
 		t.Error("DEVCELL_GUI_ENABLED should not be present when gui=false")
+	}
+	for _, a := range argv {
+		if strings.HasPrefix(a, "DEVCELL_WM=") {
+			t.Errorf("DEVCELL_WM should not be present when gui=false, got %q", a)
+		}
+	}
+}
+
+func TestArgv_GUIWMFluxbox(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.CellCfg.GUI.WM = "fluxbox"
+	})
+	if !hasArg(argv, "DEVCELL_WM=fluxbox") {
+		t.Errorf("expected DEVCELL_WM=fluxbox in argv: %v", argv)
 	}
 }
 

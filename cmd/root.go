@@ -332,7 +332,7 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 	explicitBuild := scanFlag("--build")
 
 	// Resolve available GUI ports — probe and bump if already bound
-	if cellCfg.Cell.ResolvedGUI() {
+	if cellCfg.GUI.ResolvedEnabled() {
 		c.ResolveAvailablePorts()
 	}
 

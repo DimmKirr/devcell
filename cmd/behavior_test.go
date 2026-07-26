@@ -28,7 +28,7 @@ func buildBehaviourArgv(cwd string, envPairs []string, binary string, defaultFla
 
 // Scenario A: cwd=/tmp/myproject, TMUX_PANE=%3
 func TestScenarioA_ContainerNameAndVNC(t *testing.T) {
-	guiCfg := cfg.CellConfig{Cell: cfg.CellSection{GUI: ptrBool(true)}}
+	guiCfg := cfg.CellConfig{GUI: cfg.GUISection{Enabled: ptrBool(true)}}
 	argv := buildBehaviourArgv("/tmp/myproject", []string{"TMUX_PANE", "%3"},
 		"claude", []string{"--dangerously-skip-permissions"}, nil, guiCfg)
 
@@ -42,7 +42,7 @@ func TestScenarioA_ContainerNameAndVNC(t *testing.T) {
 
 // Scenario B: two panes — names and VNC ports differ
 func TestScenarioB_TwoPanesNamesAndPortsDiffer(t *testing.T) {
-	guiCfg := cfg.CellConfig{Cell: cfg.CellSection{GUI: ptrBool(true)}}
+	guiCfg := cfg.CellConfig{GUI: cfg.GUISection{Enabled: ptrBool(true)}}
 	argv3 := buildBehaviourArgv("/tmp/myproject", []string{"TMUX_PANE", "%3"},
 		"claude", nil, nil, guiCfg)
 	argv4 := buildBehaviourArgv("/tmp/myproject", []string{"TMUX_PANE", "%4"},
@@ -104,7 +104,7 @@ func hasConsecutive(argv []string, a, b string) bool {
 
 // Scenario: GUI=true publishes both VNC and RDP ports
 func TestScenarioA_RDPPortPublished(t *testing.T) {
-	guiCfg := cfg.CellConfig{Cell: cfg.CellSection{GUI: ptrBool(true)}}
+	guiCfg := cfg.CellConfig{GUI: cfg.GUISection{Enabled: ptrBool(true)}}
 	argv := buildBehaviourArgv("/tmp/myproject", []string{"TMUX_PANE", "%3"},
 		"claude", nil, nil, guiCfg)
 
@@ -136,7 +136,7 @@ func TestScenarioA_ConfigDirVolume(t *testing.T) {
 // Scenario: [ports].publish_ip prefixes -p for VNC, RDP, and forward entries.
 func TestPublishIP_PrefixesAllPublishedPorts(t *testing.T) {
 	c := cfg.CellConfig{
-		Cell: cfg.CellSection{GUI: ptrBool(true)},
+		GUI: cfg.GUISection{Enabled: ptrBool(true)},
 		Ports: cfg.PortsSection{
 			PublishIP: "0.0.0.0",
 			Forward:   []string{"3000", "8080:3000"},
@@ -163,7 +163,7 @@ func TestPublishIP_PrefixesAllPublishedPorts(t *testing.T) {
 // from other hosts regardless of dockerd's bind default.
 func TestPublishIP_EmptyDefaultsToAllInterfaces(t *testing.T) {
 	c := cfg.CellConfig{
-		Cell:  cfg.CellSection{GUI: ptrBool(true)},
+		GUI:   cfg.GUISection{Enabled: ptrBool(true)},
 		Ports: cfg.PortsSection{Forward: []string{"3000"}},
 	}
 	argv := buildBehaviourArgv("/tmp/myproject", []string{"TMUX_PANE", "%3"},
@@ -180,7 +180,7 @@ func TestPublishIP_EmptyDefaultsToAllInterfaces(t *testing.T) {
 // Scenario: explicit publish_ip="127.0.0.1" overrides the default for loopback-only binding.
 func TestPublishIP_LoopbackOverride(t *testing.T) {
 	c := cfg.CellConfig{
-		Cell:  cfg.CellSection{GUI: ptrBool(true)},
+		GUI:   cfg.GUISection{Enabled: ptrBool(true)},
 		Ports: cfg.PortsSection{PublishIP: "127.0.0.1", Forward: []string{"3000"}},
 	}
 	argv := buildBehaviourArgv("/tmp/myproject", []string{"TMUX_PANE", "%3"},
@@ -195,7 +195,7 @@ func TestPublishIP_LoopbackOverride(t *testing.T) {
 }
 
 func TestScenarioA_RDPPortNotPublishedWithoutGUI(t *testing.T) {
-	noGUI := cfg.CellConfig{Cell: cfg.CellSection{GUI: ptrBool(false)}}
+	noGUI := cfg.CellConfig{GUI: cfg.GUISection{Enabled: ptrBool(false)}}
 	argv := buildBehaviourArgv("/tmp/myproject", []string{"TMUX_PANE", "%3"},
 		"claude", nil, nil, noGUI)
 

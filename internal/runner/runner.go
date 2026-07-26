@@ -326,8 +326,9 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 	}
 
 	// GUI flag — only publish VNC port when GUI is enabled (default: true)
-	if spec.CellCfg.Cell.ResolvedGUI() {
+	if spec.CellCfg.GUI.ResolvedEnabled() {
 		argv = append(argv, "-e", "DEVCELL_GUI_ENABLED=true")
+		argv = append(argv, "-e", "DEVCELL_WM="+spec.CellCfg.GUI.ResolvedWM())
 		argv = append(argv, "-e", "EXT_VNC_PORT="+c.VNCPort)
 		argv = append(argv, "-e", "EXT_RDP_PORT="+c.RDPPort)
 	}
@@ -464,7 +465,7 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 	}
 
 	// GUI port mapping
-	if spec.CellCfg.Cell.ResolvedGUI() {
+	if spec.CellCfg.GUI.ResolvedEnabled() {
 		argv = append(argv, "-p", publishPrefix+c.VNCPort+":5900")
 		argv = append(argv, "-p", publishPrefix+c.RDPPort+":3389")
 	}

@@ -18,3 +18,12 @@ web/.context
 docs/
 test/js/
 test/results/
+.workspaces/
+.worktrees/
+.gocache/
+.gomodcache/
+.venv/
+.vagrant/
+.playwright-mcp/
+Vagrantfile.local
+CONTINUE.md

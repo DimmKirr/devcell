@@ -64,17 +64,29 @@ var (
 	guiErr  error
 )
 
-// ensureGUI makes sure the GUI stack (Xvfb, fluxbox, x11vnc, xrdp) is running.
+// detectWM returns "icewm" or "fluxbox" based on which WM process is running.
+// Returns "" if neither is found.
+func detectWM() string {
+	if osexec.Command("pgrep", "-x", "icewm").Run() == nil {
+		return "icewm"
+	}
+	if osexec.Command("pgrep", "-x", "fluxbox").Run() == nil {
+		return "fluxbox"
+	}
+	return ""
+}
+
+// ensureGUI makes sure the GUI stack (Xvfb, WM, x11vnc, xrdp) is running.
 // Starts it via 50-gui.sh if not already running. Skips if not in devcell.
 func ensureGUI(t *testing.T) {
 	t.Helper()
 	skipIfNotInDevcell(t)
 	guiOnce.Do(func() {
-		if osexec.Command("pgrep", "fluxbox").Run() != nil {
+		if detectWM() == "" {
 			testLog("starting GUI stack...")
 			guiErr = startGUIStack()
 		} else {
-			testLog("GUI stack already running")
+			testLog("GUI stack already running (wm=%s)", detectWM())
 		}
 	})
 	if guiErr != nil {
@@ -167,8 +179,8 @@ func captureDesktop() (goimage.Image, error) {
 		return nil, fmt.Errorf("not in devcell container (DEVCELL_HOME=%s not found)", getDevcellHome())
 	}
 
-	// Start GUI stack if fluxbox is not already running.
-	if err := osexec.Command("pgrep", "fluxbox").Run(); err != nil {
+	// Start GUI stack if no WM is running.
+	if detectWM() == "" {
 		if err := startGUIStack(); err != nil {
 			return nil, fmt.Errorf("start GUI stack: %w", err)
 		}
@@ -206,7 +218,7 @@ func captureDesktop() (goimage.Image, error) {
 	dismissCmd.CombinedOutput()
 	time.Sleep(300 * time.Millisecond)
 
-	// Right-click on desktop to open fluxbox root menu.
+	// Right-click on desktop to open root menu.
 	// Retry up to 3 times — when fluxbox was already running, the first click
 	// may not register on the root window.
 	for attempt := 0; attempt < 3; attempt++ {
@@ -260,7 +272,7 @@ func captureDesktop() (goimage.Image, error) {
 }
 
 // startGUIStack sources the 50-gui.sh entrypoint fragment to bring up
-// Xvfb, fluxbox, x11vnc, and xrdp.
+// Xvfb, the window manager (icewm or fluxbox), x11vnc, and xrdp.
 func startGUIStack() error {
 	home := getDevcellHome()
 	script := fmt.Sprintf(`#!/bin/bash
@@ -362,7 +374,7 @@ func skipIfNoXfreerdp(t *testing.T, c testcontainers.Container) {
 }
 
 // startDesktopGUIContainer starts a container with DEVCELL_GUI_ENABLED=true
-// and waits for the full GUI stack (Xvfb + fluxbox + x11vnc) to be running.
+// and waits for the full GUI stack (Xvfb + WM + x11vnc) to be running.
 func startDesktopGUIContainer(t *testing.T) testcontainers.Container {
 	t.Helper()
 	ctx := context.Background()
@@ -480,25 +492,42 @@ func TestDesktop_Wallpaper(t *testing.T) {
 	assertPixelTolerance(t, img, 1500, 400, "#000000", 10, "desktop body")
 }
 
-// TestDesktop_Toolbar verifies toolbar colors: black bg, green workspace badge.
+// TestDesktop_Toolbar verifies toolbar colors match the active WM theme.
 func TestDesktop_Toolbar(t *testing.T) {
 	skipIfNotInDevcell(t)
 	img := setupDesktopScreenshot(t)
 	saveScreenshot(t)
-	// Toolbar is 35px at bottom. Center of toolbar = 1080 - 17 = 1063
-	toolbarY := img.Bounds().Dy() - 17
-	assertPixelTolerance(t, img, 960, toolbarY, "#0d0d1c", 30, "toolbar bg center")
-	// Workspace badge near left side (starts at ~x=40, sample at y=1070)
-	assertPixelTolerance(t, img, 50, img.Bounds().Dy()-10, "#b8e336", 15, "toolbar workspace badge")
+
+	wm := detectWM()
+	switch wm {
+	case "icewm":
+		toolbarY := img.Bounds().Dy() - 14
+		assertPixelTolerance(t, img, 960, toolbarY, "#303744", 30, "toolbar bg center (Nord)")
+		assertPixelTolerance(t, img, 50, img.Bounds().Dy()-10, "#4B81C8", 30, "toolbar workspace badge (Nord)")
+	case "fluxbox":
+		toolbarY := img.Bounds().Dy() - 17
+		assertPixelTolerance(t, img, 960, toolbarY, "#0d0d1c", 30, "toolbar bg center")
+		assertPixelTolerance(t, img, 50, img.Bounds().Dy()-10, "#b8e336", 15, "toolbar workspace badge")
+	default:
+		t.Skipf("unknown WM %q — cannot assert toolbar colors", wm)
+	}
 }
 
-// TestDesktop_WindowChrome verifies xterm window has black title bar and green handle.
+// TestDesktop_WindowChrome verifies xterm window title bar matches the active theme.
 func TestDesktop_WindowChrome(t *testing.T) {
 	skipIfNotInDevcell(t)
 	img := setupDesktopScreenshot(t)
 	saveScreenshot(t)
-	// xterm at +100+100. Title bar starts at y~85 (after 3px border), 30px high.
-	assertPixelTolerance(t, img, 300, 90, "#000000", 10, "window title bar bg")
+
+	wm := detectWM()
+	switch wm {
+	case "icewm":
+		assertPixelTolerance(t, img, 300, 90, "#303744", 30, "window title bar bg (Nord)")
+	case "fluxbox":
+		assertPixelTolerance(t, img, 300, 90, "#000000", 10, "window title bar bg")
+	default:
+		t.Skipf("unknown WM %q — cannot assert window chrome", wm)
+	}
 }
 
 // TestDesktop_Menu verifies the right-click menu renders with theme colors.
@@ -506,10 +535,19 @@ func TestDesktop_Menu(t *testing.T) {
 	skipIfNotInDevcell(t)
 	img := setupDesktopScreenshot(t)
 	saveScreenshot(t)
-	// Menu triggered at (960, 540). Title bar is green, body is dark surface.
-	// Title area at y=532 (above click point), body at y=576 (below border).
-	assertPixelTolerance(t, img, 960, 532, "#b8e336", 20, "menu title bg")
-	assertPixelTolerance(t, img, 960, 576, "#0a0a18", 15, "menu body bg")
+
+	wm := detectWM()
+	switch wm {
+	case "icewm":
+		// IceWM root menu uses ColorNormalMenu for the entire menu background.
+		assertPixelTolerance(t, img, 960, 550, "#303744", 30, "menu bg (Nord)")
+	case "fluxbox":
+		// Menu triggered at (960, 540). Title bar is green, body is dark surface.
+		assertPixelTolerance(t, img, 960, 532, "#b8e336", 20, "menu title bg")
+		assertPixelTolerance(t, img, 960, 576, "#0a0a18", 15, "menu body bg")
+	default:
+		t.Skipf("unknown WM %q — cannot assert menu colors", wm)
+	}
 }
 
 // TestDesktop_PatchrightMcpCellWrapper verifies the patchright-mcp-cell wrapper exists
@@ -564,9 +602,12 @@ func TestDesktop_XresourcesLoaded(t *testing.T) {
 }
 
 // TestDesktop_FluxboxThemeActive verifies fluxbox is running with the
-// devcell-ocean theme (not default grey).
+// devcell-ocean theme (not default grey). Skips when fluxbox is not the active WM.
 func TestDesktop_FluxboxThemeActive(t *testing.T) {
 	ensureGUI(t)
+	if detectWM() != "fluxbox" {
+		t.Skip("skipping: fluxbox is not the active window manager")
+	}
 
 	data, err := os.ReadFile("/tmp/fluxbox-init")
 	if err != nil {
@@ -581,6 +622,26 @@ func TestDesktop_FluxboxThemeActive(t *testing.T) {
 		t.Error("workspaceNames not set in fluxbox init")
 	}
 	t.Logf("PASS: fluxbox running with devcell-ocean theme")
+}
+
+// TestDesktop_IcewmThemeActive verifies icewm is running with the
+// Nord theme. Skips when icewm is not the active WM.
+func TestDesktop_IcewmThemeActive(t *testing.T) {
+	ensureGUI(t)
+	if detectWM() != "icewm" {
+		t.Skip("skipping: icewm is not the active window manager")
+	}
+
+	themePath := getDevcellHome() + "/.icewm/theme"
+	data, err := os.ReadFile(themePath)
+	if err != nil {
+		t.Fatalf("read %s: %v", themePath, err)
+	}
+	out := string(data)
+	testLog("icewm theme pointer:\n%s", out)
+
+	assertContains(t, "theme", out, "Icewm_Nord_style/default.theme")
+	t.Logf("PASS: icewm running with Nord theme")
 }
 
 // TestDesktop_XftDpi96 verifies Xft.dpi is set to 96 in X resources.

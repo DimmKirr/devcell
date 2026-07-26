@@ -1,0 +1,119 @@
+ThemeName="Icewm_Nord_style"
+ThemeDescription="Minimalistic, flat theme for IceWM, inspired by the Nord palette"
+ThemeAuthor="IamJony | github.com/IamJony"
+License="GPL"
+Look=flat
+
+TitleBarHeight=26
+TitleBarCentered=1
+TitleBarJustify=54
+RolloverButtonsSupported=1
+ShowMenuButtonIcon=1
+TaskBarEnableSystemTray=1
+TitleButtonsLeft="s"
+
+TitleButtonsRight="xmir"
+TitleButtonsSupported="sxmir"
+
+BorderSizeX=1
+BorderSizeY=1
+DlgBorderSizeX=1
+DlgBorderSizeY=1
+
+MenuIconSize=24
+SmallIconSize=24
+LargeIconSize=32
+HugeIconSize=48
+
+Gradients="taskbuttonactive.xpm taskbuttonminimized.xpm"
+
+ColorNormalBorder="#303744"
+ColorActiveBorder="#303744"
+
+ColorNormalTitleBar="#303744"
+ColorActiveTitleBar="#303744"
+ColorNormalTitleBarText="#7a7a7a"
+ColorActiveTitleBarText="#dfdbd2"
+
+ColorNormalMenu="#303744"
+ColorActiveMenuItem="#303744"
+ColorNormalMenuItemText="#dfdbd2"
+ColorActiveMenuItemText="white"
+ColorDisabledMenuItemText="#7a7a7a"
+
+ColorMoveSizeStatus="#1B1F26"
+ColorMoveSizeStatusText="#dfdbd2"
+
+PagerShowBorders=0
+ColorDefaultTaskBar="#303744"
+ColorNormalTaskBarApp="#303744"
+ColorNormalTaskBarAppText="#dfdbd2"
+ColorActiveTaskBarApp="#303744"
+ColorActiveTaskBarAppText="white"
+ColorMinimizedTaskBarApp="#282a36"
+ColorMinimizedTaskBarAppText="#7a7a7a"
+ColorActiveWorkspaceButton="#4B81C8"
+ColorActiveWorkspaceButtonText="white"
+
+ColorNormalButton="#303744"
+ColorNormalButtonText="#dfdbd2"
+
+ColorListBox="#282a36"
+ColorListBoxText="#dfdbd2"
+ColorListBoxSelection="#7BABEA"
+ColorListBoxSelectionText="white"
+
+ColorCPUStatusUser="#6B8AB0"
+ColorCPUStatusSystem="#6B8AB0"
+ColorCPUStatusNice="#6B8AB0"
+ColorCPUStatusIdle="#1B1F26"
+ColorMEMStatusFree="#1B1F26"
+ColorMEMStatusBuffers="#6B8AB0"
+ColorMEMStatusCached="#6B8AB0"
+ColorNetSend="#6B8AB0"
+ColorNetReceive="#6B8AB0"
+ColorNetIdle="#1B1F26"
+
+TaskBarClockLeds=0
+ColorClock="#303744"
+ColorClockText="#7CA0CC"
+
+ColorToolTip="#1B1F26"
+ColorToolTipText="#ffffff"
+ColorLabel="#303744"
+ColorLabelText="#dfdbd2"
+ColorDialog="#303744"
+
+ColorQuickSwitch="#303744"
+ColorQuickSwitchActive="#7BABEA"
+ColorQuickSwitchText="#dfdbd2"
+ColorQuickSwitchSelectionText="#dfdbd2"
+
+ColorInput="#6B8AB0"
+ColorInputText="#ffffff"
+ColorInputSelection="#6B8AB0"
+ColorInputSelectionText="#303744"
+
+TitleFontNameXft="Fira Sans:size=11:bold"
+MenuFontNameXft="Fira Sans:size=12"
+StatusFontNameXft="Fira Sans:size=10:bold"
+QuickSwitchFontNameXft="Fira Sans:size=10"
+NormalButtonFontNameXft="Fira Sans:size=10"
+ActiveButtonFontNameXft="Fira Sans:size=10"
+NormalTaskBarFontNameXft="Fira Sans:size=10"
+ActiveTaskBarFontNameXft="Fira Sans:size=10:bold"
+ToolButtonFontNameXft="Fira Sans:size=10"
+NormalWorkspaceFontNameXft="Fira Sans:size=10"
+ActiveWorkspaceFontNameXft="Fira Sans:size=10:bold"
+MinimizedWindowFontNameXft="Fira Sans:size=10"
+ListBoxFontNameXft="Fira Sans:size=10"
+ToolTipFontNameXft="Fira Sans:size=10"
+ClockFontNameXft="Fira Sans:size=10:bold"
+ApmFontNameXft="Fira Sans:size=10:bold"
+InputFontNameXft="Fira Sans:size=10"
+LabelFontNameXft="Fira Sans:size=10"
+
+DesktopBackgroundColor=""
+DesktopBackgroundImage=""
+DesktopBackgroundCenter=0
+DesktopBackgroundScaled=0

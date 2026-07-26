@@ -335,6 +335,118 @@ func TestMerge_GUIBothUnsetDefaultsTrue(t *testing.T) {
 	}
 }
 
+// --- [gui] section ---
+
+func TestLoadFile_GUISectionEnabled(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[gui]
+enabled = true
+wm = "fluxbox"
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.GUI.ResolvedEnabled() {
+		t.Error("expected GUI.ResolvedEnabled()=true")
+	}
+	if c.GUI.ResolvedWM() != "fluxbox" {
+		t.Errorf("expected WM=fluxbox, got %q", c.GUI.ResolvedWM())
+	}
+}
+
+func TestLoadFile_GUISectionDisabled(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[gui]
+enabled = false
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.GUI.ResolvedEnabled() {
+		t.Error("expected GUI.ResolvedEnabled()=false")
+	}
+}
+
+func TestLoadFile_GUISectionDefaultWM(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[gui]
+enabled = true
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.GUI.ResolvedWM() != "icewm" {
+		t.Errorf("expected default WM=icewm, got %q", c.GUI.ResolvedWM())
+	}
+}
+
+func TestLoadFile_GUILegacyCellGUIMigratesToSection(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[cell]
+gui = false
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.GUI.ResolvedEnabled() {
+		t.Error("expected legacy [cell] gui=false to migrate to GUI.Enabled=false")
+	}
+}
+
+func TestLoadFile_GUISectionWinsOverLegacy(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[cell]
+gui = false
+
+[gui]
+enabled = true
+wm = "fluxbox"
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.GUI.ResolvedEnabled() {
+		t.Error("expected [gui] enabled=true to win over [cell] gui=false")
+	}
+}
+
+func TestMerge_GUISectionProjectWMOverridesGlobal(t *testing.T) {
+	global := cfg.CellConfig{GUI: cfg.GUISection{WM: "icewm"}}
+	project := cfg.CellConfig{GUI: cfg.GUISection{WM: "fluxbox"}}
+	merged := cfg.Merge(global, project)
+	if merged.GUI.ResolvedWM() != "fluxbox" {
+		t.Errorf("expected project wm=fluxbox to win, got %q", merged.GUI.ResolvedWM())
+	}
+}
+
+func TestMerge_GUISectionGlobalWMKeptWhenProjectUnset(t *testing.T) {
+	global := cfg.CellConfig{GUI: cfg.GUISection{WM: "fluxbox"}}
+	project := cfg.CellConfig{}
+	merged := cfg.Merge(global, project)
+	if merged.GUI.ResolvedWM() != "fluxbox" {
+		t.Errorf("expected global wm=fluxbox preserved, got %q", merged.GUI.ResolvedWM())
+	}
+}
+
+func TestMerge_GUISectionLegacyCellGUIMigrates(t *testing.T) {
+	global := cfg.CellConfig{Cell: cfg.CellSection{GUI: boolPtr(false)}}
+	project := cfg.CellConfig{}
+	merged := cfg.Merge(global, project)
+	if merged.GUI.ResolvedEnabled() {
+		t.Error("expected legacy [cell] gui=false to migrate to GUI.Enabled=false in merge")
+	}
+}
+
 func TestVolumeMount_PassThrough(t *testing.T) {
 	dir := t.TempDir()
 	writeTOML(t, dir, "devcell.toml", `

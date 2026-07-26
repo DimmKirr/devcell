@@ -1,5 +1,5 @@
 #!/bin/bash
-# 50-gui.sh — GUI service startup (Xvfb, fluxbox, x11vnc, xrdp)
+# 50-gui.sh — GUI service startup (Xvfb, icewm/fluxbox, x11vnc, xrdp)
 # Sourced by entrypoint.sh if present and executable.
 
 [ "$DEVCELL_GUI_ENABLED" = "true" ] || return 0
@@ -116,38 +116,86 @@ if [ -f "$DEVCELL_HOME/.Xresources" ]; then
     disown
 fi
 
-if [ -f "$DEVCELL_HOME/.fluxbox/wallpaper.png" ]; then
-    gosu "$USER" $_NIX_ENV feh --bg-fill "$DEVCELL_HOME/.fluxbox/wallpaper.png" 2>/dev/null || true
-else
-    gosu "$USER" $_NIX_ENV xsetroot -solid '#1e1e2e' 2>/dev/null || true
+# ── Window manager selection ───────────────────────────────────────────────
+# DEVCELL_WM env var (set by devcell CLI from [gui] wm), then marker file
+# (written by nix at build time), then default to icewm.
+if [ -z "$DEVCELL_WM" ]; then
+    if [ -f "$DEVCELL_HOME/.config/devcell/window-manager" ]; then
+        DEVCELL_WM=$(cat "$DEVCELL_HOME/.config/devcell/window-manager")
+    else
+        DEVCELL_WM="icewm"
+    fi
 fi
 
-FLUXBOX_RC=/tmp/fluxbox-init
-cp "$DEVCELL_HOME/.fluxbox/init" "$FLUXBOX_RC"
-chmod u+w "$FLUXBOX_RC"
 WORKSPACE_NAME=" ${APP_NAME:-cell} "
-if grep -q "session.screen0.workspaceNames" "$FLUXBOX_RC"; then
-    sed -i "s/^session.screen0.workspaceNames:.*/session.screen0.workspaceNames: ${WORKSPACE_NAME}/" "$FLUXBOX_RC"
-else
-    echo "session.screen0.workspaceNames: ${WORKSPACE_NAME}" >> "$FLUXBOX_RC"
-fi
-log "Starting fluxbox (workspace: ${WORKSPACE_NAME})..."
-# Kill any stale fluxbox before starting fresh.
-pkill -u "$USER" -x fluxbox 2>/dev/null
-sleep 0.2
-# setsid + log file: same reason as Xvfb above — survive entrypoint exec
-# and surface crashes via /tmp/fluxbox.log.
-setsid gosu "$USER" $_NIX_ENV fluxbox -rc "$FLUXBOX_RC" \
-    < /dev/null > /tmp/fluxbox.log 2>&1 &
-# Poll for fluxbox process instead of fixed sleep 1
-for i in $(seq 1 20); do
-    pgrep -u "$USER" fluxbox >/dev/null 2>&1 && break
-    sleep 0.05
-done
 
-if [ -f "$DEVCELL_HOME/.fluxbox/wallpaper.png" ]; then
-    gosu "$USER" $_NIX_ENV feh --bg-fill "$DEVCELL_HOME/.fluxbox/wallpaper.png" 2>/dev/null || true
-fi
+case "$DEVCELL_WM" in
+  fluxbox)
+    if [ -f "$DEVCELL_HOME/.fluxbox/wallpaper.png" ]; then
+        gosu "$USER" $_NIX_ENV feh --bg-fill "$DEVCELL_HOME/.fluxbox/wallpaper.png" 2>/dev/null || true
+    else
+        gosu "$USER" $_NIX_ENV xsetroot -solid '#1e1e2e' 2>/dev/null || true
+    fi
+
+    FLUXBOX_RC=/tmp/fluxbox-init
+    cp "$DEVCELL_HOME/.fluxbox/init" "$FLUXBOX_RC"
+    chmod u+w "$FLUXBOX_RC"
+    if grep -q "session.screen0.workspaceNames" "$FLUXBOX_RC"; then
+        sed -i "s/^session.screen0.workspaceNames:.*/session.screen0.workspaceNames: ${WORKSPACE_NAME}/" "$FLUXBOX_RC"
+    else
+        echo "session.screen0.workspaceNames: ${WORKSPACE_NAME}" >> "$FLUXBOX_RC"
+    fi
+    log "Starting fluxbox (workspace: ${WORKSPACE_NAME})..."
+    pkill -u "$USER" -x fluxbox 2>/dev/null
+    sleep 0.2
+    setsid gosu "$USER" $_NIX_ENV fluxbox -rc "$FLUXBOX_RC" \
+        < /dev/null > /tmp/fluxbox.log 2>&1 &
+    for i in $(seq 1 20); do
+        pgrep -u "$USER" fluxbox >/dev/null 2>&1 && break
+        sleep 0.05
+    done
+    if [ -f "$DEVCELL_HOME/.fluxbox/wallpaper.png" ]; then
+        gosu "$USER" $_NIX_ENV feh --bg-fill "$DEVCELL_HOME/.fluxbox/wallpaper.png" 2>/dev/null || true
+    fi
+    ;;
+
+  icewm)
+    # Wallpaper — feh before WM starts (icewm startup script also sets it)
+    if [ -f "$DEVCELL_HOME/.icewm/wallpaper.png" ]; then
+        gosu "$USER" $_NIX_ENV feh --bg-fill "$DEVCELL_HOME/.icewm/wallpaper.png" 2>/dev/null || true
+    else
+        gosu "$USER" $_NIX_ENV xsetroot -solid '#1e1e2e' 2>/dev/null || true
+    fi
+
+    # Inject workspace name into preferences at runtime
+    ICEWM_PREFS=/tmp/icewm-preferences
+    cp "$DEVCELL_HOME/.icewm/preferences" "$ICEWM_PREFS"
+    chmod u+w "$ICEWM_PREFS"
+    echo "WorkspaceNames=\"${WORKSPACE_NAME}\"" >> "$ICEWM_PREFS"
+
+    log "Starting icewm (workspace: ${WORKSPACE_NAME})..."
+    pkill -u "$USER" -x icewm 2>/dev/null
+    sleep 0.2
+    setsid gosu "$USER" $_NIX_ENV env \
+        ICEWM_PRIVCFG="$DEVCELL_HOME/.icewm" \
+        icewm --preferences="$ICEWM_PREFS" \
+        < /dev/null > /tmp/icewm.log 2>&1 &
+    for i in $(seq 1 20); do
+        pgrep -u "$USER" icewm >/dev/null 2>&1 && break
+        sleep 0.05
+    done
+    if [ -f "$DEVCELL_HOME/.icewm/wallpaper.png" ]; then
+        gosu "$USER" $_NIX_ENV feh --bg-fill "$DEVCELL_HOME/.icewm/wallpaper.png" 2>/dev/null || true
+    fi
+    ;;
+
+  *)
+    log "ERROR: unknown window manager '$DEVCELL_WM' — falling back to icewm"
+    setsid gosu "$USER" $_NIX_ENV icewm \
+        < /dev/null > /tmp/icewm.log 2>&1 &
+    sleep 0.5
+    ;;
+esac
 
 log "Starting x11vnc on port 5900..."
 # Kill any stale x11vnc so we don't fight for port 5900. Pause briefly so
@@ -292,7 +340,7 @@ if [ -n "$XRDP_BIN" ]; then
     # Kill any stale xrdp (defunct or running) before binding 3389.
     pkill -x xrdp 2>/dev/null
     sleep 0.2
-    # setsid: same TTY-detachment as Xvfb/x11vnc/fluxbox above.
+    # setsid: same TTY-detachment as Xvfb/x11vnc/WM above.
     # /var/log/xrdp.log: xrdp's traditional log target (read by sysadmins
     # debugging RDP issues). Stays at /var/log because that path is
     # documented in xrdp.ini's LogFile setting.

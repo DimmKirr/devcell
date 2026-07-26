@@ -87,7 +87,7 @@
       android        = { description = "Android dev: ADB+fastboot (all arch), Android SDK + emulator + apktool + jadx (x86_64 only)"; mcpServers = []; sizeMb = 2500; };
       apple          = { description = "Swift toolchain for CGO and Apple-platform cross-compilation"; mcpServers = []; sizeMb = 900; };
       build          = { description = "C/C++ build toolchain: clang/cmake/make/llvm/lld"; mcpServers = []; sizeMb = 1500; };
-      desktop        = { description = "GUI desktop: Fluxbox WM, Xvfb display, VNC + RDP servers, PulseAudio, screenshot tools"; mcpServers = []; sizeMb = 1200; };
+      desktop        = { description = "GUI desktop: IceWM/Fluxbox WM, Xvfb display, VNC + RDP servers, PulseAudio, screenshot tools"; mcpServers = []; sizeMb = 1200; };
       electronics    = { description = "KiCad EDA, SPICE simulation, ESP32/Arduino dev, hardware sim, PCB MCP"; mcpServers = ["kicad-mcp"]; sizeMb = 800; };
       financial      = { description = "Yahoo Finance, SEC EDGAR, FRED — market data, filings, economic time series"; mcpServers = ["yahoo-finance" "edgartools" "mcp-fredapi" "firefly-iii"]; sizeMb = 500; };
       go             = { description = "Go toolchain: mise-managed runtime + golangci-lint, gopls, gotools"; mcpServers = []; sizeMb = 350; };
