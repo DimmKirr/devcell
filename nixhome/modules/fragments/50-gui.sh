@@ -18,6 +18,14 @@ _PROFILE="/opt/devcell/.local/state/nix/profiles/profile"
 mkdir -p /tmp/.X11-unix
 chmod 1777 /tmp/.X11-unix
 
+# XDG_RUNTIME_DIR — conventional per-user tmpdir for sockets (D-Bus, PulseAudio, Wayland).
+_UID=$(id -u "$USER")
+XDG_RUNTIME_DIR="/run/user/$_UID"
+mkdir -p "$XDG_RUNTIME_DIR"
+chown "$USER:$(id -gn "$USER")" "$XDG_RUNTIME_DIR"
+chmod 700 "$XDG_RUNTIME_DIR"
+export XDG_RUNTIME_DIR
+
 # Mesa llvmpipe software rendering — enables GLX for GPU terminals (Kitty etc.)
 # These may already be set via OCI Env (pure) or home.sessionVariables (login shell);
 # re-export here for the entrypoint context where neither may have run yet.
@@ -67,31 +75,31 @@ done
 
 # D-Bus session bus — required for SNI tray icons (Electron, modern GTK/Qt apps).
 # Started before the WM so it and all child processes inherit the address.
-DBUS_DIR="/tmp/dbus"
-mkdir -p "$DBUS_DIR"
+_DBUS_SOCKET="$XDG_RUNTIME_DIR/bus"
 pkill -u "$USER" -x dbus-daemon 2>/dev/null
 sleep 0.1
-rm -f "$DBUS_DIR/session_bus_socket"
+rm -f "$_DBUS_SOCKET"
 setsid gosu "$USER" $_NIX_ENV dbus-daemon \
     --config-file="$_PROFILE/share/dbus-1/session.conf" \
-    --nofork --address="unix:path=$DBUS_DIR/session_bus_socket" \
+    --nofork --address="unix:path=$_DBUS_SOCKET" \
     < /dev/null > /tmp/dbus-session.log 2>&1 &
-export DBUS_SESSION_BUS_ADDRESS="unix:path=$DBUS_DIR/session_bus_socket"
+export DBUS_SESSION_BUS_ADDRESS="unix:path=$_DBUS_SOCKET"
 for i in $(seq 1 20); do
-    [ -S "$DBUS_DIR/session_bus_socket" ] && break
+    [ -S "$_DBUS_SOCKET" ] && break
     sleep 0.05
 done
-if [ -S "$DBUS_DIR/session_bus_socket" ]; then
-    log "D-Bus session bus ready (socket: $DBUS_DIR/session_bus_socket)"
+if [ -S "$_DBUS_SOCKET" ]; then
+    log "D-Bus session bus ready (socket: $_DBUS_SOCKET)"
 else
     log "WARNING: D-Bus session bus socket not found — SNI tray icons may not work"
 fi
 
-_DBUS_RC_BLOCK="
-# -- D-Bus session bus (appended by 50-gui.sh) --
-export DBUS_SESSION_BUS_ADDRESS=\"unix:path=$DBUS_DIR/session_bus_socket\""
+_GUI_RC_BLOCK="
+# -- XDG runtime & D-Bus session bus (appended by 50-gui.sh) --
+export XDG_RUNTIME_DIR=\"$XDG_RUNTIME_DIR\"
+export DBUS_SESSION_BUS_ADDRESS=\"unix:path=$_DBUS_SOCKET\""
 for _rcfile in .zshrc .zshenv .profile .bashrc; do
-    [ -f "$HOME/$_rcfile" ] && echo "$_DBUS_RC_BLOCK" >> "$HOME/$_rcfile"
+    [ -f "$HOME/$_rcfile" ] && echo "$_GUI_RC_BLOCK" >> "$HOME/$_rcfile"
 done
 
 # SNI→XEmbed proxy — bridges modern tray icons (Wails, Electron, GTK3+/Qt)
@@ -113,9 +121,7 @@ fi
 # which is a bot detection signal (CreepJS).
 # Uses -n (no default config) to avoid dbus dependency; explicitly loads
 # native-protocol-unix (socket) + null-sink (virtual audio output).
-PULSE_DIR="/tmp/pulse-runtime"
-mkdir -p "$PULSE_DIR"
-chown "$USER:$(id -gn "$USER")" "$PULSE_DIR"
+PULSE_DIR="$XDG_RUNTIME_DIR"
 log "Starting PulseAudio (null sink)..."
 XRDP_PULSE_MOD=$(find "$(dirname "$(command -v pulseaudio)")/../lib" -name 'module-xrdp-sink.so' 2>/dev/null | head -1)
 _PA_DL_SEARCH=()
@@ -126,7 +132,7 @@ if [ -n "$XRDP_PULSE_MOD" ]; then
 fi
 PULSE_LOG="/var/log/pulseaudio.log"
 touch "$PULSE_LOG" && chown "$USER" "$PULSE_LOG"
-gosu "$USER" env -u LD_LIBRARY_PATH -u _DEVCELL_LD_SET XDG_RUNTIME_DIR="$PULSE_DIR" \
+gosu "$USER" env -u LD_LIBRARY_PATH -u _DEVCELL_LD_SET \
     pulseaudio --daemonize=yes --exit-idle-time=-1 --disable-shm=true -n \
     --log-target=file:"$PULSE_LOG" --log-level=info \
     "${_PA_DL_SEARCH[@]}" \
@@ -134,10 +140,9 @@ gosu "$USER" env -u LD_LIBRARY_PATH -u _DEVCELL_LD_SET XDG_RUNTIME_DIR="$PULSE_D
     --load="module-native-protocol-unix" 2>/dev/null
 PA_RC=$?
 export PULSE_SERVER="unix:$PULSE_DIR/pulse/native"
-export XDG_RUNTIME_DIR="$PULSE_DIR"
 if [ $PA_RC -eq 0 ]; then
     log "  PulseAudio started (pid $(cat "$PULSE_DIR/pulse/pid" 2>/dev/null || echo '?'), log: $PULSE_LOG)"
-    gosu "$USER" env PULSE_SERVER="unix:$PULSE_DIR/pulse/native" XDG_RUNTIME_DIR="$PULSE_DIR" \
+    gosu "$USER" env PULSE_SERVER="unix:$PULSE_DIR/pulse/native" \
         pactl list sinks short 2>/dev/null | while read -r _idx _name _mod _fmt _state; do
             log "  Sink #${_idx}: ${_name} [${_state}]"
         done
@@ -152,8 +157,7 @@ fi
 if [ $PA_RC -eq 0 ]; then
     _PA_RC_BLOCK="
 # -- PulseAudio (appended by 50-gui.sh) --
-export PULSE_SERVER=\"unix:$PULSE_DIR/pulse/native\"
-export XDG_RUNTIME_DIR=\"$PULSE_DIR\""
+export PULSE_SERVER=\"unix:$PULSE_DIR/pulse/native\""
     for _rcfile in .zshrc .zshenv .profile .bashrc; do
         [ -f "$HOME/$_rcfile" ] && echo "$_PA_RC_BLOCK" >> "$HOME/$_rcfile"
     done
@@ -444,7 +448,7 @@ if [ -n "$XRDP_BIN" ]; then
             HOME="/home/$HOST_USER" \
             CHANSRV_LOG_PATH="/tmp" \
             PULSE_SERVER="unix:$PULSE_DIR/pulse/native" \
-            XDG_RUNTIME_DIR="$PULSE_DIR" \
+            XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" \
             "$XRDP_CHANSRV" \
             < /dev/null > /tmp/chansrv.log 2>&1 &
         _CHANSRV_SOCK="$XRDP_RUN_DIR/xrdp_chansrv_socket_${DISPLAY_NUM}"
@@ -455,7 +459,7 @@ if [ -n "$XRDP_BIN" ]; then
         if [ -S "$_CHANSRV_SOCK" ]; then
             log "  chansrv socket ready"
             if [ -n "$XRDP_PULSE_MOD" ]; then
-                _PA_RUN="gosu $HOST_USER $_NIX_ENV env PULSE_SERVER=unix:$PULSE_DIR/pulse/native XDG_RUNTIME_DIR=$PULSE_DIR"
+                _PA_RUN="gosu $HOST_USER $_NIX_ENV env PULSE_SERVER=unix:$PULSE_DIR/pulse/native XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR"
                 $_PA_RUN pactl load-module module-xrdp-sink xrdp_socket_path=$XRDP_RUN_DIR 2>/dev/null && {
                     $_PA_RUN pactl set-default-sink xrdp-sink 2>/dev/null || true
                     log "  xrdp-sink loaded and set as default"

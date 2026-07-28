@@ -93,6 +93,10 @@ chown -h "$HOST_USER" "$HOME/.local" "$HOME/.local/bin" "$HOME/tmp"
 # SQLite which breaks under concurrent access from different PID namespaces.
 # Redirect GNUPGHOME to container-local storage to avoid lock contention.
 export GNUPGHOME="$HOME/tmp/.gnupg"
+
+# WebKit's internal bwrap sandbox cannot acquire the namespaces it needs inside
+# a Docker container (no CAP_SYS_ADMIN). The container is the sandbox.
+export WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1
 mkdir -p "$GNUPGHOME"
 chmod 700 "$GNUPGHOME"
 chown "$HOST_USER" "$GNUPGHOME"
