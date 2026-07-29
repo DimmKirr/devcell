@@ -126,6 +126,21 @@ func runBuild(cmd *cobra.Command, _ []string) error {
 		return runBuildTart(c.CellName, c.HostHome, c.BaseDir, stack, nil, nixhomePath, force, noCache, scanFlag("--dry-run"), tartOCIImage)
 	}
 
+	// ── qemu engine ─────────────────────────────────────────────────────────
+	if engine == "qemu" {
+		cellCfgQemu, cfgErr := cfg.LoadFromOSWithDirs(c.ConfigDir, c.BaseDir)
+		if cfgErr != nil {
+			return fmt.Errorf("loading config: %w", cfgErr)
+		}
+		stack := cellCfgQemu.Cell.ResolvedStack()
+		if s := cmd.Flags().Lookup("stack").Value.String(); s != "" {
+			stack = s
+		}
+		force, _ := cmd.Flags().GetBool("force")
+		noCache, _ := cmd.Flags().GetBool("no-cache")
+		return runBuildQemu(c.CellName, c.HostHome, c.BaseDir, stack, force, noCache, scanFlag("--dry-run"), cellCfgQemu.Cell)
+	}
+
 	// ── Vagrant engine ────────────────────────────────────────────────────────
 	if engine == "vagrant" {
 		cellCfgVagrant, cfgErr := cfg.LoadFromOSWithDirs(c.ConfigDir, c.BaseDir)
@@ -456,11 +471,12 @@ func runBuildThin(c config.Config, stackOverride, imageOverride string, forceRec
 	volumeName := runner.ThinStoreVolume()
 	containerName := "devcell-thin-builder"
 
-	// ── Ensure core image exists ────────────────────────────────────────────
-	if !runner.ImageExists(ctx, coreImage) {
-		pullLabel := fmt.Sprintf("Pulling core image %s", coreImage)
+	// ── Ensure core image exists for target platform ───────────────────────
+	targetPlatform := runner.DockerPlatform(runner.DetectArch())
+	if !runner.ImageExistsForPlatform(ctx, coreImage, targetPlatform) {
+		pullLabel := fmt.Sprintf("Pulling core image %s (%s)", coreImage, targetPlatform)
 		sp := ux.NewProgressSpinner(pullLabel)
-		if err := runner.PullImage(ctx, coreImage, ux.Verbose); err != nil {
+		if err := runner.PullImageForPlatform(ctx, coreImage, targetPlatform, ux.Verbose); err != nil {
 			sp.Fail(pullLabel + " failed")
 			return fmt.Errorf("pull core image: %w", err)
 		}

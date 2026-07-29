@@ -48,6 +48,13 @@ type CellSection struct {
 	TartSSHUser       string   `toml:"tart_ssh_user"`       // SSH user for tart engine; default: "admin"; env: DEVCELL_TART_SSH_USER
 	TartSSHKey        string   `toml:"tart_ssh_key"`        // path to SSH private key for tart; env: DEVCELL_TART_SSH_KEY
 	TartOCIImage      string   `toml:"tart_oci_image"`      // OCI base image for tart VMs; default: DefaultTartOCIImage; env: DEVCELL_TART_OCI_IMAGE
+	QemuSSHPort       int      `toml:"qemu_ssh_port"`       // SSH port for QEMU engine; default: 2222; env: DEVCELL_QEMU_SSH_PORT
+	QemuSSHHost       string   `toml:"qemu_ssh_host"`       // SSH host for QEMU engine; default: "127.0.0.1"; env: DEVCELL_QEMU_SSH_HOST
+	QemuWindowsISO    string   `toml:"qemu_windows_iso"`    // path to Windows ARM64 ISO; env: DEVCELL_QEMU_WINDOWS_ISO
+	QemuCPUs          int      `toml:"qemu_cpus"`           // QEMU vCPUs; default: 4; env: DEVCELL_QEMU_CPUS
+	QemuMemoryGB      int      `toml:"qemu_memory_gb"`      // QEMU RAM in GB; default: 4; env: DEVCELL_QEMU_MEMORY_GB
+	QemuDiskSizeGB    int      `toml:"qemu_disk_size_gb"`   // QEMU disk size in GB; default: 64; env: DEVCELL_QEMU_DISK_SIZE_GB
+	QemuDisplay       string   `toml:"qemu_display"`        // QEMU display: "none", "cocoa", "sdl"; default: "none"; env: DEVCELL_QEMU_DISPLAY
 }
 
 // ResolvedBackground returns the effective background setting: default OFF, enabled by env/toml.
@@ -117,6 +124,88 @@ func (c CellSection) ResolvedTartOCIImage() string {
 		return c.TartOCIImage
 	}
 	return DefaultTartOCIImage
+}
+
+// ResolvedQemuSSHPort returns the effective QEMU SSH port: env > toml > default 2222.
+func (c CellSection) ResolvedQemuSSHPort() int {
+	if v := os.Getenv("DEVCELL_QEMU_SSH_PORT"); v != "" {
+		if p := atoiOr(v, 0); p > 0 {
+			return p
+		}
+	}
+	if c.QemuSSHPort > 0 {
+		return c.QemuSSHPort
+	}
+	return 2222
+}
+
+// ResolvedQemuSSHHost returns the effective QEMU SSH host: env > toml > default "127.0.0.1".
+func (c CellSection) ResolvedQemuSSHHost() string {
+	if v := os.Getenv("DEVCELL_QEMU_SSH_HOST"); v != "" {
+		return v
+	}
+	if c.QemuSSHHost != "" {
+		return c.QemuSSHHost
+	}
+	return "127.0.0.1"
+}
+
+// ResolvedQemuWindowsISO returns the Windows ISO path: env > toml > "".
+func (c CellSection) ResolvedQemuWindowsISO() string {
+	if v := os.Getenv("DEVCELL_QEMU_WINDOWS_ISO"); v != "" {
+		return v
+	}
+	return c.QemuWindowsISO
+}
+
+// ResolvedQemuCPUs returns the effective QEMU vCPU count: env > toml > default 4.
+func (c CellSection) ResolvedQemuCPUs() int {
+	if v := os.Getenv("DEVCELL_QEMU_CPUS"); v != "" {
+		if n := atoiOr(v, 0); n > 0 {
+			return n
+		}
+	}
+	if c.QemuCPUs > 0 {
+		return c.QemuCPUs
+	}
+	return 4
+}
+
+// ResolvedQemuMemoryGB returns the effective QEMU memory: env > toml > default 4.
+func (c CellSection) ResolvedQemuMemoryGB() int {
+	if v := os.Getenv("DEVCELL_QEMU_MEMORY_GB"); v != "" {
+		if n := atoiOr(v, 0); n > 0 {
+			return n
+		}
+	}
+	if c.QemuMemoryGB > 0 {
+		return c.QemuMemoryGB
+	}
+	return 4
+}
+
+// ResolvedQemuDiskSizeGB returns the effective QEMU disk size: env > toml > default 64.
+func (c CellSection) ResolvedQemuDiskSizeGB() int {
+	if v := os.Getenv("DEVCELL_QEMU_DISK_SIZE_GB"); v != "" {
+		if n := atoiOr(v, 0); n > 0 {
+			return n
+		}
+	}
+	if c.QemuDiskSizeGB > 0 {
+		return c.QemuDiskSizeGB
+	}
+	return 64
+}
+
+// ResolvedQemuDisplay returns the effective QEMU display: env > toml > default "none".
+func (c CellSection) ResolvedQemuDisplay() string {
+	if v := os.Getenv("DEVCELL_QEMU_DISPLAY"); v != "" {
+		return v
+	}
+	if c.QemuDisplay != "" {
+		return c.QemuDisplay
+	}
+	return "none"
 }
 
 // ResolvedThin returns the effective thin setting: default ON, disabled by env/toml.
@@ -642,6 +731,27 @@ func Merge(global, project CellConfig) CellConfig {
 	}
 	if project.Cell.TartOCIImage != "" {
 		out.Cell.TartOCIImage = project.Cell.TartOCIImage
+	}
+	if project.Cell.QemuSSHPort > 0 {
+		out.Cell.QemuSSHPort = project.Cell.QemuSSHPort
+	}
+	if project.Cell.QemuSSHHost != "" {
+		out.Cell.QemuSSHHost = project.Cell.QemuSSHHost
+	}
+	if project.Cell.QemuWindowsISO != "" {
+		out.Cell.QemuWindowsISO = project.Cell.QemuWindowsISO
+	}
+	if project.Cell.QemuCPUs > 0 {
+		out.Cell.QemuCPUs = project.Cell.QemuCPUs
+	}
+	if project.Cell.QemuMemoryGB > 0 {
+		out.Cell.QemuMemoryGB = project.Cell.QemuMemoryGB
+	}
+	if project.Cell.QemuDiskSizeGB > 0 {
+		out.Cell.QemuDiskSizeGB = project.Cell.QemuDiskSizeGB
+	}
+	if project.Cell.QemuDisplay != "" {
+		out.Cell.QemuDisplay = project.Cell.QemuDisplay
 	}
 
 	// LLM: project wins for scalars, providers accumulate

@@ -85,13 +85,17 @@ func init() {
 	rootCmd.PersistentFlags().Bool("plain-text", false, "disable spinners, use plain log output (for CI/non-TTY)")
 	rootCmd.PersistentFlags().Bool("debug", false, "plain-text mode plus stream full build log to stdout")
 	rootCmd.PersistentFlags().String("format", "text", "output format: text, yaml, or json")
-	rootCmd.PersistentFlags().String("engine", "docker", "execution engine: docker, vagrant, or tart")
+	rootCmd.PersistentFlags().String("engine", "docker", "execution engine: docker, vagrant, tart, or qemu")
 	rootCmd.PersistentFlags().Bool("background", false, "keep VM/container running after shell exit")
 	rootCmd.PersistentFlags().Bool("macos", false, "use macOS VM via Vagrant (alias for --engine=vagrant)")
 	rootCmd.PersistentFlags().String("vagrant-provider", "utm", "Vagrant provider (e.g. utm)")
 	rootCmd.PersistentFlags().String("vagrant-box", "", "Vagrant box name override")
 	rootCmd.PersistentFlags().String("tart-ssh-port", "", "SSH port for tart engine (default: 22)")
 	rootCmd.PersistentFlags().String("tart-ssh-host", "", "SSH host for tart engine (default: localhost)")
+	rootCmd.PersistentFlags().String("qemu-ssh-port", "", "SSH port for QEMU engine (default: 2222)")
+	rootCmd.PersistentFlags().String("qemu-ssh-host", "", "SSH host for QEMU engine (default: 127.0.0.1)")
+	rootCmd.PersistentFlags().String("qemu-windows-iso", "", "path to Windows ARM64 ISO for QEMU engine")
+	rootCmd.PersistentFlags().String("qemu-display", "", "QEMU display: none, cocoa, sdl (default: none)")
 	rootCmd.PersistentFlags().String("base-image", "", "core image for scaffold Dockerfile (default: ghcr.io/devcell-sh/devcell:core-local)")
 	rootCmd.PersistentFlags().String("cell-name", "", "cell name for persistent home (~/.devcell/<name>)")
 	rootCmd.AddCommand(
@@ -173,6 +177,10 @@ var cellStringFlags = map[string]bool{
 	"--vagrant-box":      true,
 	"--tart-ssh-port":    true,
 	"--tart-ssh-host":    true,
+	"--qemu-ssh-port":    true,
+	"--qemu-ssh-host":    true,
+	"--qemu-windows-iso": true,
+	"--qemu-display":     true,
 	"--base-image":       true,
 	"--cell-name":        true,
 	"--format":           true,
@@ -289,6 +297,16 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 	}
 	if engine == "tart" {
 		return runTartAgent(
+			binary, defaultFlags, userArgs,
+			cellCfgForEngine,
+			c.BaseDir, c.HostHome, c.CellName,
+			scanFlag("--dry-run"),
+			scanFlag("--background"),
+			scanFlag("--debug"),
+		)
+	}
+	if engine == "qemu" {
+		return runQemuAgent(
 			binary, defaultFlags, userArgs,
 			cellCfgForEngine,
 			c.BaseDir, c.HostHome, c.CellName,

@@ -46,6 +46,25 @@ func TestPreflightPlatformCheck_NixFailure_ReturnsActionableError(t *testing.T) 
 	}
 }
 
+func TestPreflightPlatformCheck_MissingAttribute_SkipsGracefully(t *testing.T) {
+	_, lookErr := lookPathNix()
+	if lookErr != nil {
+		t.Skip("nix not in PATH")
+	}
+
+	// Use a real flake ref but a system key that doesn't exist.
+	// The nixhome flake has platformStrictCheck.{x86_64,aarch64}-linux
+	// but not "mips64el-linux".
+	err := runner.PreflightPlatformCheck(
+		context.Background(),
+		"path:../../nixhome",
+		"mips64el-linux",
+	)
+	if err != nil {
+		t.Errorf("should skip when attribute is missing, got: %v", err)
+	}
+}
+
 func lookPathNix() (string, error) {
 	return runner.LookPathNix()
 }

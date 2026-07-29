@@ -51,6 +51,16 @@ func runInit(cmd *cobra.Command, _ []string) error {
 		return runInitTart(c.CellName, c.HostHome, c.BaseDir, stack, nixhomePath, force, noCache)
 	}
 
+	if engine == "qemu" {
+		c, err := config.LoadFromOS()
+		if err != nil {
+			return fmt.Errorf("load config: %w", err)
+		}
+		stack, _ := cmd.Flags().GetString("stack")
+		force, _ := cmd.Flags().GetBool("force")
+		return runInitQemu(c.CellName, c.HostHome, stack, force)
+	}
+
 	macos, _ := cmd.Flags().GetBool("macos")
 	if macos {
 		return runInitMacOS()

@@ -1,6 +1,7 @@
 package runner_test
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1052,6 +1053,30 @@ func TestDetectArch_IgnoresUnknownValue(t *testing.T) {
 	// Unknown values fall through to runtime detection
 	if got != "x86_64" && got != "aarch64" {
 		t.Errorf("unknown DEVCELL_ARCH should fall through to host detection, got %q", got)
+	}
+}
+
+func TestImageExistsForPlatform_EmptyPlatformDelegatesToImageExists(t *testing.T) {
+	ctx := context.Background()
+	got := runner.ImageExistsForPlatform(ctx, "no-such-image:never", "")
+	if got {
+		t.Error("should return false for nonexistent image with empty platform")
+	}
+}
+
+func TestImageExistsForPlatform_WrongPlatformReturnsFalse(t *testing.T) {
+	ctx := context.Background()
+	got := runner.ImageExistsForPlatform(ctx, "no-such-image:never", "linux/mips64")
+	if got {
+		t.Error("should return false for nonexistent image even with specific platform")
+	}
+}
+
+func TestPullImageForPlatform_FailsForNonexistentImage(t *testing.T) {
+	ctx := context.Background()
+	err := runner.PullImageForPlatform(ctx, "no-such-registry.invalid/no-image:never", "linux/amd64", false)
+	if err == nil {
+		t.Error("should fail for nonexistent image")
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 
 	"github.com/DimmKirr/devcell/internal/config"
@@ -14,6 +15,7 @@ import (
 	"github.com/DimmKirr/devcell/internal/runner"
 	"github.com/DimmKirr/devcell/internal/ux"
 	internalvnc "github.com/DimmKirr/devcell/internal/vnc"
+	"github.com/DimmKirr/devcell/internal/vm/qemu"
 	"github.com/spf13/cobra"
 )
 
@@ -187,6 +189,17 @@ func collectVNCCells(c config.Config, global bool) map[string]string {
 			} else {
 				vncDebug("vagrant: no VNC port found in Vagrantfile")
 			}
+		}
+	}
+
+	// QEMU VMs (always global — one per cell, not per project)
+	vncDebug("qemu: scanning for running VMs")
+	for _, vm := range qemu.DiscoverRunningVMs(c.HostHome) {
+		if vm.Ports.VNCPort > 0 {
+			appName := "qemu-" + vm.CellName
+			port := strconv.Itoa(int(vm.Ports.VNCPort))
+			vncDebug("qemu cell found: %s → %s", appName, port)
+			result[appName] = port
 		}
 	}
 

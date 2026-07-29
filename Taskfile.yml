@@ -36,6 +36,11 @@ vars:
         git describe --tags --always --dirty 2>/dev/null || echo "v0.0.0"
       fi
   CELL_LDFLAGS: -s -w -X github.com/DimmKirr/devcell/internal/version.Version={{.CELL_VERSION}} -X github.com/DimmKirr/devcell/internal/version.GitCommit={{.GIT_COMMIT_HASH}} -X github.com/DimmKirr/devcell/internal/version.BuildDate={{.BUILD_DATE}}
+  CELL_BUILD_TAGS:
+    sh: |
+      tags=""
+      if pkg-config --exists wimlib 2>/dev/null; then tags="wimlib"; fi
+      echo "$tags"
 
 env:
   BUILDKIT_PROGRESS: plain
@@ -136,6 +141,29 @@ tasks:
       - GIT_COMMIT={{.GIT_COMMIT_HASH}} docker buildx bake --file {{.TASKFILE_DIR}}/docker-bake.hcl --print ci
 
   # ── cell CLI binary ────────────────────────────────────────────────────
+
+  cell:deps:
+    desc: Verify build-time library dependencies
+    dir: "{{.TASKFILE_DIR}}"
+    silent: true
+    cmds:
+      - |
+        ok=1
+        if [ "$(uname -s)" = "Darwin" ]; then
+          if ! command -v pkg-config >/dev/null 2>&1; then
+            echo "⚠  pkg-config not found (brew install pkg-config)"
+            ok=0
+          fi
+          if ! pkg-config --exists wimlib 2>/dev/null; then
+            echo "⚠  wimlib not found — QEMU Windows VM builds will be disabled"
+            echo "   Install: brew install wimlib"
+          fi
+        fi
+        if ! command -v go >/dev/null 2>&1; then
+          echo "✗  go not found"; ok=0
+        fi
+        [ "$ok" -eq 1 ] || { echo ""; echo "Fix the above and re-run."; exit 1; }
+
   # macOS Sequoia (15.x) launch-constraint guard: after `go build`, the OS-
   # recorded provenance for the freshly written file doesn't match the new
   # binary's content → kernel SIGKILLs the process at exec time, before
@@ -146,11 +174,11 @@ tasks:
   cell:build:
     desc: Build cell CLI binary → ./bin/cell
     dir: "{{.TASKFILE_DIR}}"
-    deps: [swagger:generate]
+    deps: [swagger:generate, cell:deps]
     silent: true
     cmds:
       - mkdir -p bin
-      - CGO_ENABLED={{if eq OS "darwin"}}1{{else}}0{{end}} go build -ldflags "{{.CELL_LDFLAGS}}" -o ./bin/cell ./cmd/
+      - CGO_ENABLED={{if eq OS "darwin"}}1{{else}}0{{end}} go build {{if .CELL_BUILD_TAGS}}-tags "{{.CELL_BUILD_TAGS}}" {{end}}-ldflags "{{.CELL_LDFLAGS}}" -o ./bin/cell ./cmd/
       - '[ "$(uname -s)" != "Darwin" ] || xattr -c ./bin/cell'
       - '[ "$(uname -s)" != "Darwin" ] || codesign --force --sign - --entitlements entitlements.plist ./bin/cell'
 
@@ -445,6 +473,66 @@ tasks:
   debug:
     cmds:
       - task: debug:macos
+  # ── Windows ISO debugging (UUP dump download + wimlib assembly) ─────
+  debug:windows:
+    desc: "Quick Windows QEMU smoke test: build → exec echo hello world"
+    platforms: [darwin]
+    deps: [install]
+    silent: true
+    vars:
+      MARKER: '{{.HOME}}/.devcell/windows/ultimate/.provisioned'
+      LOG: '{{.TASKFILE_DIR}}/.context/debug/windows.log'
+    cmds:
+      - |
+        set -euo pipefail
+        mkdir -p "$(dirname "{{.LOG}}")"
+
+        _run() {
+        echo "=== [0/3] Pre-flight diagnostics ==="
+        echo "  date:     $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        echo "  cell:     $(cell --version 2>&1 || echo 'not found')"
+        echo "  qemu:     $(qemu-system-aarch64 --version 2>/dev/null | head -1 || echo 'not found')"
+        echo "  bunk env: DEVCELL_BUNK=${DEVCELL_BUNK:-<unset>}  SESSION_PORT_PREFIX=${SESSION_PORT_PREFIX:-<unset>}"
+        echo "  marker:   {{.MARKER}} — $(test -f '{{.MARKER}}' && echo 'EXISTS' || echo 'MISSING')"
+        echo ""
+        echo "  template disk:"
+        ls -lh {{.HOME}}/.devcell/windows/ultimate/disk-ultimate.qcow2 2>/dev/null || echo "    not found"
+        echo ""
+        echo "  instance disk:"
+        ls -lh {{.HOME}}/.devcell/DIMM/windows/disk.qcow2 2>/dev/null || echo "    not found"
+        echo ""
+        echo "  ports.json:"
+        cat {{.HOME}}/.devcell/DIMM/windows/ports.json 2>/dev/null || echo "    not found"
+        echo ""
+        echo "  qemu processes:"
+        pgrep -lf qemu-system 2>/dev/null || echo "    none"
+        echo ""
+        echo "  port 2222 (legacy):"
+        lsof -i :2222 -sTCP:LISTEN 2>/dev/null || echo "    not in use"
+        echo ""
+
+        echo "=== [1/3] Build VM ==="
+        if [ -f "{{.MARKER}}" ]; then
+          echo "Template already provisioned — skipping build."
+        else
+          echo "Template not provisioned — building (--force in case stale disk exists)..."
+          cell build --engine=qemu --force --debug 2>&1
+        fi
+        echo ""
+
+        echo "=== [2/3] Post-build diagnostics ==="
+        echo "  marker:   $(test -f '{{.MARKER}}' && echo 'EXISTS' || echo 'MISSING')"
+        echo "  template disk:"
+        ls -lh {{.HOME}}/.devcell/windows/ultimate/disk-ultimate.qcow2 2>/dev/null || echo "    not found"
+        echo "  qemu processes:"
+        pgrep -lf qemu-system 2>/dev/null || echo "    none"
+        echo ""
+
+        echo "=== [3/3] Shell exec: echo hello world ==="
+        cell shell --engine=qemu --debug -- cmd /c echo hello world
+        }
+
+        _run 2>&1 | tee "{{.LOG}}"
   # ── macOS VM debugging ────────────────────────────────────────────────
   debug:macos:
     desc: Mount a stopped macOS VM disk and dump diagnostics to .devcell/debug/<datetime>-macos.log

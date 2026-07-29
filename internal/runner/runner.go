@@ -611,10 +611,36 @@ func ImageExists(ctx context.Context, tag string) bool {
 	return exec.CommandContext(ctx, "docker", "image", "inspect", tag).Run() == nil
 }
 
+// ImageExistsForPlatform returns true if a Docker image with the given tag
+// exists locally AND matches the requested platform (e.g. "linux/amd64").
+// Empty platform falls back to ImageExists (host default).
+func ImageExistsForPlatform(ctx context.Context, tag, platform string) bool {
+	if platform == "" {
+		return ImageExists(ctx, tag)
+	}
+	out, err := exec.CommandContext(ctx, "docker", "image", "inspect",
+		"--format", "{{.Os}}/{{.Architecture}}", tag).Output()
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(out)) == platform
+}
+
 // PullImage attempts to pull a Docker image. Returns nil on success.
 // When verbose is true, docker pull output is streamed to os.Stderr.
 func PullImage(ctx context.Context, tag string, verbose bool) error {
-	cmd := exec.CommandContext(ctx, "docker", "pull", tag)
+	return PullImageForPlatform(ctx, tag, "", verbose)
+}
+
+// PullImageForPlatform pulls a Docker image for a specific platform.
+// Empty platform uses Docker's default (host architecture).
+func PullImageForPlatform(ctx context.Context, tag, platform string, verbose bool) error {
+	args := []string{"pull"}
+	if platform != "" {
+		args = append(args, "--platform", platform)
+	}
+	args = append(args, tag)
+	cmd := exec.CommandContext(ctx, "docker", args...)
 	if verbose {
 		cmd.Stdout = os.Stderr
 		cmd.Stderr = os.Stderr
