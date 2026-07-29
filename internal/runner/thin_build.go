@@ -344,7 +344,7 @@ COPY entrypoint.sh /opt/devcell/.local/bin/entrypoint.sh
 ENV HOME=/opt/devcell
 ENV USER=devcell
 ENV DEVCELL_PROFILE=devcell-%s
-ENV PATH="/nix/var/nix/profiles/devcell-tools/bin:/opt/devcell/.local/state/nix/profiles/profile/bin:/opt/devcell/.local/bin:/nix/var/nix/profiles/default/bin:/usr/local/bin:/usr/bin:/bin"
+ENV PATH="/run/wrappers/bin:/nix/var/nix/profiles/devcell-tools/bin:/opt/devcell/.local/state/nix/profiles/profile/bin:/opt/devcell/.local/bin:/nix/var/nix/profiles/default/bin:/usr/local/bin:/usr/bin:/bin"
 ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 ENV NIX_SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
 ENV LOCALE_ARCHIVE=/nix/var/nix/profiles/devcell-tools/lib/locale/locale-archive

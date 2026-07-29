@@ -815,7 +815,9 @@ in
       Env = [
         "HOME=/opt/devcell"
         "USER=devcell"
-        "PATH=/opt/devcell/.local/state/nix/profiles/profile/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        # /run/wrappers/bin first: the entrypoint installs a setuid sudo copy
+        # there (CELL-358) and it must shadow the non-setuid store sudo.
+        "PATH=/run/wrappers/bin:/opt/devcell/.local/state/nix/profiles/profile/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
         "DEVCELL_PROFILE=devcell-${stackName}"
         "DEVCELL_HOME=/opt/devcell"
         "LANG=en_US.UTF-8"

@@ -9,10 +9,12 @@
 #   ALWAYS RUN (every container start):
 #     - chmod 1777 /tmp           — n2c bakes /tmp at 0555, kills Xvfb lockfile,
 #                                    breaks the entire GUI chain (Xvfb→x11vnc→xrdp).
-#     - chmod u+s on real sudo    — nix store paths are 0555, no setuid. Without
-#                                    this, `sudo` errors "must be owned by uid 0
-#                                    and have the setuid bit set" — sudo-from-cell
-#                                    is broken in fresh pure containers.
+#     - setuid sudo wrapper       — nix store paths are 0555 and /nix is shared
+#                                    across containers, so the store can never
+#                                    hold setuid. Copy sudo to /run/wrappers/bin
+#                                    and setuid the copy, else `sudo` errors
+#                                    "must be owned by uid 0 and have the setuid
+#                                    bit set" and sudo-from-cell is broken.
 #     - /nix/var/nix state dirs   — needed by any nix CLI invocation (incl. read
 #                                    paths like `nix-store -q`), regardless of
 #                                    whether the daemon is up.
@@ -35,31 +37,69 @@ notify nix.starting
 # single most load-bearing chmod in the entrypoint.
 chmod 1777 /tmp 2>/dev/null || true
 
-# ── ALWAYS: setuid sudo (nix store paths are 0555) ──────────────────────
-# sudo is symlinked into /bin AND /sbin via buildEnv pathsToLink — both
-# links resolve to the same /nix/store/...-sudo/bin/sudo target via
-# readlink -f. Touch each link path defensively in case the symlink graph
-# changes in a future nixpkgs revision.
-_chmod_setuid_target() {
-    local _link="$1"
-    [ -e "$_link" ] || return 0
-    local _real
-    _real=$(readlink -f "$_link" 2>/dev/null) || return 0
-    [ -e "$_real" ] || return 0
-    if [ -u "$_real" ]; then
-        log "  $_real already has setuid bit"
-        return 0
-    fi
-    if chmod u+s "$_real" 2>/dev/null; then
-        log "  setuid+ on $_real (via $_link)"
+# ── ALWAYS: setuid sudo wrapper (CELL-358) ──────────────────────────────
+# Nix store paths are 0555 and /nix is a volume SHARED by every container,
+# so the store can never carry the setuid bit. The old fix (chmod u+s on the
+# store path) was wrong on a shared volume: any `nix profile upgrade` moves
+# the profile symlink to a fresh 0555 path, breaking sudo in EVERY container
+# at once, and one container's chmod leaked a setuid binary to all others.
+#
+# Instead use the NixOS security-wrappers pattern: copy sudo to a
+# container-local dir on the overlay and set setuid on the copy. The copy is
+# immune to profile rebuilds (scenario: rebuild in cell A leaves cell B's
+# sudo untouched), mutates nothing on the shared volume, and is refreshed
+# from the current profile on every container start.
+log "Installing setuid sudo wrapper..."
+_sudo_store=$(readlink -f "$(command -v sudo 2>/dev/null)" 2>/dev/null)
+if [ -n "$_sudo_store" ] && [ -e "$_sudo_store" ]; then
+    if install -D -m 4755 -o root -g root "$_sudo_store" /run/wrappers/bin/sudo 2>/dev/null; then
+        log "  wrapper installed from $_sudo_store"
+
+        # Pin the closure. The copy dlopens sudoers.so / libsudo_util.so from
+        # its store path at runtime, and once a profile upgrade moves on,
+        # nothing else roots the old closure — a GC would rip the plugins out
+        # from under the running copy. Named per store hash so containers on
+        # different sudo versions each keep their own pin instead of
+        # clobbering a shared name; the -wrapper- infix keeps it clear of the
+        # *-profile / *-meta globs that the GC reaper walks.
+        _sudo_pkg="${_sudo_store%/bin/sudo}"
+        _sudo_hash=$(basename "$_sudo_pkg" | cut -d- -f1)
+        mkdir -p /nix/var/nix/gcroots/devcell 2>/dev/null
+        ln -sfT "$_sudo_pkg" "/nix/var/nix/gcroots/devcell/sudo-wrapper-${_sudo_hash}" 2>/dev/null \
+            && log "  pinned closure via gcroots/devcell/sudo-wrapper-${_sudo_hash}"
+
+        # Repoint the FHS paths scripts hardcode. Also unifies pure and thin:
+        # pure images ship /bin/sudo from systemTools, thin images ship none.
+        for _p in /bin/sudo /usr/bin/sudo /sbin/sudo; do
+            ln -sfT /run/wrappers/bin/sudo "$_p" 2>/dev/null || true
+        done
     else
-        log "  ⚠ chmod u+s $_real failed (errno=$?)"
+        log "  ⚠ could not install sudo wrapper into /run/wrappers/bin"
     fi
-}
-log "Fixing setuid bit on sudo..."
-_chmod_setuid_target /bin/sudo
-_chmod_setuid_target /sbin/sudo
-_chmod_setuid_target /usr/bin/sudo
+else
+    log "  ⚠ sudo not found on PATH — skipping wrapper install"
+fi
+
+# PAM stub. Thin images have no /etc/pam.d at all, so sudo aborts with
+# "PAM account management error" even once setuid is correct. Pure images
+# bake this via image.nix extraDirs (CELL-86); only create it when missing.
+# Bare module name resolves through libpam's own store lib/security dir.
+if [ ! -f /etc/pam.d/sudo ]; then
+    mkdir -p /etc/pam.d
+    printf 'auth     sufficient pam_permit.so\naccount  sufficient pam_permit.so\nsession  sufficient pam_permit.so\npassword sufficient pam_permit.so\n' > /etc/pam.d/sudo
+    chmod 0644 /etc/pam.d/sudo
+    log "  wrote /etc/pam.d/sudo stub"
+fi
+
+# Self-test. setuid is silently neutralized by a nosuid mount on /run or by
+# --security-opt no-new-privileges; both install cleanly and then fail at
+# first use, so surface it here rather than letting users discover it later.
+if [ ! -u /run/wrappers/bin/sudo ] 2>/dev/null; then
+    log "  ⚠ sudo wrapper has no setuid bit — sudo will not work"
+elif ! grep -q '^NoNewPrivs:[[:space:]]*0' /proc/self/status 2>/dev/null; then
+    log "  ⚠ no-new-privileges is set — setuid is neutralized, sudo will not work"
+fi
+
 # gosu must NOT have setuid — gosu 1.19+ refuses to run if setuid is detected.
 # All gosu calls in entrypoint fragments already run as root (pid 1), so no
 # setuid is needed. For session-user privilege escalation, use sudo instead.

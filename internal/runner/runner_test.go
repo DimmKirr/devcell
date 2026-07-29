@@ -1094,3 +1094,18 @@ func TestDockerPlatform_MatchesArch(t *testing.T) {
 		}
 	}
 }
+
+// CELL-358: sudo works in cells only because the entrypoint installs a setuid
+// wrapper at /run/wrappers/bin/sudo. Docker's --security-opt no-new-privileges
+// sets PR_SET_NO_NEW_PRIVS, which makes the kernel ignore the setuid bit — the
+// wrapper would install cleanly and then fail at first use, in every cell at
+// once. This guards the invariant so nobody adds the flag as a hardening tweak
+// without understanding it breaks privilege escalation inside the cell.
+func TestArgv_NeverDisablesNewPrivileges(t *testing.T) {
+	argv := buildArgv(t)
+	for i, a := range argv {
+		if strings.Contains(a, "no-new-privileges") {
+			t.Errorf("argv[%d]=%q sets no-new-privileges — this neutralizes the setuid sudo wrapper and breaks sudo in every cell", i, a)
+		}
+	}
+}

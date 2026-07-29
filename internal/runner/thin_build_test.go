@@ -785,3 +785,31 @@ func TestThinBuildArgv_BakesNixLdEnv(t *testing.T) {
 	}
 }
 
+
+// CELL-358: sudo lives in the nix store at 0555 and the store is a shared,
+// immutable volume — it can never carry a setuid bit. The entrypoint installs
+// a setuid copy at /run/wrappers/bin/sudo (NixOS security-wrappers pattern),
+// so that dir must precede the devcell-tools profile on PATH or the
+// non-setuid profile sudo shadows the wrapper and every `sudo` call fails.
+func TestThinBuildArgv_WrapperDirPrecedesProfileOnPath(t *testing.T) {
+	argv := ThinBuildArgv(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, testStack, "x86_64")
+	script := argv[len(argv)-1]
+	var envPath string
+	for _, line := range strings.Split(script, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "ENV PATH=") {
+			envPath = line
+			break
+		}
+	}
+	if envPath == "" {
+		t.Fatal("inner Dockerfile must set ENV PATH")
+	}
+	wrapper := strings.Index(envPath, "/run/wrappers/bin")
+	if wrapper == -1 {
+		t.Fatal("inner Dockerfile must put /run/wrappers/bin on PATH for the setuid sudo wrapper")
+	}
+	profile := strings.Index(envPath, "/nix/var/nix/profiles/devcell-tools/bin")
+	if profile != -1 && wrapper > profile {
+		t.Error("/run/wrappers/bin must come BEFORE /nix/var/nix/profiles/devcell-tools/bin on PATH — otherwise the non-setuid profile sudo wins and sudo is broken")
+	}
+}
