@@ -21,6 +21,7 @@
     ../modules/shell.nix
     ../modules/social.nix
     ../modules/travel.nix
+    ../modules/vm.nix
     ../modules/wine.nix
   ];
 
@@ -36,6 +37,7 @@
   devcell.modules.security.enable = true;
   devcell.modules.social.enable = true;
   devcell.modules.travel.enable = true;
+  devcell.modules.vm.enable = true;
   devcell.modules.wine.enable = true;
   devcell.modules.plex.enable = true;  # from ../modules/media
 }

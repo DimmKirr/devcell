@@ -320,6 +320,7 @@
         };
       in map check packages;
     in {
+      x86_64-linux = mkCheck "x86_64-linux";
       aarch64-linux = mkCheck "aarch64-linux";
       aarch64-darwin = mkCheck "aarch64-darwin";
     };
@@ -353,6 +354,7 @@
         packages = cfg.config.home.packages;
       in builtins.deepSeq (map (p: p.drvPath) packages) (builtins.length packages);
     in {
+      x86_64-linux = mkStrictCheck "x86_64-linux";
       aarch64-linux = mkStrictCheck "aarch64-linux";
       aarch64-darwin = mkStrictCheck "aarch64-darwin";
     };

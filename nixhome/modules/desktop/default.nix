@@ -143,29 +143,53 @@ in
     # Terminal emulator — launched from WM menu
     xterm
 
-    # X11 client libraries
+    # ── X11 client libraries ─────────────────────────────────────────────
     xorg.libX11
     xorg.libXcursor
     xorg.libxkbfile
     xorg.libXrandr
 
-    # Graphics / rendering libraries
-    cairo # 2D vector graphics (libcairo2)
-    fontconfig # font configuration (libfontconfig)
-    freetype # font rendering (libfreetype6)
-    libGL # OpenGL (libegl1-mesa / libgl1-mesa)
-    mesa  # Mesa 3D — provides llvmpipe software rasterizer for GLX on Xvfb
-    glew # OpenGL extension library (libglew2.2)
-    libGLU # OpenGL utility library (libglu1-mesa)
-    libtiff # TIFF image library (libtiff5)
+    # ── Graphics / rendering ───────────────────────────────────────────
+    cairo
+    fontconfig
+    freetype
+    vulkan-loader
+    libGL
+    mesa       # llvmpipe software rasterizer for GLX on Xvfb
+    glew
+    libGLU
+    libtiff
 
-    # D-Bus session bus — SNI tray icons (Electron, modern GTK) need it
+    # ── D-Bus / tray ───────────────────────────────────────────────────
     dbus
-    # SNI→XEmbed proxy — bridges modern tray icons (Wails, Electron, GTK3+) to IceWM's XEmbed tray
-    snixembed
+    snixembed  # SNI→XEmbed proxy for IceWM tray
 
-    # GTK 3 — required by many GUI apps and dialogs
-    gtk3
+    # ── GTK4 / WebKit / Wails 3 build stack ────────────────────────────
+    # Runtime libraries
+    pkg-config
+    gtk4
+    webkitgtk_6_0
+    libsoup_3
+
+    # Dev headers (.pc files for CGo / native builds)
+    gtk4.dev
+    webkitgtk_6_0.dev
+    glib.dev
+    libsoup_3.dev
+    cairo.dev
+    pango.dev
+    harfbuzz.dev
+    gdk-pixbuf.dev
+    graphene.dev
+    libepoxy.dev
+    vulkan-loader.dev
+    xorg.xorgproto  # X protocol headers — transitive dep of x11.pc
+    xorg.libX11.dev
+    xorg.libXrandr.dev
+    xorg.libXi.dev
+    xorg.libXcursor.dev
+    libxkbcommon.dev
+    wayland.dev
 
     # wxWidgets GUI toolkit (libwxgtk3.2-1, libwxgtk-webview3.2-1)
     wxGTK32 # wxWidgets 3.2.x; attribute = wxGTK32, pname = "wxwidgets"
@@ -249,6 +273,7 @@ in
   # Mesa llvmpipe software rendering — headless container has no GPU.
   # Paths go through the profile symlink (stable across generations) rather
   # than hardcoded store hashes that break on rebuild.
+  home.sessionVariables.PKG_CONFIG_PATH = "${config.home.profileDirectory}/lib/pkgconfig:${config.home.profileDirectory}/share/pkgconfig";
   home.sessionVariables.LIBGL_ALWAYS_SOFTWARE = "1";
   home.sessionVariables.GALLIUM_DRIVER = "llvmpipe";
   home.sessionVariables.LIBGL_DRIVERS_PATH = "${config.home.profileDirectory}/lib/dri";
