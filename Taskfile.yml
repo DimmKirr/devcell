@@ -71,17 +71,18 @@ tasks:
     cmds:
       - |
         set -e
-        NIX_BIN=/opt/devcell/.local/state/nix/profiles/profile/bin
+        NIX=$(command -v nix)
+        NIX_INSTANTIATE=$(command -v nix-instantiate)
         FLAKE="{{.TASKFILE_DIR}}/nixhome"
 
         echo "=== 1/2 Syntax check (nix-instantiate --parse) ==="
         FAIL=0
         for f in $(find nixhome -name '*.nix'); do
-          if sudo "$NIX_BIN/nix-instantiate" --parse "$f" >/dev/null 2>&1; then
+          if "$NIX_INSTANTIATE" --parse "$f" >/dev/null 2>&1; then
             echo "  OK   $f"
           else
             echo "  FAIL $f"
-            sudo "$NIX_BIN/nix-instantiate" --parse "$f" 2>&1 | grep 'error:' >&2
+            "$NIX_INSTANTIATE" --parse "$f" 2>&1 | grep 'error:' >&2
             FAIL=1
           fi
         done
@@ -94,11 +95,11 @@ tasks:
         for stack in base go node python fullstack electronics ultimate; do
           CFG="devcell-${stack}${SUFFIX}"
           printf "  %-40s" "$CFG"
-          COUNT=$(sudo "$NIX_BIN/nix" eval \
+          COUNT=$("$NIX" eval \
             "${FLAKE}#homeConfigurations.${CFG}.config.home.packages" \
             --apply 'builtins.length' --json 2>/dev/null) \
             && echo "OK ($COUNT packages)" \
-            || { echo "FAIL"; sudo "$NIX_BIN/nix" eval \
+            || { echo "FAIL"; "$NIX" eval \
               "${FLAKE}#homeConfigurations.${CFG}.config.home.packages" \
               --apply 'builtins.length' --json 2>&1 | grep 'error:' >&2; exit 1; }
         done
