@@ -82,11 +82,12 @@ if [ -S /var/run/docker.sock ]; then
     usermod -aG "$DOCKER_GROUP" "$HOST_USER"
 fi
 
-mkdir -p "$HOME/.local/bin" "$HOME/tmp"
+mkdir -p "$HOME/.local/bin" "$HOME/go/bin" "$HOME/tmp"
 # Symlink cell binary so it's on the session user's PATH
 # (shell rc rewrites /opt/devcell → $HOME, so /opt/devcell/.local/bin is not in PATH)
 ln -sf /opt/devcell/.local/bin/cell "$HOME/.local/bin/cell" 2>/dev/null || true
-chown -h "$HOST_USER" "$HOME/.local" "$HOME/.local/bin" "$HOME/tmp"
+chown -h "$HOST_USER" "$HOME/.local" "$HOME/.local/bin" "$HOME/go" "$HOME/go/bin" "$HOME/tmp"
+export PATH="$HOME/go/bin:$PATH"
 
 # ── Isolate GPG per container ────────────────────────────────────────────────
 # Persistent $HOME is shared across containers. GnuPG 2.4+ uses keyboxd with
