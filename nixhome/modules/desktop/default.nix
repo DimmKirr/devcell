@@ -183,7 +183,7 @@ in
     graphene.dev
     libepoxy.dev
     vulkan-loader.dev
-    xorg.xorgproto  # X protocol headers — transitive dep of x11.pc
+    (lib.lowPrio xorg.xorgproto)  # X protocol headers — lowPrio to yield to libX11.dev on overlapping XKBgeom.h
     xorg.libX11.dev
     xorg.libXrandr.dev
     xorg.libXi.dev
