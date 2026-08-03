@@ -188,66 +188,6 @@ func TestBuildDockerPruneSteps_ForceOnLinux_Rootless(t *testing.T) {
 	}
 }
 
-// `cell build prune --pure` runs nix garbage collection. On macOS, the target
-// is the linux-builder VM via `sudo ssh` — the SSH private key lives at
-// `/etc/nix/builder_ed25519` (root-only, mode 0600), so unprivileged ssh
-// can't load it and hangs at the password prompt. The outer sudo gives ssh
-// root, so it can read the key the nix daemon uses for builds.
-func TestBuildNixPruneSteps_Default_DarwinUsesSudoSSHToLinuxBuilder(t *testing.T) {
-	opts := runner.PruneOpts{
-		GOOS:             "darwin",
-		Pure:             true,
-		LinuxBuilderHost: "builder@linux-builder",
-	}
-	steps := runner.BuildNixPruneSteps(opts)
-
-	if len(steps) == 0 {
-		t.Fatalf("want at least 1 step, got 0")
-	}
-
-	// Every non-cleanup step must be `sudo ssh <host> '<remote-cmd>'`.
-	for i, s := range steps {
-		if s.IgnoreError {
-			continue // registry cleanup step
-		}
-		if len(s.Argv) < 2 || s.Argv[0] != "sudo" || s.Argv[1] != "ssh" {
-			t.Errorf("step %d not wrapped in `sudo ssh`: %v", i+1, s.Argv)
-			continue
-		}
-		if !contains(s.Argv, "builder@linux-builder") {
-			t.Errorf("step %d missing ssh host `builder@linux-builder`: %v", i+1, s.Argv)
-		}
-		// The remote command (last argv element) must NOT re-invoke sudo.
-		// We're already root locally; on the builder, the `builder` user is
-		// in nix's trusted-users and the daemon owns /nix/store, so plain
-		// nix-collect-garbage / nix-store --optimise suffice.
-		remote := s.Argv[len(s.Argv)-1]
-		if strings.Contains(remote, "sudo") {
-			t.Errorf("step %d remote command should not invoke sudo on the builder VM: %q", i+1, remote)
-		}
-	}
-
-	// At least one step must run `nix-collect-garbage -d` and one
-	// `nix-store --optimise` remotely.
-	gotGC := false
-	gotOptimise := false
-	for _, s := range steps {
-		joined := strings.Join(s.Argv, " ")
-		if strings.Contains(joined, "nix-collect-garbage -d") {
-			gotGC = true
-		}
-		if strings.Contains(joined, "nix-store --optimise") {
-			gotOptimise = true
-		}
-	}
-	if !gotGC {
-		t.Errorf("nix-collect-garbage -d not found in any step: %+v", steps)
-	}
-	if !gotOptimise {
-		t.Errorf("nix-store --optimise not found in any step: %+v", steps)
-	}
-}
-
 // `cell build prune --pure` on Linux (default, no --force) runs safe
 // project-aware GC: remove only orphaned profile generations that aren't
 // protected by project-scoped GC roots under /nix/var/nix/gcroots/devcell/,
@@ -496,15 +436,14 @@ func TestBuildPrunePrompt_AllModesContainWarningAndTarget(t *testing.T) {
 			},
 		},
 		{
+			// CELL-333: darwin default prunes the devcell-nix-store volume,
+			// same as linux — no ssh, no sudo, no linux-builder mention.
 			name: "nix default darwin",
 			opts: runner.PruneOpts{GOOS: "darwin", Pure: true},
 			mustHave: []string{
-				"This will delete ALL",
-				"/nix/store",
-				"linux-builder",
-				// User must see that a sudo password prompt is incoming —
-				// unprivileged ssh can't read /etc/nix/builder_ed25519.
-				"sudo",
+				"orphaned profile generations",
+				"project GC roots",
+				"devcell-nix-store",
 				"Continue? [y/N]",
 			},
 		},
@@ -849,6 +788,61 @@ func TestSafeNixGCScript_DoesNotTouchAutoRoots(t *testing.T) {
 		t.Error("SafeNixGCScript must not reference gcroots/auto/ — " +
 			"auto roots are namespace-local and deleting them from " +
 			"a different container is destructive (CELL-330)")
+	}
+}
+
+// CELL-333: on macOS the thin-mode nix store lives in the devcell-nix-store
+// Docker volume, not in the linux-builder VM. The default --pure prune must
+// target that volume via a throwaway container (where /nix and the devcell
+// GC roots resolve correctly), exactly like the Linux path. GC-ing the
+// linux-builder VM never reclaims the store that actually grows.
+func TestBuildNixPruneSteps_Default_DarwinRunsInContainerOnNixVolume(t *testing.T) {
+	opts := runner.PruneOpts{
+		GOOS: "darwin",
+		Pure: true,
+	}
+	steps := runner.BuildNixPruneSteps(opts)
+
+	if len(steps) == 0 {
+		t.Fatalf("want at least 1 step, got 0")
+	}
+
+	// No ssh, no sudo — the volume is reachable through the local docker
+	// daemon, and -u 0 inside the container covers root-only operations.
+	for i, s := range steps {
+		joined := strings.Join(s.Argv, " ")
+		if strings.Contains(joined, "ssh") {
+			t.Errorf("step %d must not ssh to linux-builder (CELL-333): %v", i+1, s.Argv)
+		}
+		if len(s.Argv) > 0 && s.Argv[0] == "sudo" {
+			t.Errorf("step %d must not require sudo on the host: %v", i+1, s.Argv)
+		}
+	}
+
+	// The safe GC script must run via docker run with the nix volume mounted.
+	var script string
+	sawVolume := false
+	for _, s := range steps {
+		joined := strings.Join(s.Argv, " ")
+		if strings.Contains(joined, "docker run") &&
+			strings.Contains(joined, runner.DefaultThinStoreVolume+":/nix") {
+			sawVolume = true
+			for i, a := range s.Argv {
+				if a == "-c" && i+1 < len(s.Argv) {
+					script = s.Argv[i+1]
+				}
+			}
+		}
+	}
+	if !sawVolume {
+		t.Fatalf("no docker run step mounting %s:/nix found: %+v",
+			runner.DefaultThinStoreVolume, steps)
+	}
+	if !strings.Contains(script, "gcroots/devcell") || !strings.Contains(script, "nix-store --gc") {
+		t.Errorf("darwin safe GC must use the project-aware script (gcroots/devcell + nix-store --gc), got: %q", script)
+	}
+	if strings.Contains(script, "nix-collect-garbage") {
+		t.Errorf("darwin default prune must not blanket nix-collect-garbage (that's --force)")
 	}
 }
 

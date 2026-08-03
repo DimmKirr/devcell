@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -139,6 +140,25 @@ func runBuild(cmd *cobra.Command, _ []string) error {
 		force, _ := cmd.Flags().GetBool("force")
 		noCache, _ := cmd.Flags().GetBool("no-cache")
 		return runBuildQemu(c.CellName, c.HostHome, c.BaseDir, stack, force, noCache, scanFlag("--dry-run"), cellCfgQemu.Cell)
+	}
+
+	// ── libvirt engine ───────────────────────────────────────────────────────
+	// Template building over libvirt is deferred (CELL-379); the MVP scope
+	// builds templates with --engine=qemu on the macOS host and libvirt only
+	// boots them remotely.
+	if engine == "libvirt" {
+		cellCfgLibvirt, cfgErr := cfg.LoadFromOSWithDirs(c.ConfigDir, c.BaseDir)
+		if cfgErr != nil {
+			return fmt.Errorf("loading config: %w", cfgErr)
+		}
+		uri := cellCfgLibvirt.Cell.ResolvedLibvirtURI()
+		if scanFlag("--dry-run") {
+			fmt.Println("libvirt engine (dry-run)")
+			fmt.Printf("  URI: %s\n", uri)
+			fmt.Println("  Would boot a prepped template remotely; template builds stay on `cell build --engine=qemu` (macOS host)")
+			return nil
+		}
+		return fmt.Errorf("cell build --engine=libvirt is not implemented — build the template with `cell build --engine=qemu` on the macOS host, then run with --engine=libvirt (CELL-379)")
 	}
 
 	// ── Vagrant engine ────────────────────────────────────────────────────────
@@ -391,6 +411,7 @@ func runBuildThin(c config.Config, stackOverride, imageOverride string, forceRec
 	if err := runner.DockerDaemonReachable(context.Background()); err != nil {
 		return err
 	}
+	logDockerDiagnostics(context.Background(), c)
 
 	cellCfg, cfgErr := cfg.LoadFromOSWithDirs(c.ConfigDir, c.BaseDir)
 	if cfgErr != nil {
@@ -503,7 +524,63 @@ func runBuildThin(c config.Config, stackOverride, imageOverride string, forceRec
 	// "local" — that's a flake-output naming detail, not user content.
 	modulesCSV := strings.Join(cellCfg.Cell.Modules, ",")
 	projectName := filepath.Base(c.BaseDir)
+
+	// [build] TOML → env, before argv construction reads them. An explicit
+	// env var wins over TOML (env > toml > derived default).
+	applyBuildEnv := func(envVar, val string) {
+		if val != "" && os.Getenv(envVar) == "" {
+			os.Setenv(envVar, val)
+		}
+	}
+	applyBuildEnv("DEVCELL_BUILD_MEMORY", cellCfg.Build.Memory)
+	applyBuildEnv("DEVCELL_BUILD_CPUS", cellCfg.Build.CPUs)
+	if cellCfg.Build.MaxJobs > 0 {
+		applyBuildEnv("DEVCELL_NIX_MAX_JOBS", strconv.Itoa(cellCfg.Build.MaxJobs))
+	}
+	if cellCfg.Build.Cores > 0 {
+		applyBuildEnv("DEVCELL_NIX_CORES", strconv.Itoa(cellCfg.Build.Cores))
+	}
+
 	argv := runner.ThinBuildArgvFull(coreImage, containerName, volumeName, nixhomeRef, tag, homeManagerTarget, runner.DetectArch(), stack, modulesCSV, projectName)
+
+	// Log the resolved build resource config under --debug.
+	if lim := runner.ResolveBuildLimits(); lim.Memory != "" || lim.CPUs != "" {
+		maxJobs := "auto"
+		if lim.MaxJobs > 0 {
+			maxJobs = fmt.Sprintf("%d", lim.MaxJobs)
+		}
+		cores := "default"
+		if lim.Cores > 0 {
+			cores = fmt.Sprintf("%d", lim.Cores)
+		}
+		ux.Debugf("build limits: --memory=%s --cpus=%s nix max-jobs=%s cores=%s", lim.Memory, lim.CPUs, maxJobs, cores)
+	} else {
+		ux.Debugf("build limits: uncapped (daemon too small for a ceiling)")
+	}
+
+	// Stream the overlay through Docker stdin. Unlike a bind mount, this is
+	// resolved by the local cell process and works when the selected daemon is
+	// inside Docker Desktop, Colima, or on a remote host.
+	archive, err := os.CreateTemp("", "devcell-thin-nixhome-*.tar")
+	if err != nil {
+		sp.Fail(buildLabel + " failed")
+		return fmt.Errorf("create thin nixhome archive: %w", err)
+	}
+	archivePath := archive.Name()
+	defer func() {
+		_ = archive.Close()
+		_ = os.Remove(archivePath)
+	}()
+	if err := runner.WriteThinBuildContext(archive, c.BuildDir); err != nil {
+		sp.Fail(buildLabel + " failed")
+		return fmt.Errorf("archive thin nixhome: %w", err)
+	}
+	size, _ := archive.Seek(0, io.SeekCurrent)
+	if _, err := archive.Seek(0, io.SeekStart); err != nil {
+		sp.Fail(buildLabel + " failed")
+		return fmt.Errorf("rewind thin nixhome archive: %w", err)
+	}
+	ux.Debugf("thin nixhome transport: tar-stdin source=%q bytes=%d", c.BuildDir, size)
 
 	var buf bytes.Buffer
 	var out io.Writer = &buf
@@ -512,6 +589,7 @@ func runBuildThin(c config.Config, stackOverride, imageOverride string, forceRec
 	}
 
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.Stdin = archive
 	cmd.Stdout = out
 	cmd.Stderr = out
 	if err := cmd.Run(); err != nil {

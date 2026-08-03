@@ -130,5 +130,13 @@ func RunDF(a RunDFArgs) error {
 	vmDisk, _ := CollectVMDisk(a.Ctx)
 	containers, _ := CollectRunningContainers(a.Ctx)
 	volMounts := CollectVolumeMounts(a.Ctx)
-	return FormatTableWithVM(snap, fopts, vmDisk, containers, volMounts, a.Out)
+	if err := FormatTableWithVM(snap, fopts, vmDisk, containers, volMounts, a.Out); err != nil {
+		return err
+	}
+	// Nix store section: counts, root names, stale markers, per-root
+	// metadata (read-only probe; omitted when the volume is unreachable).
+	if nix, ok := CollectNixStore(a.Ctx); ok {
+		FormatNixStoreSection(nix, a.Out)
+	}
+	return nil
 }

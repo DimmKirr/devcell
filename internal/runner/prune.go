@@ -20,15 +20,15 @@ const SafeNixGCScript = `set -e
 PROTECTED=""
 STALE=0
 if [ -d /nix/var/nix/gcroots/devcell ]; then
-  for root in /nix/var/nix/gcroots/devcell/*-profile; do
+  for root in /nix/var/nix/gcroots/devcell/*-profile /nix/var/nix/gcroots/devcell/*-generation; do
     [ -L "$root" ] || continue
     target=$(readlink "$root")
     if [ -d "$target" ]; then
       PROTECTED="$PROTECTED $target"
     else
-      hash=$(basename "$root" | sed 's/-profile$//')
+      hash=$(basename "$root" | cut -d- -f1)
       echo "stale root: $root -> $target (removing)"
-      rm -f "$root"
+      rm -f "/nix/var/nix/gcroots/devcell/${hash}-profile"
       rm -f "/nix/var/nix/gcroots/devcell/${hash}-generation"
       rm -f "/nix/var/nix/gcroots/devcell/${hash}-meta"
       STALE=$((STALE + 1))
@@ -36,7 +36,7 @@ if [ -d /nix/var/nix/gcroots/devcell ]; then
   done
   for meta in /nix/var/nix/gcroots/devcell/*-meta; do
     [ -f "$meta" ] || continue
-    hash=$(basename "$meta" | sed 's/-meta$//')
+    hash=$(basename "$meta" | cut -d- -f1)
     if [ ! -L "/nix/var/nix/gcroots/devcell/${hash}-profile" ]; then
       echo "orphaned metadata: $meta (removing)"
       rm -f "$meta"
@@ -72,7 +72,7 @@ HASHES=""
 for root in /nix/var/nix/gcroots/devcell/*-profile; do
   [ -L "$root" ] || continue
   ROOT_COUNT=$((ROOT_COUNT + 1))
-  h=$(basename "$root" | sed 's/-profile$//')
+  h=$(basename "$root" | cut -d- -f1)
   case " $HASHES " in
     *" $h "*) ;;
     *) HASHES="$HASHES $h" ;;
@@ -82,7 +82,7 @@ UNIQUE=$(echo "$HASHES" | wc -w)
 echo "Roots: $ROOT_COUNT (${UNIQUE} unique profile hash(es))"
 for meta in /nix/var/nix/gcroots/devcell/*-meta; do
   [ -f "$meta" ] || continue
-  h=$(basename "$meta" | sed 's/-meta$//')
+  h=$(basename "$meta" | cut -d- -f1)
   proj=$(grep '^project=' "$meta" 2>/dev/null | cut -d= -f2)
   stack=$(grep '^stack=' "$meta" 2>/dev/null | cut -d= -f2)
   stamped=$(grep '^stamped=' "$meta" 2>/dev/null | cut -d= -f2)
@@ -134,6 +134,12 @@ type PruneOpts struct {
 	// LinuxBuilderHost is the SSH target for the macOS linux-builder VM.
 	// Default: "builder@linux-builder".
 	LinuxBuilderHost string
+
+	// LiveClosures are the running containers' resolved store paths
+	// (CollectLiveClosures). When set, the pure prune plan stamps GC roots
+	// for them before the safe GC step, so "running implies rooted" holds
+	// by construction instead of being assumed (CELL-334 preflight gate).
+	LiveClosures []LiveClosure
 }
 
 // PruneStep is one command in a prune plan.
@@ -213,32 +219,40 @@ func BuildNixPruneSteps(opts PruneOpts) []PruneStep {
 	}
 
 	if !opts.Force {
-		if opts.GOOS == "darwin" {
-			// Darwin: the linux-builder VM is isolated (not a shared Docker
-			// volume), so blanket GC is safe.
-			return []PruneStep{
-				{Argv: []string{"sudo", "ssh", host, "nix-collect-garbage -d && nix-store --optimise"}},
-				registryCleanup,
-			}
-		}
-		// Linux: show root report (drift detection, CELL-334), then run
+		// Default --pure targets the devcell-nix-store volume on every OS
+		// (CELL-333): show root report (drift detection, CELL-334), then run
 		// safe project-aware GC inside a container with the nix volume
-		// mounted (CELL-333).
-		return []PruneStep{
+		// mounted. On macOS the thin-mode store lives in this Docker volume,
+		// not the linux-builder VM — GC-ing the VM never reclaims it.
+		steps := []PruneStep{
 			{Argv: []string{
 				"docker", "run", "--rm",
 				"-v", DefaultThinStoreVolume + ":/nix",
 				NixCoreImage,
 				"sh", "-c", NixGCRootReportScript,
 			}, IgnoreError: true},
-			{Argv: []string{
+		}
+		// Preflight gate (CELL-334): stamp roots for every running
+		// container before GC, so a running-but-unrooted cell cannot lose
+		// its closure to the sweep below.
+		if stamp := StampRootsScript(opts.LiveClosures); stamp != "" {
+			steps = append(steps, PruneStep{Argv: []string{
+				"docker", "run", "--rm",
+				"-v", DefaultThinStoreVolume + ":/nix",
+				NixCoreImage,
+				"sh", "-c", stamp,
+			}})
+		}
+		steps = append(steps,
+			PruneStep{Argv: []string{
 				"docker", "run", "--rm",
 				"-v", DefaultThinStoreVolume + ":/nix",
 				NixCoreImage,
 				"sh", "-c", SafeNixGCScript,
 			}},
 			registryCleanup,
-		}
+		)
+		return steps
 	}
 	// Force mode.
 	if opts.GOOS == "darwin" {
@@ -409,21 +423,13 @@ func BuildPrunePrompt(opts PruneOpts) string {
 		)
 	}
 
-	// Nix path.
+	// Nix path. Default --pure targets the devcell-nix-store volume on
+	// every OS (CELL-333).
 	if !opts.Force {
-		if opts.GOOS == "darwin" {
-			return fmt.Sprintf(
-				"⚠  This will delete ALL unreferenced /nix/store paths and all but the\n"+
-					"   current profile generation.\n"+
-					"   Target: ssh://%s (via sudo — needs root to read /etc/nix/builder_ed25519)\n"+
-					tail,
-				host,
-			)
-		}
 		return "⚠  This will remove orphaned profile generations not protected by\n" +
 			"   project GC roots in /nix/var/nix/gcroots/devcell/, then GC\n" +
 			"   unreferenced /nix/store paths. Use --force for blanket cleanup.\n" +
-			"   Target: local /nix/store\n" +
+			"   Target: " + DefaultThinStoreVolume + " Docker volume (/nix)\n" +
 			tail
 	}
 	// Nix force.
