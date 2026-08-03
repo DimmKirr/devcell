@@ -89,11 +89,11 @@ func runQemuAgent(
 
 	// --- resolve paths ---
 	instanceDir := qemu.InstanceDir(hostHome, cellName)
-	templateDir := qemu.TemplateDir(hostHome, stack, nil)
-	templateDisk := filepath.Join(templateDir, qemu.ImageName(stack, nil))
+	templateDir := qemu.TemplateDir(hostHome, stack, cellCfg.Cell.Modules)
+	templateDisk := filepath.Join(templateDir, qemu.ImageName(stack, cellCfg.Cell.Modules))
 	instanceDisk := filepath.Join(instanceDir, "disk.qcow2")
 	varsPath := filepath.Join(instanceDir, "vars.fd")
-	sshKeyPath := filepath.Join(hostHome, ".devcell", cellName, "qemu", "id_ed25519")
+	sshKeyPath := filepath.Join(qemuKeyDir(hostHome, cellName), "id_ed25519")
 
 	// Port allocation — same bunk-based scheme as Docker runner (CELL-352)
 	c := config.Load(baseDir, os.Getenv)
@@ -126,12 +126,14 @@ func runQemuAgent(
 		ProjectDir:   baseDir,
 		DisplayType:  cellCfg.Cell.ResolvedQemuDisplay(),
 		QMPSocketDir: instanceDir,
+		KVM:          cellCfg.Cell.ResolvedKVM(),
 	}
 	spec.ApplyDefaults()
 
 	logf("templateDir=%s instanceDir=%s", templateDir, instanceDir)
 	logf("templateDisk=%s instanceDisk=%s", templateDisk, instanceDisk)
 	logf("spec: cpus=%d mem=%dGB ssh=%s:%d vnc=%d rdp=%d display=%s", spec.CPUs, spec.MemoryGB, spec.SSHHost, spec.SSHPort, spec.VNCPort, spec.RDPPort, spec.DisplayType)
+	logf("accel: %s — %s", spec.Accel, spec.AccelReason)
 
 	// --- lifecycle: acquire VM (real or mock) ---
 	if !dryRun && !mock {
@@ -211,7 +213,7 @@ func runQemuAgent(
 
 		if !attachMode {
 			// Check provisioned marker
-			marker := qemu.ProvisionedMarker(hostHome, stack, nil)
+			marker := qemu.ProvisionedMarker(hostHome, stack, cellCfg.Cell.Modules)
 			if _, err := os.Stat(marker); err != nil {
 				return fmt.Errorf("VM template not provisioned — run `cell build --engine=qemu`")
 			}
@@ -273,17 +275,33 @@ func runQemuAgent(
 		return nil
 	}
 
+	// --- project sync (CELL-383) ---
+	syncMode := cellCfg.Cell.ResolvedQemuProjectSync()
+	if syncMode != "off" {
+		if err := runProjectSync(qemu.BuildProjectPushArgv(spec), "pushing project into guest"); err != nil {
+			return err
+		}
+	}
+
 	// --- exec SSH into VM ---
 	logf("connecting via SSH...")
 	cmd := exec.Command(sshArgv[0], sshArgv[1:]...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
+	runErr := cmd.Run()
+
+	if syncMode == "two-way" {
+		if err := runProjectSync(qemu.BuildProjectPullArgv(spec), "pulling project back from guest"); err != nil {
+			logf("%v", err)
+		}
+	}
+
+	if runErr != nil {
+		if exitErr, ok := runErr.(*exec.ExitError); ok {
 			os.Exit(exitErr.ExitCode())
 		}
-		return err
+		return runErr
 	}
 	return nil
 }

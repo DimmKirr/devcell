@@ -51,7 +51,9 @@ func runInit(cmd *cobra.Command, _ []string) error {
 		return runInitTart(c.CellName, c.HostHome, c.BaseDir, stack, nixhomePath, force, noCache)
 	}
 
-	if engine == "qemu" {
+	if engine == "qemu" || engine == "libvirt" {
+		// libvirt reuses the qemu scaffold: init only creates directories,
+		// an SSH keypair, and VirtIO drivers on the shared mount (CELL-372).
 		c, err := config.LoadFromOS()
 		if err != nil {
 			return fmt.Errorf("load config: %w", err)

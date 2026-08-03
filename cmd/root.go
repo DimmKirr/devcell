@@ -22,6 +22,7 @@ import (
 	"github.com/DimmKirr/devcell/internal/session"
 	"github.com/DimmKirr/devcell/internal/ux"
 	"github.com/DimmKirr/devcell/internal/version"
+	"github.com/DimmKirr/devcell/internal/vm/libvirt"
 	"github.com/spf13/cobra"
 )
 
@@ -85,7 +86,8 @@ func init() {
 	rootCmd.PersistentFlags().Bool("plain-text", false, "disable spinners, use plain log output (for CI/non-TTY)")
 	rootCmd.PersistentFlags().Bool("debug", false, "plain-text mode plus stream full build log to stdout")
 	rootCmd.PersistentFlags().String("format", "text", "output format: text, yaml, or json")
-	rootCmd.PersistentFlags().String("engine", "docker", "execution engine: docker, vagrant, tart, or qemu")
+	rootCmd.PersistentFlags().String("engine", "docker", "execution engine: docker, vagrant, tart, qemu, or libvirt")
+	rootCmd.PersistentFlags().Bool("local", false, "pin --engine=qemu to the in-container path (skip the libvirt auto-default)")
 	rootCmd.PersistentFlags().Bool("background", false, "keep VM/container running after shell exit")
 	rootCmd.PersistentFlags().Bool("macos", false, "use macOS VM via Vagrant (alias for --engine=vagrant)")
 	rootCmd.PersistentFlags().String("vagrant-provider", "utm", "Vagrant provider (e.g. utm)")
@@ -152,21 +154,23 @@ func applyOutputFlagsWithLog(commandName string) {
 
 // cellBoolFlags are boolean flags consumed by devcell: strip the flag token only.
 var cellBoolFlags = map[string]bool{
-	"--build":      true,
-	"--background": true,
-	"--dry-run":    true,
-	"--plain-text": true,
-	"--debug":      true,
-	"--macos":      true,
-	"--ollama":     true,
-	"--impure":     true, // legacy Dockerfile path (CELL-165 canonical name)
-	"--debian":     true, // deprecated alias for --impure (kept stripping for one release)
-	"--pure":       true, // silent no-op after flip; kept stripped from forwarded args
-	"--nix-daemon": true, // enable nix-daemon inside container for runtime package installs
-	"--thin":       true, // thin image mode — nix store on Docker volume (CELL-156)
-	"--no-thin":    true, // disable thin mode (thick image)
-	"--thick":      true, // alias for --no-thin
+	"--build":        true,
+	"--background":   true,
+	"--dry-run":      true,
+	"--plain-text":   true,
+	"--debug":        true,
+	"--macos":        true,
+	"--ollama":       true,
+	"--impure":       true, // legacy Dockerfile path (CELL-165 canonical name)
+	"--debian":       true, // deprecated alias for --impure (kept stripping for one release)
+	"--pure":         true, // silent no-op after flip; kept stripped from forwarded args
+	"--nix-daemon":   true, // enable nix-daemon inside container for runtime package installs
+	"--thin":         true, // thin image mode — nix store on Docker volume (CELL-156)
+	"--no-thin":      true, // disable thin mode (thick image)
+	"--thick":        true, // alias for --no-thin
 	"--no-1password": true, // skip [op] documents resolution at cell-open (CELL-42)
+	"--local":        true, // pin --engine=qemu to the in-container path (CELL-378)
+	"--auto-cleanup": true, // run the CELL-334 root reaper at cell start (CELL-390)
 }
 
 // cellStringFlags are string flags consumed by devcell: strip the flag token
@@ -305,8 +309,25 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 			scanFlag("--debug"),
 		)
 	}
+	// qemu→libvirt auto-default (CELL-378): in a Docker cell on a Mac,
+	// local qemu can only mean TCG; the host's HVF behind libvirtd is the
+	// only fast path. Explicit intent wins: --local pins local qemu.
+	if ok, reason := libvirt.ShouldDefaultToLibvirt(engine, scanFlag("--local"), libvirt.DefaultProbes()); ok {
+		fmt.Printf(" engine: qemu → libvirt (%s)\n", reason)
+		engine = "libvirt"
+	}
 	if engine == "qemu" {
 		return runQemuAgent(
+			binary, defaultFlags, userArgs,
+			cellCfgForEngine,
+			c.BaseDir, c.HostHome, c.CellName,
+			scanFlag("--dry-run"),
+			scanFlag("--background"),
+			scanFlag("--debug"),
+		)
+	}
+	if engine == "libvirt" {
+		return runLibvirtAgent(
 			binary, defaultFlags, userArgs,
 			cellCfgForEngine,
 			c.BaseDir, c.HostHome, c.CellName,
@@ -371,6 +392,7 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 		if err := runner.DockerDaemonReachable(context.Background()); err != nil {
 			return err
 		}
+		logDockerDiagnostics(context.Background(), c)
 	}
 	// ── Thin image path (CELL-156) ──────────────────────────────────────────
 	if thin {
@@ -554,6 +576,14 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 		return err
 	}
 
+	// CELL-390: read-only nix-store health report (thin mode only).
+	// Non-fatal; mutation only behind the explicit --auto-cleanup opt-in.
+	// CELL-391: may nudge when this cell's lock is behind the volume's
+	// newest — the only error path is the user explicitly answering "n".
+	if err := nixStorePhase(ctx, pr, thin, c.BaseDir, cellCfg.Cell.StaleWarningEnabled()); err != nil {
+		return err
+	}
+
 	_ = pr.Phase("Backup", func() error { return backup.Backup(c.CellHome, time.Now()) })
 
 	// Pin the container to the exact image ID so a concurrent `cell build`
@@ -574,6 +604,21 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 		}
 		return short, nil
 	})
+	if ux.Verbose && !dryRun {
+		source := runner.DockerHostPath(c.BaseDir)
+		probeVolume := ""
+		if thin {
+			probeVolume = runner.ThinStoreVolume()
+		}
+		out, probeErr := runner.ProbeDockerBind(
+			ctx, imageID, probeVolume, source, ".devcell.toml")
+		if probeErr != nil {
+			ux.Debugf("docker bind probe: FAILED source=%q marker=.devcell.toml: %v output=%q",
+				source, probeErr, out)
+		} else {
+			ux.Debugf("docker bind probe: OK source=%q %s", source, out)
+		}
+	}
 
 	// Inject system prompt for Claude Code — container context (mounts, host
 	// paths, constraints) plus the operator/project prompt resolved from env
