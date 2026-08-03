@@ -42,6 +42,11 @@ in {
       pkgs.p7zip       # 7z archive support (winetricks dep for some installers)
       pkgs.wget        # HTTP downloads (winetricks dep)
 
+      # ── Authenticode signing ──────────────────────────────────────────────
+      # Signs the Windows PE/MSI artifacts produced by `wails3 build` without
+      # needing signtool.exe under Wine.
+      pkgs.osslsigncode  # sign Windows PE/MSI (use: osslsigncode sign -pkcs12 cert.p12 -in app.exe -out app-signed.exe)
+
       # ── Wails3 Windows app runtime deps ──────────────────────────────────
       # Wails3 uses WebView2 (Edge/Chromium-based) on Windows. Under Wine:
       # 1. Visual C++ Redistributable: `winetricks vcrun2022`
