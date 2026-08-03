@@ -23,6 +23,10 @@ const DefaultNixImage = "nixos/nix:2.34.7"
 // DefaultTartOCIImage is the default macOS base image for tart VMs.
 const DefaultTartOCIImage = "ghcr.io/cirruslabs/macos-sequoia-base:latest"
 
+// DefaultLibvirtURI targets the macOS host's session libvirtd as seen from
+// inside a Docker cell (CELL-372).
+const DefaultLibvirtURI = "qemu+tcp://host.docker.internal/session"
+
 // CellSection holds [cell] config.
 type CellSection struct {
 	ImageTag        string   `toml:"image_tag"`
@@ -38,10 +42,12 @@ type CellSection struct {
 	VagrantBox      string   `toml:"vagrant_box"`       // vagrant box name override (default: "utm/bookworm")
 	DockerPrivileged  bool     `toml:"docker_privileged"`   // run container with --privileged; default: false
 	DockerCapAdd      []string `toml:"docker_cap_add"`      // extra Linux capabilities (e.g. ["SYS_ADMIN"]); default: none
+	KVM               *bool    `toml:"kvm"`                 // pass the daemon host's /dev/kvm into the container so QEMU gets hardware accel instead of TCG; default: false; env: DEVCELL_KVM
 	PerCellImage   *bool    `toml:"per_cell_image"`   // tag user image per cell instead of per stack; default: false
 	Hostname          string   `toml:"hostname"`            // override container hostname; default: computed "cell-<basename>-<bunk>"; env: DEVCELL_HOSTNAME
 	MacAddress        string   `toml:"mac_address"`         // MAC for the container's NIC (XX:XX:XX:XX:XX:XX); pinned across restarts for infra-side identity persistence. Honored on user-defined bridge networks (devcell uses --network devcell-network). Empty → docker auto-assigns a random MAC per launch.
 	Thin              *bool    `toml:"thin"`                // thin image mode; default: true; disable with thin=false or DEVCELL_THIN=0
+	StaleWarning      *bool    `toml:"stale_warning"`       // CELL-391 "cell is behind — parallel reality" nudge at start; default: true; env: DEVCELL_STALE_WARN
 	Background        *bool    `toml:"background"`          // keep VM/container running after shell exit; default: false; env: DEVCELL_BACKGROUND
 	TartSSHPort       int      `toml:"tart_ssh_port"`       // SSH port for tart engine; default: 22; env: DEVCELL_TART_SSH_PORT
 	TartSSHHost       string   `toml:"tart_ssh_host"`       // SSH host for tart engine; default: "localhost"; env: DEVCELL_TART_SSH_HOST
@@ -55,6 +61,42 @@ type CellSection struct {
 	QemuMemoryGB      int      `toml:"qemu_memory_gb"`      // QEMU RAM in GB; default: 4; env: DEVCELL_QEMU_MEMORY_GB
 	QemuDiskSizeGB    int      `toml:"qemu_disk_size_gb"`   // QEMU disk size in GB; default: 64; env: DEVCELL_QEMU_DISK_SIZE_GB
 	QemuDisplay       string   `toml:"qemu_display"`        // QEMU display: "none", "cocoa", "sdl"; default: "none"; env: DEVCELL_QEMU_DISPLAY
+	LibvirtURI        string   `toml:"libvirt_uri"`         // libvirtd connection URI for the libvirt engine; default: DefaultLibvirtURI; env: DEVCELL_LIBVIRT_URI
+	LibvirtPathMap    map[string]string `toml:"libvirt_path_map"` // container prefix -> host prefix rewrites for domain XML paths (CELL-375); empty = CLI runs on the host
+	QemuProjectSync   string   `toml:"qemu_project_sync"`   // project sync for qemu/libvirt engines: "push" (default), "two-way", "off"; env: DEVCELL_QEMU_PROJECT_SYNC (CELL-383)
+}
+
+// ResolvedQemuProjectSync returns the effective project sync mode:
+// env > toml > "push". Anything but off/push/two-way resolves to "push" —
+// the safe default (guest gets files, nothing overwritten on the host).
+// StaleWarningEnabled reports whether the CELL-391 stale-cell nudge should
+// fire at cell start. Default (unset) is enabled — it's a read-only nudge
+// with a proceed-by-default prompt, so opting out is the explicit act.
+func (c CellSection) StaleWarningEnabled() bool {
+	return c.StaleWarning == nil || *c.StaleWarning
+}
+
+func (c CellSection) ResolvedQemuProjectSync() string {
+	v := os.Getenv("DEVCELL_QEMU_PROJECT_SYNC")
+	if v == "" {
+		v = c.QemuProjectSync
+	}
+	switch v {
+	case "off", "push", "two-way":
+		return v
+	}
+	return "push"
+}
+
+// ResolvedLibvirtURI returns the effective libvirtd URI: env > toml > default.
+func (c CellSection) ResolvedLibvirtURI() string {
+	if v := os.Getenv("DEVCELL_LIBVIRT_URI"); v != "" {
+		return v
+	}
+	if c.LibvirtURI != "" {
+		return c.LibvirtURI
+	}
+	return DefaultLibvirtURI
 }
 
 // ResolvedBackground returns the effective background setting: default OFF, enabled by env/toml.
@@ -238,6 +280,22 @@ func (c CellSection) ResolvedGUI() bool {
 		return true
 	}
 	return *c.GUI
+}
+
+// ResolvedKVM returns the effective KVM passthrough setting: env > toml >
+// default OFF. It is opt-in because the device lives on the docker daemon
+// host (e.g. the Colima VM), which the CLI cannot stat — a wrong guess either
+// breaks `docker run` outright or silently drops the guest back to TCG.
+func (c CellSection) ResolvedKVM() bool {
+	if v := os.Getenv("DEVCELL_KVM"); v == "1" {
+		return true
+	} else if v == "0" {
+		return false
+	}
+	if c.KVM != nil {
+		return *c.KVM
+	}
+	return false
 }
 
 // ResolvedPerCellImage returns true only when explicitly enabled.
@@ -478,6 +536,16 @@ func (s StealthSection) ResolvedUserAgent() string {
 	return "Mozilla/5.0 (" + platformUA + ") AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"
 }
 
+// BuildSection holds [build] config for thin-build resource ceilings.
+// Values feed the same resolution chain as the env vars; an explicit env var
+// always wins over TOML (env > toml > derived default).
+type BuildSection struct {
+	Memory  string `toml:"memory"`   // docker --memory ceiling (e.g. "16g"); "0" = uncapped; env: DEVCELL_BUILD_MEMORY
+	CPUs    string `toml:"cpus"`     // docker --cpus quota (e.g. "8"); "0" = no quota; env: DEVCELL_BUILD_CPUS
+	MaxJobs int    `toml:"max_jobs"` // nix max-jobs; 0 = derived from ceiling; env: DEVCELL_NIX_MAX_JOBS
+	Cores   int    `toml:"cores"`    // nix cores (make -j per job); 0 = derived; env: DEVCELL_NIX_CORES
+}
+
 // NixSection holds [nix] config for nix image and nixhome settings.
 type NixSection struct {
 	Image       string `toml:"image"`   // nix core image for thin builds; default: DefaultNixImage; env: DEVCELL_NIX_IMAGE
@@ -583,6 +651,7 @@ func (g GUISection) ResolvedFramebufferResolution() string {
 // CellConfig is the merged configuration from all TOML layers.
 type CellConfig struct {
 	Cell     CellSection
+	Build    BuildSection   `toml:"build"`
 	Nix      NixSection     `toml:"nix"`
 	LLM      LLMSection     `toml:"llm"`
 	Git      GitSection     `toml:"git"`
@@ -612,6 +681,7 @@ func LoadFile(path string) (CellConfig, error) {
 		return CellConfig{}, err
 	}
 	migrateGUIField(&c)
+	sort.Strings(c.Cell.Modules)
 	return c, nil
 }
 
@@ -705,6 +775,9 @@ func Merge(global, project CellConfig) CellConfig {
 	if len(project.Cell.DockerCapAdd) > 0 {
 		out.Cell.DockerCapAdd = unionDedupStrings(global.Cell.DockerCapAdd, project.Cell.DockerCapAdd)
 	}
+	if project.Cell.KVM != nil {
+		out.Cell.KVM = project.Cell.KVM
+	}
 	if project.Cell.PerCellImage != nil {
 		out.Cell.PerCellImage = project.Cell.PerCellImage
 	}
@@ -753,6 +826,27 @@ func Merge(global, project CellConfig) CellConfig {
 	if project.Cell.QemuDisplay != "" {
 		out.Cell.QemuDisplay = project.Cell.QemuDisplay
 	}
+	if project.Cell.LibvirtURI != "" {
+		out.Cell.LibvirtURI = project.Cell.LibvirtURI
+	}
+	if project.Cell.QemuProjectSync != "" {
+		out.Cell.QemuProjectSync = project.Cell.QemuProjectSync
+	}
+	// Path map accumulates like Env: global entries plus project entries,
+	// project winning on the same key.
+	if len(global.Cell.LibvirtPathMap) > 0 || len(project.Cell.LibvirtPathMap) > 0 {
+		merged := make(map[string]string, len(global.Cell.LibvirtPathMap)+len(project.Cell.LibvirtPathMap))
+		for k, v := range global.Cell.LibvirtPathMap {
+			merged[k] = v
+		}
+		for k, v := range project.Cell.LibvirtPathMap {
+			merged[k] = v
+		}
+		out.Cell.LibvirtPathMap = merged
+	}
+	if project.Cell.Engine != "" {
+		out.Cell.Engine = project.Cell.Engine
+	}
 
 	// LLM: project wins for scalars, providers accumulate
 	out.LLM = global.LLM
@@ -794,6 +888,21 @@ func Merge(global, project CellConfig) CellConfig {
 	}
 	if project.Stealth.Platform != "" {
 		out.Stealth.Platform = project.Stealth.Platform
+	}
+
+	// Build: project wins when non-zero
+	out.Build = global.Build
+	if project.Build.Memory != "" {
+		out.Build.Memory = project.Build.Memory
+	}
+	if project.Build.CPUs != "" {
+		out.Build.CPUs = project.Build.CPUs
+	}
+	if project.Build.MaxJobs != 0 {
+		out.Build.MaxJobs = project.Build.MaxJobs
+	}
+	if project.Build.Cores != 0 {
+		out.Build.Cores = project.Build.Cores
 	}
 
 	// Nix: project wins when non-empty
@@ -904,6 +1013,9 @@ func LoadLayered(globalPath, projectPath string, getenv func(string) string) (Ce
 	}
 	merged := Merge(global, project)
 	ApplyEnv(&merged, getenv)
+	// CELL-331: [a,b] and [b,a] must resolve to the same image tag and
+	// home-manager closure regardless of which layer contributed what.
+	sort.Strings(merged.Cell.Modules)
 	return merged, nil
 }
 

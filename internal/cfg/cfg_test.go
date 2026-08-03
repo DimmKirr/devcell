@@ -887,8 +887,91 @@ modules = ["electronics", "desktop"]
 	if len(c.Cell.Modules) != 2 {
 		t.Fatalf("want 2 modules, got %d", len(c.Cell.Modules))
 	}
-	if c.Cell.Modules[0] != "electronics" || c.Cell.Modules[1] != "desktop" {
-		t.Errorf("modules: want [electronics desktop], got %v", c.Cell.Modules)
+	// Sorted at load (CELL-331), not TOML order.
+	if c.Cell.Modules[0] != "desktop" || c.Cell.Modules[1] != "electronics" {
+		t.Errorf("modules: want [desktop electronics], got %v", c.Cell.Modules)
+	}
+}
+
+// CELL-331: [a,b] and [b,a] must not produce different image tags or
+// home-manager closures. Modules are sorted at load so every consumer
+// (tag derivation, modules CSV, flake args) sees one canonical order.
+func TestLoadFile_ModulesSorted(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[cell]
+modules = ["node", "electronics", "desktop"]
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"desktop", "electronics", "node"}
+	if len(c.Cell.Modules) != len(want) {
+		t.Fatalf("want %d modules, got %d", len(want), len(c.Cell.Modules))
+	}
+	for i, m := range want {
+		if c.Cell.Modules[i] != m {
+			t.Fatalf("modules must be sorted: want %v, got %v", want, c.Cell.Modules)
+		}
+	}
+}
+
+func TestLoadLayered_ModulesSortedAfterMerge(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[cell]
+modules = ["scraping"]
+`)
+	writeTOML(t, dir, ".devcell.toml", `
+[cell]
+modules = ["desktop"]
+`)
+	c, err := cfg.LoadLayered(
+		filepath.Join(dir, "devcell.toml"),
+		filepath.Join(dir, ".devcell.toml"),
+		func(string) string { return "" },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"desktop", "scraping"}
+	if len(c.Cell.Modules) != len(want) {
+		t.Fatalf("want %v, got %v", want, c.Cell.Modules)
+	}
+	for i, m := range want {
+		if c.Cell.Modules[i] != m {
+			t.Fatalf("merged modules must be sorted: want %v, got %v", want, c.Cell.Modules)
+		}
+	}
+}
+
+// CELL-391: [cell] stale_warning = false silences the "cell is behind —
+// parallel reality" nudge at start. Default (absent) is enabled.
+func TestCellSection_StaleWarningDefaultsEnabled(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `[cell]`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.Cell.StaleWarningEnabled() {
+		t.Error("stale warning must default to enabled")
+	}
+}
+
+func TestCellSection_StaleWarningFalseDisables(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[cell]
+stale_warning = false
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Cell.StaleWarningEnabled() {
+		t.Error("stale_warning = false must disable the nudge")
 	}
 }
 

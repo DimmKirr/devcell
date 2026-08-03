@@ -245,6 +245,14 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 	}
 
 	dockerRunFlags := []string{"--rm", "-it", "--shm-size=1g", "--device=/dev/fuse"}
+	// KVM passthrough for QEMU guests (Windows cells). Must be --device, not
+	// a -v bind-mount: the mount creates the node but the cgroup device
+	// controller still denies open(2) (EPERM). Requires nested virtualization
+	// on the daemon host — on Colima that is `vmType: vz` +
+	// `nestedVirtualization: true`; without it docker run fails loudly.
+	if spec.CellCfg.Cell.ResolvedKVM() {
+		dockerRunFlags = append(dockerRunFlags, "--device=/dev/kvm")
+	}
 	for _, cap := range spec.CellCfg.Cell.DockerCapAdd {
 		dockerRunFlags = append(dockerRunFlags, "--cap-add="+cap)
 	}
