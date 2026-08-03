@@ -204,6 +204,45 @@
           ]
           ++ modules;
       };
+    # NixOS-WSL configs — same stacks for the distro's default 'nixos' user.
+    # Applied inside the Windows cell's WSL2 distro by the home-manager stage:
+    #   home-manager switch --flake .#wsl-base-aarch64
+    wslUser = {username = "nixos"; homeDirectory = "/home/nixos";};
+    mkWslHome = system: modules: let
+      nixCfg = {
+        inherit system;
+        config.allowUnfree = true;
+        config.android_sdk.accept_license = true;
+      };
+      pkgsUnstable = import nixpkgs-unstable nixCfg;
+      pkgsEdge = import nixpkgs-edge nixCfg;
+    in
+      home-manager.lib.homeManagerConfiguration {
+        pkgs = import nixpkgs nixCfg;
+        extraSpecialArgs = {inherit self mcp-nixos pkgsUnstable pkgsEdge;};
+        modules =
+          [
+            {
+              home.stateVersion = "25.11";
+              home.username = wslUser.username;
+              home.homeDirectory = wslUser.homeDirectory;
+            }
+          ]
+          ++ modules;
+      };
+    mkAllWslConfigs =
+      lib.foldlAttrs
+      (
+        acc: name: mods: let
+          shortName = lib.removePrefix "devcell-" name;
+        in
+          acc
+          // {"wsl-${shortName}" = mkWslHome "x86_64-linux" mods;}
+          // {"wsl-${shortName}-aarch64" = mkWslHome "aarch64-linux" mods;}
+      )
+      {}
+      stacks;
+
     mkAllVagrantConfigs =
       lib.foldlAttrs
       (
@@ -263,7 +302,7 @@
       wine = [./modules/wine.nix];
     };
 
-    homeConfigurations = mkAllConfigs // mkAllVagrantConfigs // mkAllDarwinVMConfigs;
+    homeConfigurations = mkAllConfigs // mkAllVagrantConfigs // mkAllDarwinVMConfigs // mkAllWslConfigs;
 
     # ── cross-platform compatibility check ────────────────────────────────────
     # Two-phase check, both keyed by eval system (aarch64-linux, aarch64-darwin).

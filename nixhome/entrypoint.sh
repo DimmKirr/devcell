@@ -82,6 +82,23 @@ if [ -S /var/run/docker.sock ]; then
     usermod -aG "$DOCKER_GROUP" "$HOST_USER"
 fi
 
+# ── Grant /dev/kvm access to session user ─────────────────────────────────────
+# Present only when `[cell] kvm = true` passed --device=/dev/kvm. The node
+# arrives as root:<host-gid> mode 0660, and that GID (994 on Colima) has no
+# group entry here, so QEMU as $HOST_USER gets EACCES — "Could not access KVM
+# kernel module: Permission denied". Same shape as the docker socket above:
+# resolve the GID at runtime rather than hardcoding it, since it differs per
+# daemon host.
+if [ -c /dev/kvm ]; then
+    KVM_GID=$(stat -c '%g' /dev/kvm)
+    KVM_GROUP=$(getent group "$KVM_GID" | cut -d: -f1)
+    if [ -z "$KVM_GROUP" ]; then
+        groupadd -g "$KVM_GID" kvm
+        KVM_GROUP=kvm
+    fi
+    usermod -aG "$KVM_GROUP" "$HOST_USER"
+fi
+
 mkdir -p "$HOME/.local/bin" "$HOME/go/bin" "$HOME/tmp"
 # Symlink cell binary so it's on the session user's PATH
 # (shell rc rewrites /opt/devcell → $HOME, so /opt/devcell/.local/bin is not in PATH)
@@ -116,6 +133,52 @@ if [ -d "$HOME" ]; then
             fi
         ;; esac
     done
+fi
+
+# ── Stamp GC roots for this container's closure (CELL-332) ───────────────────
+# Roots were previously written only at thin BUILD time, so the root set
+# tracked "what was built last", not "what is running" — N projects sharing
+# one image got exactly one root, and a rebuild could silently unroot them
+# all. Stamping here (as root, before the gosu drop) makes "running implies
+# rooted" hold for every container start. Hash-named (CELL-331), so
+# re-stamping an identical closure is a no-op and N cells on one config
+# converge on one root pair. Thin mode only: gcroots lives on the shared
+# volume; skip when it isn't writable (impure images).
+if [ -d /nix/var/nix ] && mkdir -p /nix/var/nix/gcroots/devcell 2>/dev/null; then
+    HM_PROFILE=$(readlink -f /opt/devcell/.local/state/nix/profiles/profile 2>/dev/null)
+    HM_GENERATION=$(readlink -f /opt/devcell/.local/state/nix/profiles/home-manager 2>/dev/null)
+    if [ -n "$HM_PROFILE" ] && [ -d "$HM_PROFILE" ]; then
+        HM_PROFILE_HASH=$(basename "$HM_PROFILE" | cut -d- -f1)
+        ln -sfT "$HM_PROFILE" "/nix/var/nix/gcroots/devcell/${HM_PROFILE_HASH}-profile"
+        log "GC root stamped: ${HM_PROFILE_HASH}-profile -> $HM_PROFILE"
+        if [ -n "$HM_GENERATION" ] && [ -d "$HM_GENERATION" ]; then
+            HM_GEN_HASH=$(basename "$HM_GENERATION" | cut -d- -f1)
+            ln -sfT "$HM_GENERATION" "/nix/var/nix/gcroots/devcell/${HM_GEN_HASH}-generation"
+            log "GC root stamped: ${HM_GEN_HASH}-generation -> $HM_GENERATION"
+        fi
+        # Drift metadata (CELL-334/CELL-391 read this): project, config, and
+        # nixpkgs rev so other containers and `cell status` can detect lock
+        # divergence. The scaffolded lock is mounted with the workspace;
+        # fall back to the image's nixhome copy.
+        _lock=""
+        for _cand in "${WORKSPACE}/.devcell/flake.lock" "/opt/nixhome/flake.lock"; do
+            [ -f "$_cand" ] && { _lock="$_cand"; break; }
+        done
+        _nixpkgs_rev=""
+        if [ -n "$_lock" ] && command -v jq &>/dev/null; then
+            _nixpkgs_rev=$(jq -r '.nodes.nixpkgs.locked.rev // empty' "$_lock" 2>/dev/null)
+        fi
+        cat > "/nix/var/nix/gcroots/devcell/${HM_PROFILE_HASH}-meta" <<METAEOF
+project=${APP_NAME:-$(basename "${WORKSPACE:-unknown}")}
+stack=${_meta_stack:-}
+modules=${_meta_modules:-}
+profile=$HM_PROFILE
+nixpkgs=$_nixpkgs_rev
+stamped=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+METAEOF
+    else
+        log "GC root stamp skipped: profile symlink unresolved"
+    fi
 fi
 
 # Second visible signal: pre-fragment bootstrap done (user/dotfiles/GPG/etc.

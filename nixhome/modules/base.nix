@@ -5,6 +5,11 @@
     ./llm
   ];
 
+  # Standalone activations (WSL cells) must leave the `home-manager` CLI on
+  # PATH so the environment can be re-switched and its version asserted —
+  # the official standalone setup enables this.
+  programs.home-manager.enable = true;
+
   # ── Locale support ──────────────────────────────────────────────────────────
   # Container needs en_US.UTF-8 locale for consistent browser fingerprinting
   # and correct text handling. LOCALE_ARCHIVE tells glibc where to find locales.
