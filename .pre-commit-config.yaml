@@ -14,17 +14,20 @@ repos:
 
   - repo: local
     hooks:
-      # Keep flake.nix `vendorHash` in sync with go.mod / go.sum.
-      # Fires only when the Go module surface changes; delegates to
-      # `task nix:update-vendor-hash`, which builds .#cell with a fake
-      # hash, extracts the real hash from the mismatch error, and
-      # rewrites flake.nix in place. If the hash actually changed,
-      # pre-commit aborts the commit so the user reviews the diff and
-      # re-stages flake.nix — that guarantees any tag pointing at the
-      # commit has the correct hash baked in.
+      # Guard flake.nix `vendorHash` against go.mod / go.sum drift.
+      # Fires only when the Go module surface changes — devcell's own
+      # source is hashed by nix from `src`, so editing Go code never
+      # invalidates this.
+      #
+      # READ-ONLY by design. It verifies and fails; it never rewrites
+      # flake.nix. A hook that mutates tracked files has to fight
+      # pre-commit's stash/restore and forces a re-stage + re-commit,
+      # so the fix lives in `task nix:sync`, which the failure names.
+      # That also keeps the guarantee that mattered: a commit (and any
+      # tag on it) can never carry a stale hash.
       - id: nix-vendor-hash
-        name: Sync flake.nix vendorHash with go.mod/go.sum
-        entry: task nix:update-vendor-hash
+        name: Check flake.nix vendorHash matches go.mod/go.sum
+        entry: task nix:check-vendor-hash
         language: system
         files: ^(go\.mod|go\.sum)$
         pass_filenames: false

@@ -42,6 +42,31 @@ vars:
       if pkg-config --exists wimlib 2>/dev/null; then tags="wimlib"; fi
       echo "$tags"
 
+  # Docker daemon the Docker-dependent test tasks talk to.
+  #
+  # Pinned to the Docker Desktop socket while the Colima migration is in
+  # flight, so a half-provisioned Colima VM cannot silently become the build
+  # daemon mid-suite (a 2 GiB stock VM makes the thin build's ceilings drop
+  # out entirely — see clampBuildLimits and `task debug:colima`).
+  #
+  # Resolution order:
+  #   1. explicit DOCKER_SOCK= override
+  #   2. ~/.docker/run/docker.sock — Docker Desktop, present on the host Mac
+  #   3. ambient DOCKER_HOST, else /var/run/docker.sock — this is the path
+  #      inside a devcell container, where the host forwards its daemon socket
+  #      and the Docker Desktop user socket does NOT exist. Hardcoding (2)
+  #      would break every container-side run.
+  #
+  # Target a different daemon explicitly:
+  #   task test:integration DOCKER_SOCK=unix://$HOME/.colima/default/docker.sock
+  DOCKER_SOCK:
+    sh: |
+      if [ -S "$HOME/.docker/run/docker.sock" ]; then
+        echo "unix://$HOME/.docker/run/docker.sock"
+      else
+        echo "${DOCKER_HOST:-unix:///var/run/docker.sock}"
+      fi
+
 env:
   BUILDKIT_PROGRESS: plain
 
@@ -63,6 +88,21 @@ tasks:
     silent: true
     cmds:
       - go run $(ls cmd/*.go | grep -Ev '(_test|main)\.go') web/src/content/cell
+
+  hm:generate:
+    desc: Regenerate nix/home-manager/options.nix from the Go config schema (internal/cfg.CellConfig)
+    dir: "{{.TASKFILE_DIR}}"
+    silent: true
+    cmds:
+      - mkdir -p nix/home-manager
+      - go run ./tools/hmoptgen -out nix/home-manager/options.nix
+      # Parse-check the module pair when nix is available (CI Go jobs may not have it).
+      - |
+        if command -v nix-instantiate >/dev/null 2>&1; then
+          for f in nix/home-manager/options.nix nix/home-manager/module.nix; do
+            nix-instantiate --parse "$f" >/dev/null || exit 1
+          done
+        fi
 
   # ── Validation (CI-cheap, no build) ────────────────────────────────────
   nix:validate:
@@ -106,33 +146,65 @@ tasks:
         echo ""
         echo "All stacks valid."
 
-  nix:update-vendor-hash:
-    desc: Refresh flake.nix vendorHash after go.mod/go.sum change (writes flake.nix in place)
+  nix:sync:
+    desc: Sync flake.nix vendorHash with go.mod/go.sum and stage it — the one command to run after changing dependencies
     dir: "{{.TASKFILE_DIR}}"
     silent: true
     cmds:
       - |
+        # vendorHash covers the THIRD-PARTY module set (go.sum), not devcell's
+        # own source — nix hashes `src` itself. So this only ever needs running
+        # when go.mod/go.sum change; editing devcell code never invalidates it.
+        #
+        # nix-update does the fake-hash → build → read `got:` dance that is the
+        # only way to learn a fixed-output hash, but with real error handling.
+        # It is declared in the devShell (flake.nix) precisely for this.
         FLAKE="{{.TASKFILE_DIR}}/flake.nix"
-        replace_hash() { local tmp=$(mktemp); sed "s|vendorHash = \"sha256-[^\"]*\"|vendorHash = \"$1\"|" "$FLAKE" > "$tmp" && cat "$tmp" > "$FLAKE" && rm -f "$tmp"; }
-        OLD_HASH=$(grep 'vendorHash = "sha256-' "$FLAKE" | sed 's/.*"\(sha256-[^"]*\)".*/\1/')
-        BACKUP=$(mktemp)
-        cp "$FLAKE" "$BACKUP"
-        replace_hash "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
-        echo "Building .#cell to compute vendorHash (this may take a minute)..."
-        NEW_HASH=$(nix build .#cell 2>&1 | grep 'got:' | awk '{print $2}')
-        if [ -z "$NEW_HASH" ]; then
-          cp "$BACKUP" "$FLAKE"
-          rm -f "$BACKUP"
-          echo "nix build succeeded — vendorHash is already correct"
-          exit 0
-        fi
-        rm -f "$BACKUP"
-        replace_hash "$NEW_HASH"
-        if [ "$OLD_HASH" != "$NEW_HASH" ]; then
-          echo "vendorHash updated: $OLD_HASH → $NEW_HASH"
-          echo "flake.nix was modified — re-stage and re-commit"
+        OLD=$(grep 'vendorHash = "sha256-' "$FLAKE" | sed 's/.*"\(sha256-[^"]*\)".*/\1/')
+        echo "Resolving vendorHash for $(awk '{print $1}' go.sum | sort -u | wc -l | tr -d ' ') modules (this may take a minute)..."
+        if ! nix-update --flake --version=skip cell; then
+          echo "ERROR: could not resolve vendorHash — the build failed for a reason other than a hash mismatch." >&2
+          echo "       Check disk space and network, then re-run. flake.nix left untouched." >&2
           exit 1
         fi
+        NEW=$(grep 'vendorHash = "sha256-' "$FLAKE" | sed 's/.*"\(sha256-[^"]*\)".*/\1/')
+        case "$NEW" in
+          sha256-AAAAAAAA*|"")
+            echo "ERROR: flake.nix left with a placeholder vendorHash — refusing to continue." >&2
+            git checkout -- "$FLAKE"
+            exit 1
+            ;;
+        esac
+        if [ "$OLD" = "$NEW" ]; then
+          echo "vendorHash already correct ($NEW)"
+          exit 0
+        fi
+        git add "$FLAKE"
+        echo "vendorHash updated and staged: $OLD → $NEW"
+
+  nix:check-vendor-hash:
+    desc: Verify flake.nix vendorHash matches go.mod/go.sum (read-only; used by pre-commit)
+    dir: "{{.TASKFILE_DIR}}"
+    silent: true
+    cmds:
+      - |
+        # Read-only guard. Never writes flake.nix, so it cannot fight
+        # pre-commit's stash/restore and never asks for a re-stage.
+        # A build that dies for any other reason (ENOSPC, network) is a
+        # FAILURE, not a pass — the old hook reported those as "already
+        # correct" and let a stale hash through.
+        if nix build --no-link .#cell 2>/tmp/vendorhash-check.$$; then
+          rm -f /tmp/vendorhash-check.$$
+          exit 0
+        fi
+        if grep -q 'specified:.*got:\|hash mismatch' /tmp/vendorhash-check.$$; then
+          echo "vendorHash in flake.nix is stale — run: task nix:sync" >&2
+        else
+          echo "Could not verify vendorHash — .#cell failed to build:" >&2
+          tail -20 /tmp/vendorhash-check.$$ >&2
+        fi
+        rm -f /tmp/vendorhash-check.$$
+        exit 1
 
   bake:validate:
     desc: Print resolved docker-bake config (HCL parse check, no build)
@@ -175,7 +247,7 @@ tasks:
   cell:build:
     desc: Build cell CLI binary → ./bin/cell
     dir: "{{.TASKFILE_DIR}}"
-    deps: [swagger:generate, cell:deps]
+    deps: [swagger:generate, hm:generate, cell:deps]
     silent: true
     cmds:
       - mkdir -p bin
@@ -404,7 +476,11 @@ tasks:
     silent: true
     dir: "{{.TASKFILE_DIR}}"
     cmds:
+      - 'echo "docker daemon: {{.DOCKER_SOCK}}"'
       - go test -v -timeout 120s ./test/... {{.CLI_ARGS}}
+    # see DOCKER_SOCK in top-level vars
+    env:
+      DOCKER_HOST: '{{.DOCKER_SOCK}}'
 
   test:vagrant:
     desc: Run E2E install test in a clean Debian VM (QEMU). Requires vagrant + vagrant-qemu plugin.
@@ -435,7 +511,11 @@ tasks:
   test:cache:
     desc: Round-trip nix-cache pipeline locally (~1 min, requires docker + crane)
     cmds:
+      - 'echo "docker daemon: {{.DOCKER_SOCK}}"'
       - go test -v -count=1 -run TestCacheRoundtrip ./test/...
+    # see DOCKER_SOCK in top-level vars
+    env:
+      DOCKER_HOST: '{{.DOCKER_SOCK}}'
 
   # ── Nix-store GHCR cache pipeline ──────────────────────────────────────
   # Stream the populated /nix volume to GHCR as a multi-layer cache image.
@@ -1029,6 +1109,194 @@ tasks:
 
         section "DONE"
         echo "Paste this output to help diagnose Nix installation state."
+        }
+
+        _dump 2>&1 | tee "{{.LOG}}"
+        echo ""
+        echo "saved to: {{.LOG}}"
+
+  # ── Colima / thin-build resource debugging ────────────────────────────
+  # Targets the CELL-359 builder-ceiling work. The npm ci "Killed" (exit 137,
+  # cgroup OOM) root cause is already settled: --memory 8g + `max-jobs = auto`
+  # (= nproc, which --cpus does NOT lower) gave 8 concurrent derivations ~1 GiB
+  # each. What is NOT settled is the three hypotheses below, each of which can
+  # still break a build on Colima after that fix.
+  debug:colima:
+    desc: Dump Colima/Docker daemon capacity, context wiring, and the resource ceilings the thin build will actually emit
+    platforms: [darwin]
+    silent: true
+    vars:
+      LOG: '{{.TASKFILE_DIR}}/.context/debug/colima.log'
+      # Pin the Colima daemon explicitly so this task probes Colima while the
+      # ambient docker CLI keeps pointing at whatever else is in use (Docker
+      # Desktop). Override for a non-"default" instance:
+      #   task debug:colima COLIMA_HOST=unix://$HOME/.colima/<name>/docker.sock
+      COLIMA_HOST: 'unix://{{.HOME}}/.colima/default/docker.sock'
+    cmds:
+      - |
+        set -uo pipefail
+        mkdir -p "$(dirname "{{.LOG}}")"
+
+        _dump() {
+        section() { echo ""; echo "===== $1 ====="; }
+        item()    { echo "--- $1 ---"; }
+
+        COLIMA_HOST='{{.COLIMA_HOST}}'
+        COLIMA_SOCK="${COLIMA_HOST#unix://}"
+        # Ambient wiring, captured BEFORE anything is pinned — this is what
+        # `cell` actually inherits, and half of H1's evidence.
+        AMBIENT_DOCKER_HOST="${DOCKER_HOST:-<unset>}"
+
+        section "PROVENANCE"
+        echo "  date:        $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        echo "  cell:        $(cell --version 2>&1 | head -1 || echo 'not found')"
+        echo "  commit:      $(git -C '{{.TASKFILE_DIR}}' describe --always --dirty 2>/dev/null || echo unknown)"
+        echo "  colima host: $COLIMA_HOST"
+        echo "  socket:      $(test -S "$COLIMA_SOCK" && echo 'EXISTS (socket)' || echo 'MISSING — is colima running?')"
+        if ! test -S "$COLIMA_SOCK"; then
+          echo ""
+          echo "  !! $COLIMA_SOCK is not a socket. Colima probes below will fail."
+          echo "  !! Start it with 'colima start', or pass COLIMA_HOST=... for another instance."
+        fi
+
+        # ── H1: docker context mismatch ───────────────────────────────────
+        # Hypothesis: probeDockerCapacity() shells out to a bare `docker info`,
+        # so if `cell`'s context differs from the one the probe resolves, the
+        # ceilings are computed against the WRONG daemon. A --cpus larger than
+        # the real daemon's CPU count makes dockerd exit 125 outright.
+        # CONFIRM: `docker context show` != the daemon `docker info` reports,
+        # or DOCKER_HOST set to something other than the active context.
+        # REFUTE:  exactly one context, no DOCKER_HOST, Name == colima.
+        section "H1: DOCKER CONTEXT WIRING"
+        item "ambient env (what cell inherits — NOT pinned)"
+        echo "  DOCKER_HOST=$AMBIENT_DOCKER_HOST"
+        echo "  DOCKER_CONTEXT=${DOCKER_CONTEXT:-<unset>}"
+        item "docker context ls"
+        docker context ls 2>&1 || echo "  docker context ls failed"
+        item "docker context show"
+        docker context show 2>&1 || echo "  failed"
+
+        # The core H1 comparison: the daemon the AMBIENT CLI resolves vs. the
+        # daemon Colima actually is. probeDockerCapacity() runs a bare
+        # `docker info`, so it sees the ambient one — if these two rows differ,
+        # the ceilings are computed against the wrong daemon.
+        item "AMBIENT docker info (this is what clampBuildLimits probes)"
+        env -u DOCKER_HOST docker info \
+          --format '  Name={{`{{.Name}}`}} NCPU={{`{{.NCPU}}`}} MemTotal={{`{{.MemTotal}}`}} Server={{`{{.ServerVersion}}`}} Driver={{`{{.Driver}}`}}' 2>&1 | head -3 \
+          || echo "  ambient docker info failed"
+        item "COLIMA docker info (pinned to $COLIMA_HOST)"
+        DOCKER_HOST="$COLIMA_HOST" docker info \
+          --format '  Name={{`{{.Name}}`}} NCPU={{`{{.NCPU}}`}} MemTotal={{`{{.MemTotal}}`}} Server={{`{{.ServerVersion}}`}} Driver={{`{{.Driver}}`}}' 2>&1 | head -3 \
+          || echo "  colima docker info failed"
+        item "VERDICT: do ambient and colima resolve to the same daemon?"
+        _amb=$(env -u DOCKER_HOST docker info --format '{{`{{.Name}}`}}/{{`{{.NCPU}}`}}/{{`{{.MemTotal}}`}}' 2>/dev/null)
+        _col=$(DOCKER_HOST="$COLIMA_HOST" docker info --format '{{`{{.Name}}`}}/{{`{{.NCPU}}`}}/{{`{{.MemTotal}}`}}' 2>/dev/null)
+        echo "  ambient: ${_amb:-<unreachable>}"
+        echo "  colima:  ${_col:-<unreachable>}"
+        if [ -n "$_amb" ] && [ -n "$_col" ] && [ "$_amb" = "$_col" ]; then
+          echo "  => SAME daemon. H1 REFUTED."
+        else
+          echo "  => DIFFERENT daemons (or one unreachable). H1 SUPPORTED:"
+          echo "     cell's ceilings are sized against 'ambient', not colima."
+        fi
+        item "docker info per context (does capacity differ between them?)"
+        for ctx in $(docker context ls --format '{{`{{.Name}}`}}' 2>/dev/null); do
+          printf '  %-18s ' "$ctx"
+          docker --context "$ctx" info --format 'Name={{`{{.Name}}`}} NCPU={{`{{.NCPU}}`}} MemTotal={{`{{.MemTotal}}`}}' 2>&1 | head -1
+        done
+        item "socket paths"
+        ls -la "$COLIMA_SOCK" 2>/dev/null || echo "  no colima docker.sock at $COLIMA_SOCK"
+        ls -la ~/.docker/run/docker.sock 2>/dev/null || echo "  no docker-desktop user sock"
+        ls -la /var/run/docker.sock 2>/dev/null || echo "  no /var/run/docker.sock"
+
+        # ── Everything below measures COLIMA specifically ─────────────────
+        # Ambient wiring is already recorded above, so pin from here on. This
+        # is what lets the task debug Colima while normal docker use continues
+        # against another daemon.
+        export DOCKER_HOST="$COLIMA_HOST"
+        echo ""
+        echo "  >>> DOCKER_HOST pinned to $DOCKER_HOST for all sections below <<<"
+
+        # ── H2: VM disk exhaustion ────────────────────────────────────────
+        # Hypothesis: the memory fix unblocks the build only to hit a full VM
+        # disk. A prior run reported "62.7 GB total, 59.5 GB used, 0.0 GB
+        # available" with 45 GB in local volumes — a nix build needs tens of GB
+        # in the shared /nix volume.
+        # CONFIRM: Avail on the VM's / (or /var/lib/docker) under ~20 GB.
+        # REFUTE:  ample free space AND the nix-store volume well under quota.
+        section "H2: VM DISK CAPACITY"
+        item "colima list (disk column)"
+        colima list 2>&1 || echo "  colima not installed / not running"
+        item "df inside the VM"
+        colima ssh -- df -h 2>&1 | head -20 || echo "  colima ssh failed"
+        item "df for the docker data root specifically"
+        colima ssh -- df -h /var/lib/docker 2>&1 || echo "  colima ssh failed"
+        item "docker system df -v (volume + build cache breakdown)"
+        docker system df -v 2>&1 | head -40 || echo "  docker system df failed"
+        item "nix-store volume size"
+        docker system df -v 2>&1 | grep -iE 'nix|VOLUME NAME' || echo "  no nix volume found"
+        item "docker builder cache"
+        docker builder du 2>&1 | tail -5 || echo "  docker builder du unsupported"
+
+        # ── H3: VM memory/swap under-provisioned vs. expectation ──────────
+        # Hypothesis: the VM has less RAM than assumed and/or no swap. Lima VMs
+        # are swapless by default, so --memory is a HARD ceiling. If the VM is
+        # the stock 2 GiB rather than 8 GiB, the 4g default is >= VM total and
+        # gets dropped entirely — the build then runs uncapped and dies to the
+        # VM-wide OOM killer instead, with a less legible failure.
+        # CONFIRM: MemTotal < 8 GiB, or SwapTotal 0 with a tight ceiling.
+        # REFUTE:  MemTotal ~8 GiB and the emitted ceiling below it.
+        section "H3: VM MEMORY & SWAP"
+        item "colima ssh -- free -m"
+        colima ssh -- free -m 2>&1 || echo "  colima ssh failed"
+        item "VM /proc/meminfo (MemTotal / MemAvailable / Swap)"
+        colima ssh -- grep -E 'MemTotal|MemAvailable|SwapTotal|SwapFree' /proc/meminfo 2>&1 || echo "  colima ssh failed"
+        item "VM cgroup version + root memory.max"
+        colima ssh -- sh -c 'stat -fc %T /sys/fs/cgroup; cat /sys/fs/cgroup/memory.max 2>/dev/null' 2>&1 || echo "  colima ssh failed"
+        item "VM nproc"
+        colima ssh -- nproc 2>&1 || echo "  colima ssh failed"
+        item "colima config (requested vs actual)"
+        cat ~/.colima/default/colima.yaml 2>/dev/null | grep -E '^(cpu|memory|disk|vmType|mountType|arch):' || echo "  no colima.yaml"
+
+        # ── What the fix actually emits ───────────────────────────────────
+        # Not a hypothesis — the ground truth for all three. Prints the real
+        # ceilings and nix concurrency for the daemon in force, so the log
+        # records what the builder was told rather than what we assume.
+        section "EMITTED BUILD CEILINGS (ground truth)"
+        item "DEVCELL_* overrides in the environment"
+        env | grep -E '^DEVCELL_(BUILD|NIX)_' || echo "  none set — defaults apply"
+        # --dry-run is documented as "print docker run argv and exit without
+        # running" (cmd/root.go). It is wired for the tart/qemu/vagrant builders;
+        # if the thin/docker path does not honour it yet this prints a real build
+        # instead, so it is guarded by a timeout and --debug supplies the daemon
+        # diagnostics (logDockerDiagnostics) regardless.
+        item "cell build --dry-run --debug (argv + docker diagnostics)"
+        ( DEVCELL_STACK="${DEVCELL_STACK:-base}" \
+          timeout 90 cell build --dry-run --debug 2>&1 \
+            | grep -viE '^(copying|building) path' \
+            | head -60 ) || echo "  (--dry-run not honoured by the thin path, or timed out — see note in task)"
+        item "grep the emitted ceilings out of that output"
+        ( DEVCELL_STACK="${DEVCELL_STACK:-base}" \
+          timeout 90 cell build --dry-run --debug 2>&1 \
+            | grep -oE '\-\-(memory|cpus) [^ ]+|DEVCELL_NIX_(MAX_JOBS|CORES)=[0-9]+' \
+            | sort -u ) || echo "  none captured"
+        echo "  expected with defaults: --memory = 3/4 of daemon RAM, no --cpus,"
+        echo "    DEVCELL_NIX_MAX_JOBS = ceiling/8GiB, DEVCELL_NIX_CORES = ncpu/max-jobs"
+        echo "  (e.g. 24 GiB / 8-CPU daemon: --memory 18g  MAX_JOBS=2  CORES=4)"
+        echo "  if --memory is ABSENT, the daemon probe failed or ceiling opted out"
+
+        # ── Prior OOM evidence, for regression comparison ─────────────────
+        section "RECENT OOM / EXIT-137 EVIDENCE"
+        item "VM dmesg OOM kills"
+        colima ssh -- sh -c 'dmesg 2>/dev/null | grep -iE "out of memory|oom-kill|killed process" | tail -20' 2>&1 || echo "  no dmesg access"
+        item "exited containers killed by OOM"
+        docker ps -a --filter 'status=exited' --format '{{`{{.Names}}`}}\t{{`{{.Status}}`}}' 2>&1 | head -15 || true
+        for c in $(docker ps -aq 2>/dev/null | head -20); do
+          docker inspect "$c" --format '{{`{{.Name}}`}} OOMKilled={{`{{.State.OOMKilled}}`}} ExitCode={{`{{.State.ExitCode}}`}}' 2>/dev/null
+        done | grep -E 'OOMKilled=true|ExitCode=137' || echo "  no OOM-killed containers retained"
+
+        section "DONE"
+        echo "Paste this output back to /continue-debug to narrow the hypotheses."
         }
 
         _dump 2>&1 | tee "{{.LOG}}"
