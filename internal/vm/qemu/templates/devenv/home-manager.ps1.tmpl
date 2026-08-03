@@ -1,0 +1,29 @@
+$ErrorActionPreference = 'Continue'
+$env:WSL_UTF8 = '1'
+# WSL2 automounts Windows drives under /mnt; mount explicitly if it has not.
+wsl -d {{.Distro}} -u root -- sh -c 'mkdir -p {{.Mount}} && (mountpoint -q {{.Mount}} || mount -t drvfs {{.Drive}} {{.Mount}}) 2>/dev/null; true'
+wsl -d {{.Distro}} -u root -- sh -c 'mkdir -p /home/{{.User}}/dev/dimmkirr && ln -sfn {{.Mount}} /home/{{.User}}/dev/dimmkirr/devcell && chown -h {{.User}} /home/{{.User}}/dev/dimmkirr/devcell 2>/dev/null; true'
+wsl -d {{.Distro}} -- sh -c 'ls /home/{{.User}}/dev/dimmkirr/devcell/nixhome'
+if ($LASTEXITCODE -ne 0) { throw 'repo not readable through the share in WSL' }
+
+# The official standalone-flake activation
+# (https://nix-community.github.io/home-manager/installation.html):
+# - login shell (-lc): nix is only on PATH via /etc/profile in NixOS-WSL
+# - the experimental features are passed as REPEATED flags, never as one
+#   quoted pair: inner double quotes do not survive the PowerShell ->
+#   wsl.exe -> sh -lc chain, and nix then reports "no subcommand specified"
+#   (run 20260802T112212). Explicit flags are also required because relying
+#   on an ambient nix.conf failed earlier (run 20260802T095306).
+# - runner pinned to the home-manager release branch matching this NixOS
+# - the wsl-* flake configs: their user is the distro default (nixos), not
+#   the Docker cell's devcell@/opt/devcell — home-manager refuses to
+#   activate a config whose username does not match the invoking user
+wsl -d {{.Distro}} -- /bin/sh -lc 'set -e; cd /home/{{.User}}/dev/dimmkirr/devcell; ARCH_SUFFIX=$([ "$(uname -m)" = "aarch64" ] && echo "-aarch64" || echo ""); nix --extra-experimental-features nix-command --extra-experimental-features flakes run home-manager/release-26.05 -- switch -b backup --flake ./nixhome#wsl-base$ARCH_SUFFIX 2>&1 | tail -40'
+if ($LASTEXITCODE -ne 0) { throw 'home-manager activation failed' }
+
+# Installed means the CLI answers with a real version from the activated
+# profile (programs.home-manager.enable in nixhome), not merely exit 0.
+wsl -d {{.Distro}} -- /bin/sh -lc 'home-manager --version'
+if ($LASTEXITCODE -ne 0) { throw 'home-manager CLI missing from the activated profile' }
+wsl -d {{.Distro}} -- /bin/sh -lc 'home-manager --version | grep -E "[0-9]+\.[0-9]+"'
+if ($LASTEXITCODE -ne 0) { throw 'home-manager --version did not print a semantic version' }

@@ -1,0 +1,8 @@
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+$url = 'https://github.com/winfsp/winfsp/releases/download/v2.0/winfsp-2.0.23075.msi'
+$msi = Join-Path $env:TEMP 'winfsp.msi'
+Invoke-WebRequest -Uri $url -OutFile $msi -UseBasicParsing
+Start-Process msiexec -ArgumentList '/i', $msi, '/qn', '/norestart' -Wait
+Write-Output ("winfsp installed: " + (Test-Path 'C:\Program Files (x86)\WinFsp'))

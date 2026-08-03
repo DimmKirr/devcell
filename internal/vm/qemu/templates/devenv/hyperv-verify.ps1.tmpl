@@ -1,0 +1,39 @@
+$ErrorActionPreference = 'Continue'
+$ProgressPreference = 'SilentlyContinue'
+# Two independent questions, deliberately reported apart: a hypervisor can be
+# INSTALLED (feature present) and still not STARTED (never launched at boot) —
+# and only the second one lets WSL2 create its utility VM.
+
+# 1. installed — the optional feature is present and Enabled.
+$installed = $false
+try {
+    $st = (Get-WindowsOptionalFeature -Online -FeatureName 'Microsoft-Hyper-V-Hypervisor' -ErrorAction Stop).State
+    Write-Output ('hyperv feature state: ' + $st)
+    $installed = ($st -eq 'Enabled')
+} catch {
+    Write-Output ('hyperv feature state: QUERY FAILED (' + $_.Exception.Message.Trim() + ')')
+}
+Write-Output ('hyperv installed: ' + $installed)
+
+# 2. started — it was actually launched. hypervisorlaunchtype is the request;
+# vmcompute running plus HypervisorPresent is the evidence it took.
+$launch = ((bcdedit /enum '{current}' | Select-String hypervisorlaunchtype) -join ' ').Trim()
+Write-Output ('bcd ' + $(if ($launch) { $launch } else { 'hypervisorlaunchtype not set' }))
+$vmcompute = (Get-Service vmcompute -ErrorAction SilentlyContinue)
+Write-Output ('vmcompute service: ' + $(if ($vmcompute) { $vmcompute.Status } else { 'absent' }))
+$hv = (Get-CimInstance Win32_ComputerSystem).HypervisorPresent
+Write-Output ('hypervisorpresent: ' + $hv)
+# Neither of the above proves a hypervisor BOOTED: launchtype is a request
+# read at boot, vmcompute runs regardless, and HypervisorPresent is True merely
+# because we run under QEMU. The hypervisor writes its own operational log when
+# it actually launches — that is the evidence. (Iteration 20 reported
+# "started: True" from the weak signals and the utility VM still failed with
+# HCS_E_HYPERV_NOT_INSTALLED.)
+$hvEvents = @(Get-WinEvent -LogName 'Microsoft-Windows-Hyper-V-Hypervisor-Operational' -MaxEvents 5 -ErrorAction SilentlyContinue)
+Write-Output ('hyperv operational log entries: ' + $hvEvents.Count)
+foreach ($e in $hvEvents) { Write-Output ('  hv event ' + $e.Id + ': ' + ($e.Message -replace "\r?\n", ' ')) }
+$started = $hvEvents.Count -gt 0
+Write-Output ('hyperv started: ' + $started)
+
+if (-not $installed) { throw 'hyperv installed: False - the feature did not enable (payload missing from our media?)' }
+if (-not $started) { throw 'hyperv started: False - the feature is installed but no hypervisor is running (emulated EL2 may not suffice)' }

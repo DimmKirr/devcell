@@ -36,7 +36,7 @@ func qemuTestHomeWithTOML(t *testing.T, projectTOML string) string {
 
 func TestEngineQemu_DryRunPrintsSSH(t *testing.T) {
 	home := qemuTestHome(t)
-	cmd := exec.Command(binaryPath, "--engine=qemu", "shell", "--dry-run")
+	cmd := exec.Command(binaryPath, "--engine=qemu", "--local", "shell", "--dry-run")
 	cmd.Dir = home
 	cmd.Env = append(os.Environ(), "DEVCELL_BUNK=1", "HOME="+home)
 	out, err := cmd.CombinedOutput()
@@ -57,7 +57,7 @@ func TestEngineQemu_DryRunPrintsSSH(t *testing.T) {
 
 func TestEngineQemu_DryRunContainsBinary(t *testing.T) {
 	home := qemuTestHome(t)
-	cmd := exec.Command(binaryPath, "--engine=qemu", "claude", "--dry-run")
+	cmd := exec.Command(binaryPath, "--engine=qemu", "--local", "claude", "--dry-run")
 	cmd.Dir = home
 	cmd.Env = append(os.Environ(), "DEVCELL_BUNK=1", "HOME="+home)
 	out, err := cmd.CombinedOutput()
@@ -71,7 +71,7 @@ func TestEngineQemu_DryRunContainsBinary(t *testing.T) {
 
 func TestEngineQemu_DryRunNoDocker(t *testing.T) {
 	home := qemuTestHome(t)
-	cmd := exec.Command(binaryPath, "--engine=qemu", "claude", "--dry-run")
+	cmd := exec.Command(binaryPath, "--engine=qemu", "--local", "claude", "--dry-run")
 	cmd.Dir = home
 	cmd.Env = append(os.Environ(), "DEVCELL_BUNK=1", "HOME="+home)
 	out, err := cmd.CombinedOutput()
@@ -85,7 +85,7 @@ func TestEngineQemu_DryRunNoDocker(t *testing.T) {
 
 func TestEngineQemu_DryRunContainsEnvVars(t *testing.T) {
 	home := qemuTestHome(t)
-	cmd := exec.Command(binaryPath, "--engine=qemu", "shell", "--dry-run")
+	cmd := exec.Command(binaryPath, "--engine=qemu", "--local", "shell", "--dry-run")
 	cmd.Dir = home
 	cmd.Env = append(os.Environ(), "DEVCELL_BUNK=1", "HOME="+home, "TERM=xterm-256color")
 	out, err := cmd.CombinedOutput()
@@ -99,7 +99,7 @@ func TestEngineQemu_DryRunContainsEnvVars(t *testing.T) {
 
 func TestEngineQemu_DryRunSSHPort(t *testing.T) {
 	home := qemuTestHome(t)
-	cmd := exec.Command(binaryPath, "--engine=qemu", "shell", "--dry-run")
+	cmd := exec.Command(binaryPath, "--engine=qemu", "--local", "shell", "--dry-run")
 	cmd.Dir = home
 	// DEVCELL_BUNK=1, no SESSION_PORT_PREFIX → portPrefix="1" → SSH=ClampPort("122")=122 → hoisted to 10122
 	cmd.Env = append(os.Environ(), "DEVCELL_BUNK=1", "HOME="+home)
@@ -114,7 +114,7 @@ func TestEngineQemu_DryRunSSHPort(t *testing.T) {
 
 func TestEngineQemu_DryRunCustomSSHPort(t *testing.T) {
 	home := qemuTestHomeWithTOML(t, "[cell]\nqemu_ssh_port = 3333\n")
-	cmd := exec.Command(binaryPath, "--engine=qemu", "shell", "--dry-run")
+	cmd := exec.Command(binaryPath, "--engine=qemu", "--local", "shell", "--dry-run")
 	cmd.Dir = home
 	cmd.Env = append(os.Environ(), "DEVCELL_BUNK=1", "HOME="+home)
 	out, err := cmd.CombinedOutput()
@@ -138,7 +138,7 @@ func TestEngineQemu_EngineHelpIncludesQemu(t *testing.T) {
 
 func TestBackgroundFlag_StrippedFromArgsQemu(t *testing.T) {
 	home := qemuTestHome(t)
-	cmd := exec.Command(binaryPath, "--engine=qemu", "--background", "shell", "--dry-run")
+	cmd := exec.Command(binaryPath, "--engine=qemu", "--local", "--background", "shell", "--dry-run")
 	cmd.Dir = home
 	cmd.Env = append(os.Environ(), "DEVCELL_BUNK=1", "HOME="+home)
 	out, err := cmd.CombinedOutput()
@@ -158,7 +158,7 @@ func TestEngineQemu_NoDebugOnLinux(t *testing.T) {
 		t.Skip("this test validates the non-darwin error path")
 	}
 	home := qemuTestHome(t)
-	cmd := exec.Command(binaryPath, "--engine=qemu", "shell")
+	cmd := exec.Command(binaryPath, "--engine=qemu", "--local", "shell")
 	cmd.Dir = home
 	cmd.Env = append(os.Environ(), "DEVCELL_BUNK=1", "HOME="+home)
 	out, err := cmd.CombinedOutput()
@@ -176,7 +176,7 @@ func TestEngineQemu_NoDebugOnLinux(t *testing.T) {
 
 func TestEngineQemu_DebugMockOutput(t *testing.T) {
 	home := qemuTestHome(t)
-	cmd := exec.Command(binaryPath, "--engine=qemu", "--debug", "shell")
+	cmd := exec.Command(binaryPath, "--engine=qemu", "--local", "--debug", "shell")
 	cmd.Dir = home
 	cmd.Env = append(os.Environ(), "DEVCELL_BUNK=1", "HOME="+home)
 	out, err := cmd.CombinedOutput()
@@ -203,7 +203,7 @@ func TestEngineQemu_DebugMockNoDocker(t *testing.T) {
 		t.Skip("mock output only on non-darwin")
 	}
 	home := qemuTestHome(t)
-	cmd := exec.Command(binaryPath, "--engine=qemu", "--debug", "shell")
+	cmd := exec.Command(binaryPath, "--engine=qemu", "--local", "--debug", "shell")
 	cmd.Dir = home
 	cmd.Env = append(os.Environ(), "DEVCELL_BUNK=1", "HOME="+home)
 	out, err := cmd.CombinedOutput()
@@ -357,7 +357,7 @@ func TestQemuE2E_FullLifecycle(t *testing.T) {
 
 	// --- Phase 3: Shell (dry-run — verifies clone + SSH command) ---
 	t.Run("ShellDryRun", func(t *testing.T) {
-		cmd := exec.Command(binaryPath, "--engine=qemu", "shell", "--dry-run")
+		cmd := exec.Command(binaryPath, "--engine=qemu", "--local", "shell", "--dry-run")
 		cmd.Dir = home
 		cmd.Env = baseEnv
 		out, err := cmd.CombinedOutput()

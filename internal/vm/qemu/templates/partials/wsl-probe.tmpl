@@ -1,0 +1,5 @@
+{{define "wsl-probe"}}$env:WSL_UTF8 = '1'
+$prevEAP = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+$status = (& wsl.exe --status 2>&1 | Out-String)
+$wslExit = $LASTEXITCODE
+$ErrorActionPreference = $prevEAP{{end}}

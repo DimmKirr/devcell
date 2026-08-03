@@ -1,137 +1,81 @@
 package qemu
 
-import "fmt"
+// Build-time provisioning: the scripts `cell build --engine=qemu` runs in a
+// freshly installed guest over SSH. The script bodies live under
+// templates/provision/ — see templates.go for why they are files rather than
+// Go raw strings.
 
 // GenerateSSHConfigScript returns a PowerShell script that configures
 // OpenSSH Server on Windows: sets default shell, authorized keys, and firewall rule.
 func GenerateSSHConfigScript(pubKey string) string {
-	return fmt.Sprintf(`$ErrorActionPreference = 'Stop'
-
-# Set default shell to PowerShell
-New-ItemProperty -Path "HKLM:\SOFTWARE\OpenSSH" -Name DefaultShell -Value "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe" -PropertyType String -Force
-
-# Install authorized key
-$sshDir = "$env:USERPROFILE\.ssh"
-if (-not (Test-Path $sshDir)) { New-Item -ItemType Directory -Path $sshDir -Force }
-Add-Content -Path "$sshDir\authorized_keys" -Value '%s'
-icacls "$sshDir\authorized_keys" /inheritance:r /grant:r "$env:USERNAME:(R)"
-
-# Ensure sshd is running
-Set-Service -Name sshd -StartupType Automatic
-Start-Service sshd
-
-# Firewall rule (idempotent)
-if (-not (Get-NetFirewallRule -Name 'sshd' -ErrorAction SilentlyContinue)) {
-    New-NetFirewallRule -Name 'sshd' -DisplayName 'OpenSSH Server' -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22
-}
-
-Write-Output "SSH configured successfully"`, pubKey)
+	return renderTemplate("provision/ssh-config.ps1.tmpl", struct{ PubKey string }{pubKey})
 }
 
 // GenerateCreateSessionUserScript returns a PowerShell script that creates a
 // local user matching the host user, with admin privileges and password-free SSH.
 func GenerateCreateSessionUserScript(username, password string) string {
-	return fmt.Sprintf(`$ErrorActionPreference = 'Stop'
-$Username = '%s'
-$Password = ConvertTo-SecureString '%s' -AsPlainText -Force
-
-# Create user if not exists
-if (-not (Get-LocalUser -Name $Username -ErrorAction SilentlyContinue)) {
-    New-LocalUser -Name $Username -Password $Password -PasswordNeverExpires -AccountNeverExpires
-    Add-LocalGroupMember -Group "Administrators" -Member $Username
-    Write-Output "Created user: $Username"
-} else {
-    Write-Output "User $Username already exists"
-}
-
-# Enable auto-logon
-$RegPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
-Set-ItemProperty -Path $RegPath -Name AutoAdminLogon -Value "1"
-Set-ItemProperty -Path $RegPath -Name DefaultUserName -Value $Username
-Set-ItemProperty -Path $RegPath -Name DefaultPassword -Value '%s'
-
-Write-Output "Session user setup complete"`, username, password, password)
+	return renderTemplate("provision/create-session-user.ps1.tmpl", struct {
+		Username string
+		Password string
+	}{username, password})
 }
 
 // GenerateDevToolsScript returns a PowerShell script that installs
-// essential dev tools via winget (Git, VS Code, etc).
+// essential dev tools (Git) via winget with a Chocolatey fallback.
+//
+// The fallback fires on winget *failure*, not only on absence: in run
+// 20260801T001059 winget existed, errored, installed nothing — and the step
+// still claimed ok because its stderr was discarded. The step now verifies
+// git actually landed and fails when it did not.
 func GenerateDevToolsScript() string {
-	return `$ErrorActionPreference = 'Stop'
-
-# Install Chocolatey if winget is not available
-if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
-    Write-Output "winget not found, installing Chocolatey..."
-    Set-ExecutionPolicy Bypass -Scope Process -Force
-    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
-    Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-
-    choco install -y git openssh
-} else {
-    Write-Output "Installing dev tools via winget..."
-    winget install --accept-source-agreements --accept-package-agreements Git.Git 2>$null
-}
-
-# Ensure git is on PATH
-$gitPath = "C:\Program Files\Git\cmd"
-if (Test-Path $gitPath) {
-    $env:Path += ";$gitPath"
-    [Environment]::SetEnvironmentVariable("Path", $env:Path, [EnvironmentVariableTarget]::Machine)
-}
-
-Write-Output "Dev tools installed"
-`
+	return renderTemplate("provision/dev-tools.ps1.tmpl", nil)
 }
 
 // GenerateProjectMountScript returns a PowerShell script that creates a
-// project directory and sets up SMB/network share mapping.
-// For QEMU, project files are shared via SSH (scp/rsync) or SMB.
+// project directory. For QEMU, project files are shared via virtio-fs (see
+// the dev-env pipeline) or copied over SSH.
 func GenerateProjectMountScript(projectName, mountLetter string) string {
-	return fmt.Sprintf(`$ErrorActionPreference = 'Stop'
-$ProjectDir = "$env:USERPROFILE\%s"
-if (-not (Test-Path $ProjectDir)) {
-    New-Item -ItemType Directory -Path $ProjectDir -Force
-    Write-Output "Created project directory: $ProjectDir"
-} else {
-    Write-Output "Project directory exists: $ProjectDir"
-}
-`, projectName)
+	return renderTemplate("provision/project-mount.ps1.tmpl", struct{ ProjectName string }{projectName})
 }
 
 // GenerateEnvSetupScript returns a PowerShell script that sets environment
 // variables for the devcell session.
+//
+// Built by iteration rather than from a template: the body is one line per
+// variable with no prose around it, so a template would add indirection
+// without removing any escaping hazard.
 func GenerateEnvSetupScript(envVars map[string]string) string {
 	script := "$ErrorActionPreference = 'Stop'\n"
 	for k, v := range envVars {
-		script += fmt.Sprintf("[Environment]::SetEnvironmentVariable('%s', '%s', [EnvironmentVariableTarget]::Machine)\n", k, v)
+		script += "[Environment]::SetEnvironmentVariable('" + k + "', '" + v + "', [EnvironmentVariableTarget]::Machine)\n"
 	}
 	script += "Write-Output 'Environment configured'\n"
 	return script
 }
 
-// ProvisionStep describes a single step in the provisioning pipeline.
-type ProvisionStep struct {
-	Name    string
-	Script  string
-	Retries int
-}
-
-// DefaultProvisionSteps returns the provisioning pipeline for a new Windows VM.
-func DefaultProvisionSteps(pubKey, username, password string) []ProvisionStep {
-	return []ProvisionStep{
+// DefaultProvisionSteps returns the build-time provisioning pipeline for a new
+// Windows VM, as a GuestStage table — the same shape as DevEnvStages, so both
+// pipelines are named, logged and driven by one set of rules.
+func DefaultProvisionSteps(pubKey, username, password string) []GuestStage {
+	stages := []GuestStage{
 		{
-			Name:    "Configure SSH",
-			Script:  GenerateSSHConfigScript(pubKey),
-			Retries: 2,
+			Component: "provisioning",
+			Name:      "Configure SSH",
+			Script:    GenerateSSHConfigScript(pubKey),
+			Retries:   2,
 		},
 		{
-			Name:    "Create session user",
-			Script:  GenerateCreateSessionUserScript(username, password),
-			Retries: 1,
+			Component: "provisioning",
+			Name:      "Create session user",
+			Script:    GenerateCreateSessionUserScript(username, password),
+			Retries:   1,
 		},
 		{
-			Name:    "Install dev tools",
-			Script:  GenerateDevToolsScript(),
-			Retries: 2,
+			Component: "provisioning",
+			Name:      "Install dev tools",
+			Script:    GenerateDevToolsScript(),
+			Retries:   2,
 		},
 	}
+	return withStageLogging(stages)
 }

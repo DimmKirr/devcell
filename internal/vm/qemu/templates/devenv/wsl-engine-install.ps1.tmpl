@@ -1,0 +1,47 @@
+$ErrorActionPreference = 'Continue'
+$ProgressPreference = 'SilentlyContinue'
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+# WSL's defaults assume real hardware. Under TCG the utility-VM kernel needs
+# far more than the default 30s KernelBootTimeout (WslCoreConfig.h), and
+# WSLg's vGPU device has no partitionable GPU here — its hot-add was the last
+# HCS operation before wslservice died with E_UNEXPECTED. Written before any
+# wsl.exe VM operation so even the registration mini-VM runs with these.
+$wslconfig = @(
+    '[wsl2]',
+    'processors=2',
+    'memory=2GB',
+    'kernelBootTimeout=3600000',
+    'distributionStartTimeout=3600000',
+    'gpuSupport=false',
+    'guiApplications=false'
+) -join "`n"
+Set-Content -Path (Join-Path $env:USERPROFILE '.wslconfig') -Value $wslconfig -Encoding ascii
+Write-Output 'wrote .wslconfig tuned for an emulated host'
+{{template "wsl-probe"}}
+if ($wslExit -eq 0 -and $status -notmatch 'not installed') {
+    Write-Output 'wsl engine already present'
+    return
+}
+
+# Microsoft's documented one-liner: it registers the engine properly, which
+# the bare MSI did not — iteration 14 installed wsl.2.7.11.0.arm64.msi, rebooted,
+# and wsl.exe still answered "The Windows Subsystem for Linux is not installed".
+Write-Output 'registering the WSL engine via wsl --install --no-distribution'
+wsl.exe --install --no-distribution
+Write-Output ('wsl --install exit: ' + $LASTEXITCODE)
+
+# Fall back to the release MSI only if the documented path did not take.
+{{template "wsl-probe"}}
+if ($wslExit -ne 0 -or $status -match 'not installed') {
+    Write-Output 'still not registered - fetching the MSI from microsoft/WSL releases'
+    $rel = Invoke-RestMethod -Uri 'https://api.github.com/repos/microsoft/WSL/releases/latest' -UseBasicParsing
+    $asset = $rel.assets | Where-Object { $_.name -like '*arm64.msi' } | Select-Object -First 1
+    if (-not $asset) { throw 'no arm64.msi asset in the latest microsoft/WSL release' }
+    $msi = Join-Path $env:TEMP $asset.name
+    if (-not (Test-Path $msi)) { Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $msi -UseBasicParsing }
+    Write-Output ('installing ' + $asset.name + ' - the SSH session may drop here')
+    Start-Process msiexec -ArgumentList '/i', $msi, '/qn', '/norestart' -Wait
+    Write-Output ('wsl engine MSI installed: ' + $asset.name)
+}
+Write-Output ('wsl.exe resolves to: ' + (Get-Command wsl.exe).Source)

@@ -1,0 +1,23 @@
+$ErrorActionPreference = 'Stop'
+{{template "find-virtio-cd"}}
+Write-Output ('testsigning state: ' + ((bcdedit /enum '{current}' | Select-String testsigning) -join ' '))
+$failed = @()
+foreach ($drv in 'vioserial\w11\ARM64','viofs\w11\ARM64','Balloon\w11\ARM64','viorng\w11\ARM64') {
+    $inf = Join-Path $cd $drv
+    Get-ChildItem -Path $inf -Filter *.inf | ForEach-Object {
+        pnputil /add-driver $_.FullName /install
+        if ($LASTEXITCODE -ne 0) {
+            Write-Output ("driver FAILED (exit " + $LASTEXITCODE + "): " + $_.FullName)
+            $failed += $_.Name
+        } else {
+            Write-Output ("driver installed: " + $_.FullName)
+        }
+    }
+}
+# No ARM64 agent exists; the x64 MSI runs under Win11's x64 emulation.
+$msi = Join-Path $cd 'guest-agent\qemu-ga-x86_64.msi'
+Start-Process msiexec -ArgumentList '/i', $msi, '/qn', '/norestart' -Wait
+Start-Service QEMU-GA -ErrorAction SilentlyContinue
+$svc = Get-Service QEMU-GA -ErrorAction SilentlyContinue
+Write-Output ("qemu-ga service: " + $(if ($svc) { $svc.Status } else { 'not installed' }))
+if ($failed.Count -gt 0) { throw ("drivers failed to install: " + ($failed -join ', ')) }

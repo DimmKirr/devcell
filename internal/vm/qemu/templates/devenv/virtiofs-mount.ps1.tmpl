@@ -1,0 +1,25 @@
+$ErrorActionPreference = 'Stop'
+{{template "find-virtio-cd"}}
+$exe = Join-Path $cd 'viofs\w11\ARM64\virtiofs.exe'
+$dst = 'C:\devcell\virtiofs.exe'
+New-Item -ItemType Directory -Path C:\devcell -Force | Out-Null
+Copy-Item $exe $dst -Force
+# What actually exists on this guest — the answer to any dependency question.
+Get-Service | Where-Object { $_.Name -match 'Fsp|Vio|virtio' } | ForEach-Object { Write-Output ('svc: ' + $_.Name + ' = ' + $_.Status) }
+if (-not (Get-Service VirtioFsSvc -ErrorAction SilentlyContinue)) {
+    $deps = @('WinFsp.Launcher','VirtioFsDrv') | Where-Object { Get-Service $_ -ErrorAction SilentlyContinue }
+    if ($deps) {
+        Write-Output ('depending on: ' + ($deps -join '/'))
+        Write-Output (sc.exe create VirtioFsSvc binpath= ('"' + $dst + ' -t {{.Tag}} -m {{.Drive}}"') start= auto depend= ($deps -join '/'))
+    } else {
+        Write-Output 'no dependency services found - creating without depend'
+        Write-Output (sc.exe create VirtioFsSvc binpath= ('"' + $dst + ' -t {{.Tag}} -m {{.Drive}}"') start= auto)
+    }
+}
+Write-Output (sc.exe start VirtioFsSvc)
+$deadline = (Get-Date).AddSeconds(90)
+while (-not (Test-Path '{{.Drive}}\') -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 3 }
+Write-Output (sc.exe query VirtioFsSvc)
+Get-PSDrive -PSProvider FileSystem | ForEach-Object { Write-Output ('drive: ' + $_.Name + ' -> ' + $_.Root) }
+Get-ChildItem -Name {{.Drive}}\ | Select-Object -First 20
+Write-Output ("share mounted: " + (Test-Path '{{.Drive}}\'))

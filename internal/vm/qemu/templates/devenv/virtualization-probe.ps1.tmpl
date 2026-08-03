@@ -1,0 +1,25 @@
+$ErrorActionPreference = 'Continue'
+$ProgressPreference = 'SilentlyContinue'
+# Windows' own verdict on hosting a hypervisor.
+Get-ComputerInfo -Property 'HyperVRequirement*','CsNumberOfLogicalProcessors','OsArchitecture' |
+    Format-List | Out-String | Write-Output
+# Is one already running? (Set when Hyper-V/WSL2 has the machine.)
+$hv = (Get-CimInstance Win32_ComputerSystem).HypervisorPresent
+Write-Output ("hypervisorpresent: " + $hv)
+Write-Output ("bcd hypervisorlaunchtype: " + ((bcdedit /enum '{current}' | Select-String hypervisorlaunchtype) -join ' '))
+# The features WSL2 depends on — reported, never changed here. A failed query
+# must not read as "feature missing": iteration 14 printed 'absent' for all
+# five, moments before the enable stage reported them Enabled.
+foreach ($f in 'VirtualMachinePlatform','Microsoft-Hyper-V','Microsoft-Hyper-V-Hypervisor','HypervisorPlatform','Microsoft-Windows-Subsystem-Linux') {
+    try {
+        $feat = Get-WindowsOptionalFeature -Online -FeatureName $f -ErrorAction Stop
+        Write-Output ("feature " + $f + ": " + $feat.State)
+    } catch {
+        Write-Output ("feature " + $f + ": QUERY FAILED (" + $_.Exception.Message.Trim() + ")")
+    }
+}
+# HypervisorPresent says Windows sees *a* hypervisor — which is true simply
+# because we run under QEMU. It does not say Windows can host the WSL2 utility
+# VM, and the HyperVRequirement* properties above are x86-only (empty on
+# ARM64). Only booting a WSL2 distro settles it.
+Write-Output ("hypervisor visible to the guest: " + $hv + " (does NOT imply WSL2 can boot here - see the WSL stage)")

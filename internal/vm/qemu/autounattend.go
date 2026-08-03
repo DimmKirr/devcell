@@ -3,6 +3,8 @@ package qemu
 import (
 	"bytes"
 	"fmt"
+	"os"
+	"strings"
 	"text/template"
 
 	"github.com/DimmKirr/devcell/internal/isokit"
@@ -17,32 +19,110 @@ type AutounattendConfig struct {
 	VirtIODrivers []VirtIODriver
 	SSHPubKey     string
 	TimeZone      string
+	// EnableRDP turns on Remote Desktop and disables the Windows firewall so
+	// the forwarded RDP port is reachable. Gate this on Spec.RDPPort > 0 so
+	// cells that never expose RDP do not get it.
+	EnableRDP bool
+	// WinPEAgent ships the WinPE control agent on the answer volume and adds
+	// the windowsPE launcher that starts it. The agent snapshots Setup's
+	// Panther logs to the volume every few seconds and executes commands the
+	// host drops there — the only look inside a failing windowsPE phase.
+	WinPEAgent bool
+	// OpenSSHPayload is the filename of the Win32-OpenSSH release shipped on
+	// the answer volume, empty when none was fetched.
+	//
+	// OpenSSH Server cannot be installed from our media: the capability is
+	// present in the manifest but its payload is not, so Add-WindowsCapability
+	// fails 0x80070002 with the capability stuck `Staged` — even with Windows
+	// Update reachable and permitted (DISM logged LimitAccess:0). The UUP
+	// package carries only OpenSSH-Client; the Server FoD ships on a separate
+	// build-matched ISO we do not have. Shipping the standalone release side-
+	// steps Windows servicing entirely.
+	OpenSSHPayload string
+	// OpenSSHPayloadData is the payload's bytes, written to the answer volume
+	// by BuildAnswerVolume.
+	OpenSSHPayloadData []byte
+	// OpenSSHPayloadSize is the payload's true length. padForFAT cluster-aligns
+	// every file with trailing newlines, which is harmless for text but can
+	// break a zip: readers locate the End-of-Central-Directory record by
+	// scanning back from the end, and unexpected trailing bytes make that
+	// inconsistent. The guest truncates to this length before extracting.
+	OpenSSHPayloadSize int
+	// ImageName selects which image in install.wim to install. The Windows 11
+	// ARM64 media carries three (Home, Home Single Language, Pro); without a
+	// choice Setup stops to ask. Defaults to "Windows 11 Pro".
+	ImageName string
 }
 
 // VirtIODriver describes a driver to install during Windows setup.
+//
+// The driver is installed with pnputil in the specialize pass, not injected
+// in windowsPE: a PnpCustomizationsWinPE DriverPaths entry whose path does
+// not resolve ABORTS Setup (0x80070001 - 0x40030, run 20260729T172019), and
+// WinPE drive letters are unpredictable, so no letter-based path is safe
+// there. specialize runs in the full OS, where letters can be probed
+// harmlessly with `if exist`.
 type VirtIODriver struct {
-	Path        string // e.g. "E:\\viostor\\w11\\ARM64"
+	// INFRelPath is the INF's path relative to the root of whatever volume
+	// carries it (the virtio driver CD), without a drive letter — the letter
+	// is probed at runtime. E.g. `NetKVM\w11\ARM64\netkvm.inf`.
+	INFRelPath  string
 	Description string
+}
+
+// NetKVMDriverPaths returns the virtio-win NetKVM network driver for Windows
+// ARM64.
+//
+// Storage needs no injection — NVMe and USB CD are inbox — but the NIC is
+// virtio-net-pci, for which Windows ARM64 has no inbox driver. Without it the
+// installed guest has no network: no SSH, no winget, no WSL distro download.
+// NetKVM is not boot-critical, so installing it post-apply in specialize is
+// safe.
+func NetKVMDriverPaths() []VirtIODriver {
+	return []VirtIODriver{{
+		INFRelPath:  `NetKVM\w11\ARM64\netkvm.inf`,
+		Description: "Install the VirtIO network driver (NetKVM)",
+	}}
+}
+
+// DefaultSessionUser is used when the host provides no $USER.
+const DefaultSessionUser = "devcell"
+
+// SessionUsername returns the account name to create in the guest: the host's
+// $USER, mirroring devcell's HOST_USER model (Docker's entrypoint and the tart
+// engine derive their session user the same way), so a Windows cell has the
+// same account as every other engine.
+func SessionUsername() string {
+	if u := os.Getenv("USER"); u != "" {
+		return u
+	}
+	return DefaultSessionUser
 }
 
 // DefaultAutounattendConfig returns sensible defaults for a devcell Windows VM.
 func DefaultAutounattendConfig() AutounattendConfig {
 	return AutounattendConfig{
-		Username: "devcell",
-		Password: "devcell",
-		Locale:   "en-US",
-		Hostname: "devcell-win",
-		TimeZone: "UTC",
-		VirtIODrivers: []VirtIODriver{
-			{Path: `E:\viostor\w11\ARM64`, Description: "VirtIO storage"},
-			{Path: `E:\viogpudo\w11\ARM64`, Description: "VirtIO GPU"},
-			{Path: `E:\NetKVM\w11\ARM64`, Description: "VirtIO network"},
-		},
+		Username:  SessionUsername(),
+		Password:  "rdp",
+		Locale:    "en-US",
+		Hostname:  "devcell-win",
+		TimeZone:  "UTC",
+		ImageName: "Windows 11 Pro",
+		// No driver injection: the VM uses NVMe for disk and a USB CD-ROM for
+		// media, both covered by inbox Windows ARM64 drivers (CELL-359).
+		// Callers wanting virtio devices must supply VirtIODrivers explicitly.
 	}
 }
 
 var autounattendFuncs = template.FuncMap{
-	"inc": func(i int) int { return i + 1 },
+	"inc":      func(i int) int { return i + 1 },
+	"addOrder": func(i, base int) int { return i + base },
+	// agentLauncher emits WinPEAgentLauncherCommand with XML escaping; the
+	// command is Go-generated so the template and the shipped script cannot
+	// drift apart.
+	"agentLauncher": func() string {
+		return strings.ReplaceAll(WinPEAgentLauncherCommand(), "&", "&amp;")
+	},
 }
 
 var autounattendTmpl = template.Must(
@@ -58,6 +138,10 @@ func GenerateAutounattendXML(cfg AutounattendConfig) []byte {
 	return buf.Bytes()
 }
 
+// The oobeSystem OOBE block hides every screen Microsoft documents for a fully
+// automated OOBE. The Skip*OOBE settings are deliberately not used — Microsoft
+// warns against them for this purpose:
+// https://learn.microsoft.com/en-us/windows-hardware/customize/desktop/automate-oobe
 const autounattendTmplStr = `<?xml version="1.0" encoding="utf-8"?>
 <unattend xmlns="urn:schemas-microsoft-com:unattend">
 
@@ -80,13 +164,50 @@ const autounattendTmplStr = `<?xml version="1.0" encoding="utf-8"?>
                language="neutral" versionScope="nonSxS"
                xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
 
-      <DriverPaths>
-{{- range $i, $d := .VirtIODrivers}}
-        <PathAndCredentials wcm:action="add" wcm:keyValue="{{inc $i}}">
-          <Path>{{$d.Path}}</Path>
-        </PathAndCredentials>
+
+      <!-- Windows 11 evaluates its hardware requirements during this pass, so
+           the bypass keys must already be in the WinPE registry. Setting them
+           later is too late — Setup stops on "This PC doesn't currently meet
+           Windows 11 system requirements". -->
+      <RunSynchronous>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>1</Order>
+          <Path>reg add HKLM\SYSTEM\Setup\LabConfig /v BypassTPMCheck /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>2</Order>
+          <Path>reg add HKLM\SYSTEM\Setup\LabConfig /v BypassSecureBootCheck /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>3</Order>
+          <Path>reg add HKLM\SYSTEM\Setup\LabConfig /v BypassRAMCheck /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>4</Order>
+          <Path>reg add HKLM\SYSTEM\Setup\LabConfig /v BypassStorageCheck /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>5</Order>
+          <Path>reg add HKLM\SYSTEM\Setup\LabConfig /v BypassCPUCheck /t REG_DWORD /d 1 /f</Path>
+        </RunSynchronousCommand>
+{{- if .WinPEAgent}}
+        <!-- The one vetted non-reg command: probes letters with "if exist"
+             (cannot fail), starts the agent detached, force-exits 0 — so it
+             can never abort Setup the way an unresolved DriverPaths did. -->
+        <RunSynchronousCommand wcm:action="add">
+          <Order>6</Order>
+          <Path>{{agentLauncher}}</Path>
+          <Description>Start the devcell WinPE agent from the answer volume</Description>
+        </RunSynchronousCommand>
 {{- end}}
-      </DriverPaths>
+        <!-- Nothing but "reg add" (and the vetted agent launcher above) may
+             run here. windowsPE has killed three multi-hour runs: misplaced
+             elements fail silently, unresolved DriverPaths abort Setup
+             (0x80070001 - 0x40030), and WinPE no longer ships the WMI
+             command-line tool. Anything else belongs in specialize or
+             FirstLogonCommands, where the full OS runs it and the
+             diagnostics script can report on it. -->
+      </RunSynchronous>
 
       <DiskConfiguration>
         <Disk wcm:action="add">
@@ -132,6 +253,14 @@ const autounattendTmplStr = `<?xml version="1.0" encoding="utf-8"?>
 
       <ImageInstall>
         <OSImage>
+{{- if .ImageName}}
+          <InstallFrom>
+            <MetaData wcm:action="add">
+              <Key>/IMAGE/NAME</Key>
+              <Value>{{.ImageName}}</Value>
+            </MetaData>
+          </InstallFrom>
+{{- end}}
           <InstallTo>
             <DiskID>0</DiskID>
             <PartitionID>3</PartitionID>
@@ -149,22 +278,87 @@ const autounattendTmplStr = `<?xml version="1.0" encoding="utf-8"?>
   </settings>
 
   <settings pass="specialize">
-    <component name="Microsoft-Windows-Shell-Setup"
+    <!-- RunSynchronous belongs to Microsoft-Windows-Deployment in this pass;
+         Microsoft-Windows-Shell-Setup does not define it. -->
+    <component name="Microsoft-Windows-Deployment"
+               processorArchitecture="arm64" publicKeyToken="31bf3856ad364e35"
+               language="neutral" versionScope="nonSxS"
+               xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
+      <!-- Microsoft removed the oobe\bypassnro script in 2025 builds, but the
+           registry value it wrote still disables the "must be online with a
+           Microsoft account" gate. Set here so it exists before OOBE starts. -->
+      <RunSynchronous>
+        <RunSynchronousCommand wcm:action="add">
+          <Order>1</Order>
+          <Path>reg add HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\OOBE /v BypassNRO /t REG_DWORD /d 1 /f</Path>
+          <Description>Allow local account setup without network</Description>
+        </RunSynchronousCommand>
+{{- if .EnableRDP}}
+        <RunSynchronousCommand wcm:action="add">
+          <Order>2</Order>
+          <Path>netsh advfirewall set allprofiles state off</Path>
+          <Description>Disable firewall so forwarded ports are reachable</Description>
+        </RunSynchronousCommand>
+{{- end}}
+{{- range $i, $d := .VirtIODrivers}}
+        <!-- The driver CD's letter is unknowable in advance, so probe for the
+             INF on every plausible letter. "if exist" never fails, and the
+             trailing exit 0 means a broken driver degrades to "no network"
+             (visible in the first-logon diagnostics) instead of aborting the
+             install. -->
+        <RunSynchronousCommand wcm:action="add">
+          <Order>{{addOrder $i 3}}</Order>
+          <Path>cmd /c (for %l in (C D E F G H I J K L) do @if exist %l:\{{$d.INFRelPath}} pnputil /add-driver %l:\{{$d.INFRelPath}} /install) &amp; exit /b 0</Path>
+          <Description>{{$d.Description}}</Description>
+        </RunSynchronousCommand>
+{{- end}}
+      </RunSynchronous>
+      <ExtendOSPartition>
+        <Extend>true</Extend>
+      </ExtendOSPartition>
+    </component>
+{{- if .EnableRDP}}
+
+    <component name="Microsoft-Windows-TerminalServices-LocalSessionManager"
                processorArchitecture="arm64" publicKeyToken="31bf3856ad364e35"
                language="neutral" versionScope="nonSxS">
+      <fDenyTSConnections>false</fDenyTSConnections>
+    </component>
+
+    <component name="Microsoft-Windows-TerminalServices-RDP-WinStationExtensions"
+               processorArchitecture="arm64" publicKeyToken="31bf3856ad364e35"
+               language="neutral" versionScope="nonSxS">
+      <!-- NLA on: clients authenticate during connection setup (CredSSP)
+           and land on the desktop. With 0 the server pre-fills its
+           interactive logon form and waits for a keypress that no
+           automated client sends. -->
+      <UserAuthentication>1</UserAuthentication>
+      <SecurityLayer>2</SecurityLayer>
+    </component>
+{{- end}}
+
+    <component name="Microsoft-Windows-Shell-Setup"
+               processorArchitecture="arm64" publicKeyToken="31bf3856ad364e35"
+               language="neutral" versionScope="nonSxS"
+               xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">
       <ComputerName>{{.Hostname}}</ComputerName>
       <TimeZone>{{.TimeZone}}</TimeZone>
-      <LabConfig>
-        <BypassTPMCheck>true</BypassTPMCheck>
-        <BypassSecureBoot>true</BypassSecureBoot>
-        <BypassSecureBootCheck>true</BypassSecureBootCheck>
-        <BypassRAMCheck>true</BypassRAMCheck>
-        <BypassStorageCheck>true</BypassStorageCheck>
-      </LabConfig>
     </component>
   </settings>
 
   <settings pass="oobeSystem">
+    <!-- Region defaults for the installed OS. The windowsPE component above
+         only covers Setup itself; without this, OOBE can still stop on a
+         region/keyboard page. -->
+    <component name="Microsoft-Windows-International-Core"
+               processorArchitecture="arm64" publicKeyToken="31bf3856ad364e35"
+               language="neutral" versionScope="nonSxS">
+      <InputLocale>{{.Locale}}</InputLocale>
+      <SystemLocale>{{.Locale}}</SystemLocale>
+      <UILanguage>{{.Locale}}</UILanguage>
+      <UserLocale>{{.Locale}}</UserLocale>
+    </component>
+
     <component name="Microsoft-Windows-Shell-Setup"
                processorArchitecture="arm64" publicKeyToken="31bf3856ad364e35"
                language="neutral" versionScope="nonSxS"
@@ -172,10 +366,19 @@ const autounattendTmplStr = `<?xml version="1.0" encoding="utf-8"?>
 
       <OOBE>
         <HideEULAPage>true</HideEULAPage>
+        <HideOEMRegistrationScreen>true</HideOEMRegistrationScreen>
         <HideLocalAccountScreen>true</HideLocalAccountScreen>
         <HideOnlineAccountScreens>true</HideOnlineAccountScreens>
         <HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>
         <ProtectYourPC>3</ProtectYourPC>
+        <!-- Hide* hides individual screens; it does NOT skip OOBE, and the
+             Zero Day Patch step is not one of the hideable screens. Without
+             Skip*OOBE the install completes and then dies in OOBE with
+             "Something went wrong ... OOBEZDP", because ZDP wants a network
+             the guest does not have (virtio-net-pci, and Windows 11 ARM64
+             ships no inbox virtio-net driver). Microsoft advises against these
+             two settings; that advice does not hold here. Keep the Hide*
+             screens above as well — the two mechanisms coexist. -->
         <SkipMachineOOBE>true</SkipMachineOOBE>
         <SkipUserOOBE>true</SkipUserOOBE>
       </OOBE>
@@ -204,37 +407,15 @@ const autounattendTmplStr = `<?xml version="1.0" encoding="utf-8"?>
       </AutoLogon>
 
       <FirstLogonCommands>
+        <!-- One launcher, nothing else: all first-logon work lives in the
+             generated devcell-bootstrap.ps1 on the answer volume, where it is
+             testable, quoting-safe, and reports its own failures to the
+             serial port and a transcript. The launcher finds the volume by
+             content because drive letters are assigned dynamically. -->
         <SynchronousCommand wcm:action="add">
           <Order>1</Order>
-          <CommandLine>powershell -NoProfile -Command "Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0"</CommandLine>
-          <Description>Install OpenSSH Server</Description>
-        </SynchronousCommand>
-        <SynchronousCommand wcm:action="add">
-          <Order>2</Order>
-          <CommandLine>powershell -NoProfile -Command "New-ItemProperty -Path 'HKLM:\SOFTWARE\OpenSSH' -Name DefaultShell -Value 'C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe' -PropertyType String -Force"</CommandLine>
-          <Description>Set PowerShell as default SSH shell</Description>
-        </SynchronousCommand>
-{{- if .SSHPubKey}}
-        <SynchronousCommand wcm:action="add">
-          <Order>3</Order>
-          <CommandLine>powershell -NoProfile -Command "$d = $env:ProgramData + '\ssh'; if (-not (Test-Path $d)) { New-Item -ItemType Directory -Path $d -Force }; Set-Content -Path ($d + '\administrators_authorized_keys') -Value '{{.SSHPubKey}}'; icacls ($d + '\administrators_authorized_keys') /inheritance:r /grant 'SYSTEM:(R)' /grant 'BUILTIN\Administrators:(R)'"</CommandLine>
-          <Description>Inject SSH public key for admin users</Description>
-        </SynchronousCommand>
-        <SynchronousCommand wcm:action="add">
-          <Order>4</Order>
-          <CommandLine>powershell -NoProfile -Command "$d = $env:USERPROFILE + '\.ssh'; if (-not (Test-Path $d)) { New-Item -ItemType Directory -Path $d -Force }; Set-Content -Path ($d + '\authorized_keys') -Value '{{.SSHPubKey}}'; icacls ($d + '\authorized_keys') /inheritance:r /grant ($env:USERNAME + ':(R)')"</CommandLine>
-          <Description>Inject SSH public key for user</Description>
-        </SynchronousCommand>
-{{- end}}
-        <SynchronousCommand wcm:action="add">
-          <Order>{{if .SSHPubKey}}5{{else}}3{{end}}</Order>
-          <CommandLine>powershell -NoProfile -Command "Set-Service -Name sshd -StartupType Automatic; Start-Service sshd"</CommandLine>
-          <Description>Start OpenSSH Server</Description>
-        </SynchronousCommand>
-        <SynchronousCommand wcm:action="add">
-          <Order>{{if .SSHPubKey}}6{{else}}4{{end}}</Order>
-          <CommandLine>powershell -NoProfile -Command "New-NetFirewallRule -Name sshd -DisplayName 'OpenSSH Server (sshd)' -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22"</CommandLine>
-          <Description>Allow SSH through firewall</Description>
+          <CommandLine>powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-Volume | Where-Object DriveLetter | ForEach-Object { $s = ($_.DriveLetter + ':\devcell-bootstrap.ps1'); if (Test-Path $s) { &amp; $s } }"</CommandLine>
+          <Description>Run the devcell bootstrap from the answer volume</Description>
         </SynchronousCommand>
       </FirstLogonCommands>
 
@@ -269,17 +450,94 @@ map -r
 `
 
 // WriteAutounattendImage creates a FAT32 disk image containing autounattend.xml
-// and startup.nsh. UEFI firmware mounts FAT natively (unlike ISO 9660 on USB),
-// so the UEFI shell finds startup.nsh and boots the Windows installer.
+// and startup.nsh from pre-rendered XML. Use BuildAnswerVolume for real
+// install volumes — it also ships the first-logon bootstrap the XML launcher
+// expects; this raw-XML variant exists for validation tests.
 func WriteAutounattendImage(xmlBytes []byte, destPath string) error {
-	return isokit.CreateFATImage(destPath, map[string][]byte{
-		"/autounattend.xml": xmlBytes,
-		"/startup.nsh":      []byte(startupNSH),
-	})
+	return writeAnswerImage(xmlBytes, nil, destPath)
+}
+
+// writeAnswerImage validates the answer file and writes it, the shared base
+// files, and any extra files to a FAT image. Every payload is padded — see
+// padForFAT — and CreateFATImage verifies each round-trip.
+func writeAnswerImage(xmlBytes []byte, extra map[string][]byte, destPath string) error {
+	// A misplaced setting is ignored silently by Windows Setup, so a bad
+	// answer file only shows up hours later as an unexplained install
+	// failure. Refuse to write one.
+	if errs := ValidateUnattend(xmlBytes); len(errs) > 0 {
+		msgs := make([]string, len(errs))
+		for i, err := range errs {
+			msgs[i] = err.Error()
+		}
+		return fmt.Errorf("invalid answer file:\n  %s", strings.Join(msgs, "\n  "))
+	}
+	files := map[string][]byte{
+		"/autounattend.xml":              padForFAT(xmlBytes),
+		"/startup.nsh":                   padForFAT([]byte(startupNSH)),
+		"/" + GuestDiagnosticsScriptName: padForFAT(GenerateGuestDiagnosticsScript()),
+	}
+	for name, data := range extra {
+		files[name] = padForFAT(data)
+	}
+	return isokit.CreateFATImage(destPath, files)
+}
+
+// BuildAnswerVolume renders the answer file and the first-logon bootstrap
+// from one config and writes the complete answer volume. This is the entry
+// point for building a real install volume — the XML's FirstLogonCommands
+// launcher expects the bootstrap script to ship next to it, and taking the
+// config here makes it impossible to build a volume where they disagree.
+func BuildAnswerVolume(cfg AutounattendConfig, destPath string) error {
+	extra := map[string][]byte{
+		"/" + BootstrapScriptName: GenerateBootstrapScript(cfg),
+	}
+	if cfg.OpenSSHPayload != "" && len(cfg.OpenSSHPayloadData) > 0 {
+		// Windows servicing cannot install OpenSSH Server from our media, so
+		// the standalone release travels with the answer file.
+		extra["/"+cfg.OpenSSHPayload] = cfg.OpenSSHPayloadData
+	}
+	if cfg.WinPEAgent {
+		extra["/"+AgentScriptName] = GenerateWinPEAgent(WinPEPayloadConfig{})
+		extra["/"+AgentVolumeMarker] = []byte("devcell agent volume\r\n")
+	}
+	return writeAnswerImage(GenerateAutounattendXML(cfg), extra, destPath)
+}
+
+// fatClusterSize is the cluster geometry of the small images CreateFATImage
+// builds.
+const fatClusterSize = 2048
+
+// padForFAT appends newlines until the payload is an exact multiple of the
+// cluster size. go-diskfs v1.9.4 mis-records the directory-entry size of
+// files ending near a cluster boundary — first measured as the last 63 bytes
+// (6129-byte file), later disproven by a 14270-byte file corrupting 66 bytes
+// short — so no partial-cluster tail is trusted; cluster-aligned files are
+// the one class that has never mis-recorded. Trailing whitespace is legal
+// after an XML root element, in PowerShell, and in UEFI .nsh scripts, so the
+// padding is safe for every file we write. isokit.CreateFATImage still
+// verifies the round-trip, so if even this assumption falls it fails loudly
+// rather than silently shipping a corrupt image.
+func padForFAT(data []byte) []byte {
+	rem := len(data) % fatClusterSize
+	if rem == 0 {
+		return data
+	}
+	padding := fatClusterSize - rem
+	out := make([]byte, 0, len(data)+padding)
+	out = append(out, data...)
+	for i := 0; i < padding; i++ {
+		out = append(out, '\n')
+	}
+	return out
 }
 
 // WriteAutounattendISO creates a small ISO image containing autounattend.xml.
-// Deprecated: use WriteAutounattendImage for UEFI-compatible FAT images.
+//
+// Deprecated: unusable for driving Windows Setup. CreateSimpleISO writes ISO
+// 9660 Level 1 names, so the file lands as "AUTOUNAT.XML" and Setup — which
+// searches for "autounattend.xml" and does not read the Rock Ridge extension
+// that preserves the real name — silently ignores it. Use
+// WriteAutounattendImage; the FAT writer stores a long-filename entry.
 func WriteAutounattendISO(xmlBytes []byte, destPath string) error {
 	return isokit.CreateSimpleISO(destPath, map[string][]byte{
 		"/autounattend.xml": xmlBytes,

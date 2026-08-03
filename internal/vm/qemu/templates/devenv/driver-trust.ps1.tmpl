@@ -1,0 +1,33 @@
+$ErrorActionPreference = 'Stop'
+{{template "find-virtio-cd"}}
+foreach ($drv in 'vioserial\w11\ARM64','viofs\w11\ARM64','Balloon\w11\ARM64','viorng\w11\ARM64') {
+    Get-ChildItem -Path (Join-Path $cd $drv) -Include '*.sys','*.cat' -Recurse | ForEach-Object {
+        # Every certificate the signature carries — leaf, intermediates AND
+        # root. A chain rebuilt without a trusted root omits the root, which
+        # is exactly the certificate that needs trusting.
+        $col = New-Object Security.Cryptography.X509Certificates.X509Certificate2Collection
+        $col.Import($_.FullName)
+        foreach ($c in $col) {
+            foreach ($storeName in 'Root','TrustedPublisher') {
+                $store = New-Object Security.Cryptography.X509Certificates.X509Store($storeName, 'LocalMachine')
+                $store.Open('ReadWrite')
+                $store.Add($c)
+                $store.Close()
+            }
+            Write-Output ('trusted (' + $_.Name + '): ' + $c.Subject)
+        }
+    }
+}
+# Proof, not hope: is the signer really in the MACHINE stores now?
+whoami /groups | Select-String 'Mandatory Label|S-1-5-32-544' | ForEach-Object { Write-Output ('token: ' + $_.Line.Trim()) }
+foreach ($storeName in 'Root','TrustedPublisher') {
+    $store = New-Object Security.Cryptography.X509Certificates.X509Store($storeName, 'LocalMachine')
+    $store.Open('ReadOnly')
+    $store.Certificates | Where-Object { $_.Subject -match 'Red Hat' } | ForEach-Object {
+        Write-Output ('machine ' + $storeName + ' contains: ' + $_.Subject)
+    }
+    $store.Close()
+}
+bcdedit /set testsigning on
+if ($LASTEXITCODE -ne 0) { throw 'bcdedit /set testsigning on failed' }
+Write-Output 'testsigning enabled (live after reboot)'

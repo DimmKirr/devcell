@@ -1,0 +1,16 @@
+$ErrorActionPreference = 'Continue'
+$env:WSL_UTF8 = '1'
+# Every nix invocation goes through a login shell (-lc): NixOS-WSL sets the
+# nix PATH in /etc/profile only, so the bare `wsl -- nix` form answers
+# "command not found" (127) on a perfectly working distro (run 20260802).
+wsl -d {{.Distro}} -- /bin/sh -lc 'nix --version'
+if ($LASTEXITCODE -ne 0) { throw 'nix --version failed inside NixOS-WSL' }
+wsl -d {{.Distro}} -- /bin/sh -lc 'mkdir -p ~/.config/nix && printf "experimental-features = nix-command flakes\n" > ~/.config/nix/nix.conf'
+if ($LASTEXITCODE -ne 0) { throw 'nix.conf write failed' }
+wsl -d {{.Distro}} -- /bin/sh -lc 'sudo nix-channel --update'
+if ($LASTEXITCODE -ne 0) { Write-Output 'nix-channel --update failed (non-fatal, flake path does not need channels)' }
+# Record the environment the distro actually provides: which user the cell
+# runs as, where its home is, and the PATH home-manager will extend (plus
+# the Windows-interop entries that make cmd.exe/powershell.exe callable).
+wsl -d {{.Distro}} -- /bin/sh -lc 'echo "guest USER=$USER"; echo "guest HOME=$HOME"; echo "guest SHELL=$SHELL"; echo "guest PATH=$PATH"'
+wsl -d {{.Distro}} -- /bin/sh -lc 'whoami; nix --version; nixos-version'

@@ -73,6 +73,11 @@ func FetchWindowsISO(ctx context.Context, cfg FetchConfig) (string, error) {
 	}
 	cfg.logf("ESD files in package: %d (total %.1f MB)", len(esdFiles), float64(totalESDSize)/(1024*1024))
 	cfg.logf("ESD file list: %v", esdNames)
+	// Say out loud what is being thrown away. AssembleISO only speaks ESD, so
+	// dropping the rest is consistent — but for the current ARM64 build it is
+	// 45 of 65 files and 4.2 GB, including the cumulative update and the FoD
+	// payloads a later provisioning step will then fail to find (CELL-385).
+	cfg.logf("%s", SummarizeSkipped(pkg.Files, ".esd"))
 
 	installESD := findESD(pkg.Files, cfg.Edition, cfg.Language)
 	if installESD == "" {

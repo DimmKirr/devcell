@@ -1,0 +1,48 @@
+$ErrorActionPreference = 'Continue'
+$env:WSL_UTF8 = '1'
+# The cell's user is the host's user on every engine, so the WSL distro must
+# use it too — NixOS-WSL ships with "nixos", which leaves the project symlink
+# at /home/{{.User}} owned by a user that does not exist inside the distro.
+#
+# Official procedure (nix-community.github.io/NixOS-WSL/how-to/change-username.html):
+# declare the user, `nixos-rebuild boot` (NOT switch — switch misconfigures
+# the account), then cycle the distro so the new generation's user takes hold.
+$current = (& wsl.exe -d {{.Distro}} -- /bin/sh -lc 'echo $USER' 2>&1 | Out-String).Trim()
+Write-Output ('distro user before: ' + $current)
+if ($current -eq '{{.User}}') {
+    Write-Output 'distro already runs as the cell user'
+    return
+}
+
+$cfg = @'
+{ config, lib, pkgs, ... }:
+{
+  wsl.defaultUser = "USERNAME";
+  users.users.USERNAME = {
+    isNormalUser = true;
+    home = "/home/USERNAME";
+    extraGroups = [ "wheel" ];
+  };
+  security.sudo.wheelNeedsPassword = false;
+}
+'@ -replace 'USERNAME', '{{.User}}'
+
+# Write it as an import so NixOS-WSL's own generated configuration stays intact.
+$b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($cfg))
+wsl.exe -d {{.Distro}} -u root -- /bin/sh -lc "echo $b64 | base64 -d > /etc/nixos/devcell-user.nix"
+if ($LASTEXITCODE -ne 0) { throw 'writing /etc/nixos/devcell-user.nix failed' }
+wsl.exe -d {{.Distro}} -u root -- /bin/sh -lc 'grep -q devcell-user.nix /etc/nixos/configuration.nix || sed -i "s|imports = \[|imports = [ ./devcell-user.nix|" /etc/nixos/configuration.nix; grep -n "imports" /etc/nixos/configuration.nix'
+if ($LASTEXITCODE -ne 0) { throw 'wiring devcell-user.nix into configuration.nix failed' }
+
+wsl.exe -d {{.Distro}} -u root -- /bin/sh -lc 'nixos-rebuild boot 2>&1 | tail -20'
+if ($LASTEXITCODE -ne 0) { throw 'nixos-rebuild boot failed' }
+
+# Cycle the distro: terminate, start once as root to apply the generation,
+# terminate again. Only then does the new default user take effect.
+wsl.exe --terminate {{.Distro}}
+wsl.exe -d {{.Distro}} --user root -- /bin/true
+wsl.exe --terminate {{.Distro}}
+
+$after = (& wsl.exe -d {{.Distro}} -- /bin/sh -lc 'echo $USER; echo $HOME' 2>&1 | Out-String).Trim()
+Write-Output ('distro user after: ' + $after)
+if ($after -notmatch '{{.User}}') { throw ('distro user is still not {{.User}}: ' + $after) }

@@ -1,0 +1,2 @@
+{{define "find-virtio-cd"}}$cd = (Get-PSDrive -PSProvider FileSystem | Where-Object { Test-Path (Join-Path $_.Root 'NetKVM') } | Select-Object -First 1).Root
+if (-not $cd) { throw 'virtio-win CD not found on any drive' }{{end}}

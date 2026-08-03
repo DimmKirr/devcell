@@ -1,0 +1,36 @@
+$ErrorActionPreference = 'Stop'
+
+# Set default shell to PowerShell
+New-ItemProperty -Path "HKLM:\SOFTWARE\OpenSSH" -Name DefaultShell -Value "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe" -PropertyType String -Force
+
+# Authorized keys. The bootstrap normally wrote these at first logon and
+# locked the file to (R) for the user — so appending blindly is both redundant
+# and a PermissionDenied (run 20260731T221844). Append only the keys that are
+# missing, taking write access back first and relocking after. The key block
+# can hold several newline-joined keys, hence the per-line handling. icacls
+# principals are built by concatenation: with inline interpolation PowerShell
+# swallows the colon after the variable and hands icacls a bare "(R)".
+$sshDir = "$env:USERPROFILE\.ssh"
+if (-not (Test-Path $sshDir)) { New-Item -ItemType Directory -Path $sshDir -Force }
+$ak = "$sshDir\authorized_keys"
+$keys = @'
+{{.PubKey}}
+'@ -split "\n" | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+$existing = if (Test-Path $ak) { Get-Content $ak } else { @() }
+$missing = @($keys | Where-Object { $existing -notcontains $_ })
+if ($missing.Count -gt 0) {
+    if (Test-Path $ak) { icacls $ak /grant:r ($env:USERNAME + ':(F)') }
+    Add-Content -Path $ak -Value $missing
+}
+icacls $ak /inheritance:r /grant:r ($env:USERNAME + ':(R)')
+
+# Ensure sshd is running
+Set-Service -Name sshd -StartupType Automatic
+Start-Service sshd
+
+# Firewall rule (idempotent)
+if (-not (Get-NetFirewallRule -Name 'sshd' -ErrorAction SilentlyContinue)) {
+    New-NetFirewallRule -Name 'sshd' -DisplayName 'OpenSSH Server' -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22
+}
+
+Write-Output "SSH configured successfully"

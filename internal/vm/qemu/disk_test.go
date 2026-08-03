@@ -3,6 +3,7 @@ package qemu
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -37,4 +38,27 @@ func TestPrepareVarsFile_MissingFirmware(t *testing.T) {
 
 func TestDefaultDiskSizeGB(t *testing.T) {
 	assert.Equal(t, 64, DefaultDiskSizeGB)
+}
+
+// The nix profile in a devcell thin cell lives at /opt/devcell, not under the
+// session user's $HOME — the entrypoint copies dotfiles, not the profile. When
+// that candidate was missing, requireFirmware() found nothing and every QEMU
+// integration test SKIPped instead of running, which reads as "green".
+func TestFirmwareCandidates_IncludesDevcellNixProfile(t *testing.T) {
+	got := firmwareCandidates("/home/bob")
+	assert.Contains(t, got, "/opt/devcell/.local/state/nix/profiles/profile/share/qemu/edk2-aarch64-code.fd")
+}
+
+func TestFirmwareCandidates_StillPrefersSystemPackages(t *testing.T) {
+	got := firmwareCandidates("/home/bob")
+	assert.Equal(t, "/usr/share/AAVMF/AAVMF_CODE.fd", got[0],
+		"distro packages must keep priority over the nix profile")
+	assert.Contains(t, got, "/home/bob/.local/state/nix/profiles/profile/share/qemu/edk2-aarch64-code.fd")
+}
+
+func TestFirmwareCandidates_OmitsHomePathWhenHomeUnknown(t *testing.T) {
+	for _, p := range firmwareCandidates("") {
+		assert.False(t, strings.HasPrefix(p, "/.local"),
+			"an empty $HOME must not produce a rootless /.local/... path, got %q", p)
+	}
 }

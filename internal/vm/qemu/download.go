@@ -134,8 +134,18 @@ func ParseISOFilename(name string) ISOMetadata {
 	return ISOMetadata{Version: m[1], Arch: m[2]}
 }
 
-// CacheDir returns the shared QEMU cache directory.
+// CacheDir returns the QEMU media cache directory.
+//
+// DEVCELL_QEMU_CACHE_DIR points it somewhere shared. Inside a cell $HOME is
+// itself a per-cell directory, so the default renders as
+// ~/.devcell/<cell>/.devcell/cache/qemu and every cell re-downloads the same
+// ~6 GB of immutable media. There is no way to reach the real host home from
+// inside the container, so the location has to be pointable rather than
+// inferred (CELL-386).
 func CacheDir(home string) string {
+	if dir := os.Getenv("DEVCELL_QEMU_CACHE_DIR"); dir != "" {
+		return dir
+	}
 	return filepath.Join(home, ".devcell", "cache", "qemu")
 }
 
@@ -207,11 +217,22 @@ func downloadFile(ctx context.Context, url, dest string, obs Observer) error {
 		return fmt.Errorf("HTTP %d from %s", resp.StatusCode, url)
 	}
 
-	f, err := os.Create(dest)
+	// Download to a sibling temp file and rename into place. Writing to dest
+	// directly writes *through* any hard link sharing that inode — which
+	// truncated the host's real 789MB virtio-win.iso to a 300MB stub when a
+	// test seeded its cache by linking (CELL-386). Rename replaces the
+	// directory entry instead, and has the second benefit that a killed
+	// download leaves no half-file that looks complete.
+	tmp, err := os.CreateTemp(filepath.Dir(dest), filepath.Base(dest)+".part-*")
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	tmpName := tmp.Name()
+	defer func() {
+		tmp.Close()
+		os.Remove(tmpName) // no-op once renamed
+	}()
+	f := tmp
 
 	var written int64
 	buf := make([]byte, 32*1024)
@@ -234,7 +255,10 @@ func downloadFile(ctx context.Context, url, dest string, obs Observer) error {
 			return readErr
 		}
 	}
-	return nil
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, dest)
 }
 
 // ResolveWindowsISO resolves the Windows ARM64 ISO path.
@@ -302,4 +326,46 @@ func RemoveDownloadMarkers(home string) {
 			os.Remove(filepath.Join(cacheDir, e.Name()))
 		}
 	}
+}
+
+// OpenSSHPayloadPath returns the cached Win32-OpenSSH release path.
+func OpenSSHPayloadPath(home string) string {
+	return filepath.Join(CacheDir(home), OpenSSHPayloadName)
+}
+
+// DownloadOpenSSH fetches Microsoft's signed Win32-OpenSSH ARM64 release.
+//
+// The guest cannot install OpenSSH Server through Windows servicing: our media
+// carries the capability manifest but not its payload, so the capability sits
+// Staged and the install fails 0x80070002 — with Windows Update reachable and
+// permitted. The Server FoD ships on a separate build-matched ISO, and the UUP
+// package has no Server package at all. This release needs no servicing.
+func DownloadOpenSSH(ctx context.Context, home string, noCache bool, obs Observer) (string, error) {
+	dest := OpenSSHPayloadPath(home)
+	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
+		return "", fmt.Errorf("creating cache dir: %w", err)
+	}
+
+	if noCache {
+		obs.Logf("--no-cache: removing OpenSSH download marker")
+		os.Remove(dest + ".done")
+	}
+
+	if hasDownloadMarker(dest) {
+		if _, err := os.Stat(dest); err == nil {
+			obs.Logf("OpenSSH payload cache hit: %s", dest)
+			return dest, nil
+		}
+		obs.Logf("OpenSSH .done marker found but file missing — re-downloading")
+		os.Remove(dest + ".done")
+	}
+
+	obs.Logf("downloading OpenSSH from %s", OpenSSHReleaseURL)
+	if err := downloadFile(ctx, OpenSSHReleaseURL, dest, obs); err != nil {
+		return "", fmt.Errorf("downloading OpenSSH release: %w", err)
+	}
+	if err := os.WriteFile(dest+".done", nil, 0644); err != nil {
+		return "", fmt.Errorf("writing download marker: %w", err)
+	}
+	return dest, nil
 }

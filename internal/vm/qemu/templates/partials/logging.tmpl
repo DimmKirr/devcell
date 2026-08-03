@@ -1,0 +1,47 @@
+{{define "logging"}}$ProgressPreference = 'SilentlyContinue'
+# --- devcell guest logging -------------------------------------------------
+# Resolves the FAT log volume ONCE, loudly: a missing volume must be visible
+# in the stage output, never swallowed (run 20260802T125133 produced empty
+# volume logs and said nothing about why).
+$script:DevcellLogVol = (Get-Volume |
+    Where-Object DriveLetter |
+    Where-Object { Test-Path ($_.DriveLetter + ':\{{.Marker}}') } |
+    Select-Object -First 1).DriveLetter
+$script:DevcellLogFile = $null
+if ($script:DevcellLogVol) {
+    $script:DevcellLogFile = ($script:DevcellLogVol + ':\{{.LogName}}')
+    Write-Output ('[log] volume ' + $script:DevcellLogVol + ': -> ' + $script:DevcellLogFile)
+} else {
+    Write-Output '[log] LOG VOLUME NOT FOUND - guest-side logs will not reach the host'
+}
+
+# Write-DevcellLog appends a timestamped line to BOTH the SSH stream and the
+# log volume. Add-Content flushes per call, so a long stage is readable while
+# it runs — Start-Transcript alone buffers and reveals nothing until it ends.
+function Write-DevcellLog {
+    param([Parameter(ValueFromPipeline = $true)][string]$Message)
+    process {
+        $line = ((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ') + ' ' + $Message)
+        Write-Output $line
+        if ($script:DevcellLogFile) {
+            try { Add-Content -Path $script:DevcellLogFile -Value $line -Encoding utf8 -ErrorAction Stop }
+            catch { Write-Output ('[log] volume write failed: ' + $_.Exception.Message) }
+        }
+    }
+}
+
+# Invoke-DevcellStep runs a labelled step, timing it and reporting the
+# outcome — so a 20-minute silent operation becomes a bounded, timed entry.
+function Invoke-DevcellStep {
+    param([string]$Label, [scriptblock]$Body)
+    Write-DevcellLog ("step start: " + $Label)
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    try {
+        & $Body 2>&1 | ForEach-Object { Write-DevcellLog ("  " + $_) }
+        Write-DevcellLog ("step ok: " + $Label + " in " + [int]$sw.Elapsed.TotalSeconds + "s")
+    } catch {
+        Write-DevcellLog ("step FAILED: " + $Label + " after " + [int]$sw.Elapsed.TotalSeconds + "s: " + $_.Exception.Message)
+        throw
+    }
+}
+{{end}}

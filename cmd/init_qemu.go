@@ -1,4 +1,4 @@
-//go:build darwin && arm64
+//go:build darwin || linux
 
 package main
 
@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/DimmKirr/devcell/internal/ux"
 	"github.com/DimmKirr/devcell/internal/vm/qemu"
@@ -18,7 +19,7 @@ import (
 // for a QEMU Windows VM. Mirrors runInitTart: scaffold config, no VM creation.
 // The actual VM creation happens in `cell build --engine=qemu`.
 func runInitQemu(cellName, hostHome, stack string, force bool) error {
-	sshDir := filepath.Join(hostHome, ".devcell", cellName, "qemu")
+	sshDir := qemuKeyDir(hostHome, cellName)
 	templateDir := qemu.TemplateDir(hostHome, stack, nil)
 	instanceDir := qemu.InstanceDir(hostHome, cellName)
 
@@ -139,7 +140,13 @@ type phaseObserver struct {
 	runner *ux.PhaseRunner
 }
 
-func (o *phaseObserver) Logf(format string, args ...any) { o.logf(format, args...) }
+// Stamped: build logs are read alongside guest stage logs, QEMU stderr and
+// the screenshot series, all of which carry ISO-8601 UTC instants. A
+// relative or bare line cannot be correlated with them.
+func (o *phaseObserver) Logf(format string, args ...any) {
+	o.logf("%s "+format,
+		append([]any{time.Now().UTC().Format("2006-01-02T15:04:05Z")}, args...)...)
+}
 func (o *phaseObserver) Progress(_ float64, msg string) {
 	if o.runner != nil {
 		o.runner.UpdateText(msg)

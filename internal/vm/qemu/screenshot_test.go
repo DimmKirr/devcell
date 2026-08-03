@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -167,4 +168,80 @@ func TestConvertPPMtoPNG_LargerImage(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1920, cfg.Width)
 	assert.Equal(t, 1080, cfg.Height)
+}
+
+func TestWhitePixelRatio_AllWhite(t *testing.T) {
+	dir := t.TempDir()
+	ppm := filepath.Join(dir, "white.ppm")
+	writePPMP6(t, ppm, 100, 100, color.RGBA{R: 255, G: 255, B: 255, A: 255})
+
+	ratio, err := WhitePixelRatio(ppm)
+	require.NoError(t, err)
+	assert.InDelta(t, 1.0, ratio, 0.01)
+}
+
+func TestWhitePixelRatio_Purple(t *testing.T) {
+	dir := t.TempDir()
+	ppm := filepath.Join(dir, "purple.ppm")
+	// Windows 11 boot backdrop color, from real screendump
+	writePPMP6(t, ppm, 100, 100, color.RGBA{R: 24, G: 0, B: 82, A: 255})
+
+	ratio, err := WhitePixelRatio(ppm)
+	require.NoError(t, err)
+	assert.InDelta(t, 0.0, ratio, 0.01)
+}
+
+func TestWindowsPurpleRatio_BootBackdrop(t *testing.T) {
+	dir := t.TempDir()
+	ppm := filepath.Join(dir, "purple.ppm")
+	// Exact Windows 11 boot backdrop color observed via QMP screendump
+	writePPMP6(t, ppm, 100, 100, color.RGBA{R: 24, G: 0, B: 82, A: 255})
+
+	ratio, err := WindowsPurpleRatio(ppm)
+	require.NoError(t, err)
+	assert.InDelta(t, 1.0, ratio, 0.01)
+}
+
+func TestWindowsPurpleRatio_White(t *testing.T) {
+	dir := t.TempDir()
+	ppm := filepath.Join(dir, "white.ppm")
+	writePPMP6(t, ppm, 100, 100, color.RGBA{R: 255, G: 255, B: 255, A: 255})
+
+	ratio, err := WindowsPurpleRatio(ppm)
+	require.NoError(t, err)
+	assert.InDelta(t, 0.0, ratio, 0.01)
+}
+
+func TestWindowsPurpleRatio_SetupBlueNotPurple(t *testing.T) {
+	dir := t.TempDir()
+	ppm := filepath.Join(dir, "blue.ppm")
+	// Classic Windows Setup blue must NOT count as backdrop purple
+	writePPMP6(t, ppm, 100, 100, color.RGBA{R: 0, G: 102, B: 204, A: 255})
+
+	ratio, err := WindowsPurpleRatio(ppm)
+	require.NoError(t, err)
+	assert.InDelta(t, 0.0, ratio, 0.01)
+}
+
+// Screenshots are filed by acquisition source and carry two counters: the
+// position within the current screen (how long this screen has persisted)
+// and the position in the whole run (correlate with the stage timeline).
+// Sources never share a directory — a QMP screendump and an RDP session
+// capture show different surfaces and must not be read as one series.
+func TestScreenshotPath_SourceDirAndBothSequences(t *testing.T) {
+	ts := time.Date(2026, 8, 2, 13, 15, 24, 0, time.UTC)
+
+	got := ScreenshotPath("/r", ScreenSourceQMP, ts, "blue", 3, 47, "png")
+	assert.Equal(t, "/r/screenshots/qmp/20260802T131524Z-blue-003-047.png", got)
+
+	got = ScreenshotPath("/r", ScreenSourceRDP, ts, "desktop", 1, 5, "png")
+	assert.Equal(t, "/r/screenshots/rdp/20260802T131524Z-desktop-001-005.png", got)
+}
+
+func TestScreenshotPath_NormalisesToUTC(t *testing.T) {
+	ts := time.Date(2026, 8, 2, 13, 15, 24, 0, time.UTC)
+	inCET := ts.In(time.FixedZone("CET", 3600))
+	assert.Equal(t,
+		ScreenshotPath("/r", ScreenSourceQMP, ts, "none", 1, 1, "png"),
+		ScreenshotPath("/r", ScreenSourceQMP, inCET, "none", 1, 1, "png"))
 }

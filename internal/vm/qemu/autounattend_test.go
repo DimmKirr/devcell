@@ -1,6 +1,7 @@
 package qemu
 
 import (
+	"bytes"
 	"encoding/xml"
 	"os"
 	"path/filepath"
@@ -13,13 +14,14 @@ import (
 )
 
 func TestDefaultAutounattendConfig(t *testing.T) {
+	t.Setenv("USER", "") // exercise the fallback, not the ambient host user
 	cfg := DefaultAutounattendConfig()
-	assert.Equal(t, "devcell", cfg.Username)
-	assert.Equal(t, "devcell", cfg.Password)
+	assert.Equal(t, DefaultSessionUser, cfg.Username)
+	assert.Equal(t, "rdp", cfg.Password)
 	assert.Equal(t, "en-US", cfg.Locale)
 	assert.Equal(t, "devcell-win", cfg.Hostname)
 	assert.Equal(t, "UTC", cfg.TimeZone)
-	assert.Len(t, cfg.VirtIODrivers, 3)
+	assert.Empty(t, cfg.VirtIODrivers, "inbox NVMe/usbstor drivers cover the default devices")
 }
 
 func TestGenerateAutounattendXML_ValidXML(t *testing.T) {
@@ -34,58 +36,53 @@ func TestGenerateAutounattendXML_ValidXML(t *testing.T) {
 }
 
 func TestGenerateAutounattendXML_ContainsLabConfig(t *testing.T) {
+	// LabConfig is a registry key, not an unattend element — the bypasses are
+	// written in the windowsPE pass. See
+	// TestGenerateAutounattendXML_BypassesHardwareChecksInWinPE.
 	out := string(GenerateAutounattendXML(DefaultAutounattendConfig()))
-	assert.Contains(t, out, "<BypassTPMCheck>true</BypassTPMCheck>")
-	assert.Contains(t, out, "<BypassSecureBoot>true</BypassSecureBoot>")
-	assert.Contains(t, out, "<BypassSecureBootCheck>true</BypassSecureBootCheck>")
-	assert.Contains(t, out, "<BypassRAMCheck>true</BypassRAMCheck>")
+	assert.Contains(t, out, `HKLM\SYSTEM\Setup\LabConfig /v BypassTPMCheck`)
+	assert.Contains(t, out, `HKLM\SYSTEM\Setup\LabConfig /v BypassSecureBootCheck`)
+	assert.Contains(t, out, `HKLM\SYSTEM\Setup\LabConfig /v BypassRAMCheck`)
 }
 
 func TestGenerateAutounattendXML_ContainsVirtIODrivers(t *testing.T) {
+	// Drivers are opt-in now; the default config needs none (CELL-359).
+	cfg := DefaultAutounattendConfig()
+	cfg.VirtIODrivers = []VirtIODriver{
+		{INFRelPath: `viostor\w11\ARM64\viostor.inf`, Description: "VirtIO storage"},
+		{INFRelPath: `NetKVM\w11\ARM64\netkvm.inf`, Description: "VirtIO network"},
+	}
+	out := string(GenerateAutounattendXML(cfg))
+	assert.Contains(t, out, `viostor\w11\ARM64\viostor.inf`)
+	assert.Contains(t, out, `NetKVM\w11\ARM64\netkvm.inf`)
+	// One probing command per driver, at distinct Order values.
+	assert.Equal(t, 2, strings.Count(out, "pnputil /add-driver"))
+}
+
+func TestDefaultAutounattendConfig_NoVirtIODriversNeeded(t *testing.T) {
+	// Storage is NVMe + USB CD — both have inbox Windows ARM64 drivers, so
+	// the default install needs no driver injection (CELL-359).
+	assert.Empty(t, DefaultAutounattendConfig().VirtIODrivers)
+}
+
+func TestGenerateAutounattendXML_OmitsDriverPathsWhenNoDrivers(t *testing.T) {
+	// An empty <DriverPaths> element makes Setup search nothing; omit it
+	// entirely rather than emitting a dangling path to a missing drive.
 	out := string(GenerateAutounattendXML(DefaultAutounattendConfig()))
-	assert.Contains(t, out, `E:\viostor\w11\ARM64`)
-	assert.Contains(t, out, `E:\viogpudo\w11\ARM64`)
-	assert.Contains(t, out, `E:\NetKVM\w11\ARM64`)
-	assert.Contains(t, out, `wcm:keyValue="1"`)
-	assert.Contains(t, out, `wcm:keyValue="2"`)
-	assert.Contains(t, out, `wcm:keyValue="3"`)
+	assert.NotContains(t, out, "<DriverPaths>")
 }
 
 func TestGenerateAutounattendXML_ContainsUserCreation(t *testing.T) {
+	t.Setenv("USER", "")
 	out := string(GenerateAutounattendXML(DefaultAutounattendConfig()))
 	assert.Contains(t, out, "<Name>devcell</Name>")
 	assert.Contains(t, out, "<Group>Administrators</Group>")
 	assert.Contains(t, out, "<Username>devcell</Username>")
 }
 
-func TestGenerateAutounattendXML_ContainsSSHSetup(t *testing.T) {
-	out := string(GenerateAutounattendXML(DefaultAutounattendConfig()))
-	assert.Contains(t, out, "OpenSSH.Server")
-	assert.Contains(t, out, "Set-Service -Name sshd")
-	assert.Contains(t, out, "New-NetFirewallRule")
-	assert.Contains(t, out, "LocalPort 22")
-	assert.Contains(t, out, "DefaultShell")
-}
-
-func TestGenerateAutounattendXML_InjectsSSHPubKey(t *testing.T) {
-	cfg := DefaultAutounattendConfig()
-	cfg.SSHPubKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI test@devcell"
-	out := string(GenerateAutounattendXML(cfg))
-
-	assert.Contains(t, out, "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI test@devcell")
-	assert.Contains(t, out, "administrators_authorized_keys")
-	assert.Contains(t, out, `authorized_keys`)
-	assert.Contains(t, out, "Inject SSH public key")
-}
-
-func TestGenerateAutounattendXML_NoKeyWithoutSSHPubKey(t *testing.T) {
-	cfg := DefaultAutounattendConfig()
-	cfg.SSHPubKey = ""
-	out := string(GenerateAutounattendXML(cfg))
-
-	assert.NotContains(t, out, "administrators_authorized_keys")
-	assert.NotContains(t, out, "Inject SSH public key")
-}
+// SSH setup, key injection, power settings and diagnostics all moved out of
+// the XML into the generated bootstrap script — see bootstrap_test.go. The
+// XML keeps a single launcher (TestGenerateAutounattendXML_SingleBootstrapFirstLogonCommand).
 
 func TestGenerateAutounattendXML_CustomConfig(t *testing.T) {
 	cfg := AutounattendConfig{
@@ -95,7 +92,7 @@ func TestGenerateAutounattendXML_CustomConfig(t *testing.T) {
 		Hostname: "custom-host",
 		TimeZone: "CET",
 		VirtIODrivers: []VirtIODriver{
-			{Path: `E:\custom\driver`, Description: "custom driver"},
+			{INFRelPath: `custom\driver\custom.inf`, Description: "custom driver"},
 		},
 	}
 	out := string(GenerateAutounattendXML(cfg))
@@ -104,8 +101,8 @@ func TestGenerateAutounattendXML_CustomConfig(t *testing.T) {
 	assert.Contains(t, out, "<UILanguage>de-DE</UILanguage>")
 	assert.Contains(t, out, "<ComputerName>custom-host</ComputerName>")
 	assert.Contains(t, out, "<TimeZone>CET</TimeZone>")
-	assert.Contains(t, out, `E:\custom\driver`)
-	assert.Equal(t, 1, strings.Count(out, "<PathAndCredentials "))
+	assert.Contains(t, out, `custom\driver\custom.inf`)
+	assert.Equal(t, 1, strings.Count(out, "pnputil /add-driver"))
 }
 
 func TestGenerateAutounattendXML_ARM64Architecture(t *testing.T) {
@@ -145,7 +142,8 @@ func TestWriteAutounattendImage_ContainsXML(t *testing.T) {
 
 	data, err := isokit.ReadFileFromFAT(imgPath, "/autounattend.xml")
 	require.NoError(t, err)
-	assert.Equal(t, xmlBytes, data)
+	// May carry trailing newline padding — see padForFAT.
+	assert.True(t, bytes.HasPrefix(data, xmlBytes))
 }
 
 func TestWriteAutounattendImage_ContainsStartupNSH(t *testing.T) {
@@ -196,4 +194,488 @@ func TestWriteAutounattendISO_ContainsXML(t *testing.T) {
 	data, err := isokit.ReadFileFromISO(isoPath, "/autounattend.xml")
 	require.NoError(t, err)
 	assert.Equal(t, xmlBytes, data)
+}
+
+func TestPadForFAT_KeepsPayloadsOutOfTheCorruptingWindow(t *testing.T) {
+	// go-diskfs mis-records the size of files that end near a 2048-byte
+	// cluster boundary. The window was first measured as the last 63 bytes
+	// (size 6129, 15 short of the boundary), but a 14270-byte answer file —
+	// 66 bytes short — corrupted too (run 20260729T174705). The measured
+	// windows are unreliable, so padForFAT now aligns every payload to a full
+	// cluster, the one size class that has never mis-recorded.
+	// Exercise padForFAT directly: WriteAutounattendImage now also validates
+	// the answer file, which synthetic payloads would fail for unrelated
+	// reasons.
+	for _, size := range []int{1982, 6081, 6100, 6129, 6143, 14270, 14336} {
+		payload := make([]byte, size)
+		for i := range payload {
+			payload[i] = 'x'
+		}
+
+		padded := padForFAT(payload)
+		imgPath := filepath.Join(t.TempDir(), "pad.img")
+		require.NoError(t, isokit.CreateFATImage(imgPath, map[string][]byte{"/f.xml": padded}), "size %d", size)
+
+		got, err := isokit.ReadFileFromFAT(imgPath, "/f.xml")
+		require.NoError(t, err, "size %d", size)
+		assert.True(t, bytes.HasPrefix(got, payload), "size %d: original content must survive", size)
+	}
+}
+
+func TestWriteAutounattendImage_RealConfigRoundTrips(t *testing.T) {
+	// Both the bare default and the fully-loaded install config: the latter is
+	// what the install test ships, and its size is what landed in the
+	// go-diskfs corruption window on run 20260729T174705.
+	full := DefaultAutounattendConfig()
+	full.SSHPubKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPlaceholderPlaceholderPlaceholderPlaceh test@devcell"
+	full.EnableRDP = true
+	full.VirtIODrivers = NetKVMDriverPaths()
+
+	for name, cfg := range map[string]AutounattendConfig{
+		"default": DefaultAutounattendConfig(),
+		"full":    full,
+	} {
+		xml := GenerateAutounattendXML(cfg)
+		imgPath := filepath.Join(t.TempDir(), "autounattend.img")
+		require.NoError(t, WriteAutounattendImage(xml, imgPath), "%s config", name)
+
+		got, err := isokit.ReadFileFromFAT(imgPath, "/autounattend.xml")
+		require.NoError(t, err, "%s config", name)
+		assert.True(t, bytes.HasPrefix(got, xml), "%s config: generated XML must round-trip intact", name)
+	}
+}
+
+// Skip*OOBE is required in THIS environment, contradicting Microsoft's general
+// guidance ("Don't use the SkipMachineOOBE setting to automate OOBE. Instead,
+// use the above unattend settings." —
+// https://learn.microsoft.com/en-us/windows-hardware/customize/desktop/automate-oobe).
+//
+// Empirical basis, ARM64 Windows 11 under QEMU/TCG:
+//   - test/results/20260729T145842 shipped Skip*OOBE and reached the desktop
+//     with the local account created and auto-logged in (install-088.png).
+//   - test/results/20260729T190505 dropped Skip*OOBE for the documented Hide*
+//     screens only, installed fine, then died in OOBE with "Something went
+//     wrong ... OOBEZDP" (install-079.png) and rebooted back to firmware.
+//
+// Hide* hides individual screens; it does not skip OOBE. Zero Day Patch is not
+// one of the hideable screens, and it needs a network the guest does not have:
+// command.go attaches virtio-net-pci and Windows 11 ARM64 ships no inbox
+// virtio-net driver. BypassNRO (specialize) covers the online-account gate,
+// which is a different gate.
+//
+// Revisit if a NIC driver is ever injected (see DriverPaths / NetKVM) — with
+// working networking the documented Hide*-only path may become viable.
+func TestGenerateAutounattendXML_SkipsOOBEEntirely(t *testing.T) {
+	out := string(GenerateAutounattendXML(DefaultAutounattendConfig()))
+	assert.Contains(t, out, "<SkipMachineOOBE>true</SkipMachineOOBE>",
+		"without this OOBE runs and stalls on the Zero Day Patch step (OOBEZDP)")
+	assert.Contains(t, out, "<SkipUserOOBE>true</SkipUserOOBE>")
+}
+
+func TestGenerateAutounattendXML_HidesEveryDocumentedOOBEScreen(t *testing.T) {
+	// The documented set for a fully automated OOBE.
+	out := string(GenerateAutounattendXML(DefaultAutounattendConfig()))
+	for _, setting := range []string{
+		"<HideEULAPage>true</HideEULAPage>",
+		"<HideOEMRegistrationScreen>true</HideOEMRegistrationScreen>",
+		"<HideOnlineAccountScreens>true</HideOnlineAccountScreens>",
+		"<HideWirelessSetupInOOBE>true</HideWirelessSetupInOOBE>",
+		"<HideLocalAccountScreen>true</HideLocalAccountScreen>",
+	} {
+		assert.Contains(t, out, setting)
+	}
+}
+
+func TestGenerateAutounattendXML_SetsOOBERegionDefaults(t *testing.T) {
+	// Region defaults belong in oobeSystem via Microsoft-Windows-International-Core;
+	// the WinPE component only covers Setup itself. Without it OOBE can still
+	// stop on a region/keyboard page.
+	out := string(GenerateAutounattendXML(DefaultAutounattendConfig()))
+	oobeIdx := strings.Index(out, `pass="oobeSystem"`)
+	require.Positive(t, oobeIdx)
+	oobeSection := out[oobeIdx:]
+	assert.Contains(t, oobeSection, `name="Microsoft-Windows-International-Core"`)
+}
+
+func TestGenerateAutounattendXML_BypassesNetworkRequirement(t *testing.T) {
+	// Microsoft removed the oobe\bypassnro script in 2025 builds; the
+	// underlying registry value still short-circuits the "must be online +
+	// Microsoft account" gate, so set it before OOBE runs (specialize pass).
+	out := string(GenerateAutounattendXML(DefaultAutounattendConfig()))
+	assert.Contains(t, out, "BypassNRO")
+	specializeIdx := strings.Index(out, `pass="specialize"`)
+	oobeIdx := strings.Index(out, `pass="oobeSystem"`)
+	bypassIdx := strings.Index(out, "BypassNRO")
+	require.Positive(t, specializeIdx)
+	assert.Greater(t, bypassIdx, specializeIdx, "BypassNRO must be set in specialize")
+	assert.Less(t, bypassIdx, oobeIdx, "BypassNRO must be set before oobeSystem")
+}
+
+func TestGenerateAutounattendXML_SelectsImageToInstall(t *testing.T) {
+	// install.wim on the Windows 11 ARM64 media carries three images (Home,
+	// Home Single Language, Pro). Without an explicit choice Setup stops on
+	// "Select the operating system you want to install" and the unattended
+	// run stalls there.
+	out := string(GenerateAutounattendXML(DefaultAutounattendConfig()))
+	assert.Contains(t, out, "<InstallFrom>")
+	assert.Contains(t, out, "<Key>/IMAGE/NAME</Key>")
+	assert.Contains(t, out, "<Value>Windows 11 Pro</Value>")
+}
+
+func TestGenerateAutounattendXML_ImageNameIsConfigurable(t *testing.T) {
+	cfg := DefaultAutounattendConfig()
+	cfg.ImageName = "Windows 11 Home"
+	out := string(GenerateAutounattendXML(cfg))
+	assert.Contains(t, out, "<Value>Windows 11 Home</Value>")
+	assert.NotContains(t, out, "<Value>Windows 11 Pro</Value>")
+}
+
+func TestWriteAutounattendImage_PreservesLongFilename(t *testing.T) {
+	// Windows Setup looks for a file literally named "autounattend.xml".
+	// The FAT writer stores a Long File Name entry, so the name survives —
+	// unlike CreateSimpleISO, which writes ISO 9660 Level 1 8.3 names
+	// ("AUTOUNAT.XML") that Windows never matches. This is why the answer
+	// file ships as a FAT image and not as an ISO.
+	imgPath := filepath.Join(t.TempDir(), "autounattend.img")
+	require.NoError(t, WriteAutounattendImage([]byte("<unattend/>"), imgPath))
+
+	raw, err := os.ReadFile(imgPath)
+	require.NoError(t, err)
+	// LFN entries hold the name UTF-16LE in non-contiguous fields, so match a
+	// short run that fits inside one field.
+	assert.True(t, bytes.Contains(raw, []byte{'a', 0, 'u', 0, 't', 0, 'o', 0}),
+		"FAT image must carry a long-filename entry for autounattend.xml")
+
+	got, err := isokit.ReadFileFromFAT(imgPath, "/autounattend.xml")
+	require.NoError(t, err)
+	assert.True(t, bytes.HasPrefix(got, []byte("<unattend/>")))
+}
+
+func TestWriteAutounattendISO_TruncatesName(t *testing.T) {
+	// Documents the limitation that rules ISO delivery out: the generated
+	// image cannot present the name Windows searches for.
+	isoPath := filepath.Join(t.TempDir(), "autounattend.iso")
+	require.NoError(t, WriteAutounattendISO([]byte("<unattend/>"), isoPath))
+
+	// go-diskfs reads its own Rock Ridge extension, so its reader resolves the
+	// long name; Windows does not. What Windows sees is the raw ISO 9660
+	// directory record, which carries the truncated name.
+	raw, err := os.ReadFile(isoPath)
+	require.NoError(t, err)
+	assert.True(t, bytes.Contains(raw, []byte("AUTOUNAT.XML")),
+		"ISO 9660 record holds the 8.3 name Windows would look for and miss")
+}
+
+func TestGenerateAutounattendXML_BypassesHardwareChecksInWinPE(t *testing.T) {
+	// Setup evaluates the Windows 11 requirements during the windowsPE pass,
+	// so the LabConfig bypass keys must exist in the WinPE registry before it
+	// runs. Setting them later (specialize) is too late — Setup stops on
+	// "This PC doesn't currently meet Windows 11 system requirements".
+	out := string(GenerateAutounattendXML(DefaultAutounattendConfig()))
+	winPEIdx := strings.Index(out, `pass="windowsPE"`)
+	specializeIdx := strings.Index(out, `pass="specialize"`)
+	require.Positive(t, winPEIdx)
+	require.Positive(t, specializeIdx)
+	winPE := out[winPEIdx:specializeIdx]
+
+	for _, key := range []string{
+		"BypassTPMCheck",
+		"BypassSecureBootCheck",
+		"BypassRAMCheck",
+		"BypassStorageCheck",
+		"BypassCPUCheck",
+	} {
+		assert.Contains(t, winPE, `HKLM\SYSTEM\Setup\LabConfig /v `+key,
+			"%s must be set in the windowsPE pass", key)
+	}
+}
+
+func TestGenerateAutounattendXML_NoUnschemaedLabConfigElement(t *testing.T) {
+	// <LabConfig> is a registry key, not part of the Microsoft-Windows-Shell-Setup
+	// schema. Emitting it as an element risks the answer file being rejected.
+	out := string(GenerateAutounattendXML(DefaultAutounattendConfig()))
+	assert.NotContains(t, out, "<LabConfig>")
+}
+
+func TestSessionUsername_UsesHostUser(t *testing.T) {
+	// devcell's HOST_USER model: the guest account matches the host's $USER,
+	// the same way tart derives its session user. A hardcoded name would give
+	// a Windows VM a different account from every other engine.
+	t.Setenv("USER", "dmitry")
+	assert.Equal(t, "dmitry", SessionUsername())
+}
+
+func TestSessionUsername_FallsBackWhenUnset(t *testing.T) {
+	t.Setenv("USER", "")
+	assert.Equal(t, "devcell", SessionUsername())
+}
+
+func TestDefaultAutounattendConfig_UsesHostUser(t *testing.T) {
+	t.Setenv("USER", "dmitry")
+	cfg := DefaultAutounattendConfig()
+	assert.Equal(t, "dmitry", cfg.Username)
+
+	out := string(GenerateAutounattendXML(cfg))
+	assert.Contains(t, out, "<Name>dmitry</Name>", "local account must be the host user")
+	assert.Contains(t, out, "<Username>dmitry</Username>", "autologon must use the host user")
+}
+
+func TestApplyDefaults_SSHUserFollowsHostUser(t *testing.T) {
+	// The install test connects as Spec.SSHUser; it must match the account
+	// the answer file actually creates.
+	t.Setenv("USER", "dmitry")
+	s := Spec{DiskPath: "/tmp/d.qcow2", FirmwarePath: "/tmp/f.fd"}
+	s.ApplyDefaults()
+	assert.Equal(t, "dmitry", s.SSHUser)
+}
+
+func TestGenerateAutounattendXML_SpecializeRunSynchronousUsesDeploymentComponent(t *testing.T) {
+	// RunSynchronous has exactly two documented parents: Microsoft-Windows-Setup
+	// (windowsPE) and Microsoft-Windows-Deployment (specialize, auditUser).
+	// Microsoft-Windows-Shell-Setup does not define it, so commands placed
+	// there may be silently ignored.
+	// https://learn.microsoft.com/en-us/windows-hardware/customize/desktop/unattend/microsoft-windows-deployment-runsynchronous
+	out := string(GenerateAutounattendXML(DefaultAutounattendConfig()))
+
+	specializeIdx := strings.Index(out, `pass="specialize"`)
+	oobeIdx := strings.Index(out, `pass="oobeSystem"`)
+	require.Positive(t, specializeIdx)
+	require.Positive(t, oobeIdx)
+	specialize := out[specializeIdx:oobeIdx]
+
+	deployIdx := strings.Index(specialize, `name="Microsoft-Windows-Deployment"`)
+	require.Positive(t, deployIdx, "specialize must declare the Deployment component")
+
+	runSyncIdx := strings.Index(specialize, "<RunSynchronous>")
+	require.Positive(t, runSyncIdx)
+	assert.Greater(t, runSyncIdx, deployIdx,
+		"RunSynchronous must sit inside Microsoft-Windows-Deployment, not Shell-Setup")
+
+	shellIdx := strings.Index(specialize, `name="Microsoft-Windows-Shell-Setup"`)
+	if shellIdx >= 0 && shellIdx < runSyncIdx {
+		t.Errorf("RunSynchronous appears after Shell-Setup opens — wrong parent component")
+	}
+}
+
+func TestNetKVMDriverPaths_LetterlessINFPath(t *testing.T) {
+	// Drive letters are probed at runtime with `if exist`, so the config
+	// carries only the INF path relative to whatever volume holds the drivers.
+	// Hardcoded letters are what made run 20260729T172019 fail: a DriverPaths
+	// entry whose path does not resolve aborts Setup (0x80070001 - 0x40030).
+	paths := NetKVMDriverPaths()
+	require.Len(t, paths, 1, "one driver, one entry — the letter fan is gone")
+	assert.Equal(t, `NetKVM\w11\ARM64\netkvm.inf`, paths[0].INFRelPath)
+	assert.NotContains(t, paths[0].INFRelPath, ":", "no drive letter — probed at runtime")
+}
+
+func TestDefaultAutounattendConfig_RDPCredentials(t *testing.T) {
+	t.Setenv("USER", "dmitry")
+	cfg := DefaultAutounattendConfig()
+	assert.Equal(t, "dmitry", cfg.Username, "account is the host user")
+	assert.Equal(t, "rdp", cfg.Password, "password used for RDP/autologon")
+}
+
+func TestGenerateAutounattendXML_EnablesRDP(t *testing.T) {
+	// cell rdp allocates, forwards, records and discovers the port already;
+	// the only missing link is Windows accepting the connection. RDP is off
+	// by default and firewalled, so the forward lands on a closed port.
+	cfg := DefaultAutounattendConfig()
+	cfg.EnableRDP = true
+	out := string(GenerateAutounattendXML(cfg))
+
+	assert.Contains(t, out, "Microsoft-Windows-TerminalServices-LocalSessionManager")
+	assert.Contains(t, out, "<fDenyTSConnections>false</fDenyTSConnections>")
+	// NLA off: fresh non-domain hosts commonly reject clients otherwise.
+	assert.Contains(t, out, "<UserAuthentication>1</UserAuthentication>")
+	assert.Contains(t, out, "advfirewall set allprofiles state off")
+}
+
+func TestGenerateAutounattendXML_NoRDPWhenDisabled(t *testing.T) {
+	out := string(GenerateAutounattendXML(DefaultAutounattendConfig()))
+	assert.NotContains(t, out, "fDenyTSConnections")
+	assert.NotContains(t, out, "advfirewall set allprofiles")
+}
+
+func TestGenerateAutounattendXML_ExtendsOSPartition(t *testing.T) {
+	// The partition is sized at install time; without this a later qcow2
+	// resize leaves the extra space invisible to the guest.
+	out := string(GenerateAutounattendXML(DefaultAutounattendConfig()))
+	assert.Contains(t, out, "<ExtendOSPartition>")
+	assert.Contains(t, out, "<Extend>true</Extend>")
+}
+
+func TestGenerateAutounattendXML_NoWinPEDriverInjection(t *testing.T) {
+	// A PnpCustomizationsWinPE DriverPaths entry whose path does not resolve
+	// ABORTS Setup — proven by run 20260729T172019 (0x80070001 - 0x40030 at
+	// "Searching for disks"), and the docs agree. With WinPE letters being
+	// unpredictable, no letter-based path is safe there. NetKVM is not
+	// boot-critical, so it is installed in specialize instead.
+	cfg := DefaultAutounattendConfig()
+	cfg.VirtIODrivers = NetKVMDriverPaths()
+	out := string(GenerateAutounattendXML(cfg))
+
+	assert.NotContains(t, out, "PnpCustomizationsWinPE")
+	assert.NotContains(t, out, "<DriverPaths>")
+}
+
+func TestGenerateAutounattendXML_InstallsDriversInSpecialize(t *testing.T) {
+	// specialize runs in the full installed OS: drive letters can be probed
+	// harmlessly with `if exist`, and pnputil both stages the driver and
+	// binds it to the already-present virtio NIC.
+	cfg := DefaultAutounattendConfig()
+	cfg.VirtIODrivers = NetKVMDriverPaths()
+	out := string(GenerateAutounattendXML(cfg))
+
+	specialize := out[strings.Index(out, `pass="specialize"`):strings.Index(out, `pass="oobeSystem"`)]
+	assert.Contains(t, specialize, "pnputil /add-driver")
+	assert.Contains(t, specialize, `\NetKVM\w11\ARM64\netkvm.inf`)
+	assert.Contains(t, specialize, "if exist")
+	// A driver failure must degrade to "no network" (diagnosable via the
+	// first-logon report), never abort the install.
+	assert.Contains(t, specialize, "exit /b 0")
+
+	deployIdx := strings.Index(specialize, `name="Microsoft-Windows-Deployment"`)
+	require.Positive(t, deployIdx)
+	assert.Greater(t, strings.Index(specialize, "pnputil"), deployIdx,
+		"driver install must sit in Deployment RunSynchronous")
+}
+
+func TestGenerateAutounattendXML_WinPERunsOnlyRegCommands(t *testing.T) {
+	// Three separate multi-hour runs died on windowsPE content that fails
+	// silently or fatally (misplaced elements, unresolved DriverPaths, wmic
+	// which current WinPE no longer ships). Guard the whole class: windowsPE
+	// RunSynchronous may only write registry keys — plus the one vetted
+	// exception, the agent launcher, which probes with `if exist` and
+	// force-exits 0 so it cannot abort Setup.
+	cfg := DefaultAutounattendConfig()
+	cfg.VirtIODrivers = NetKVMDriverPaths()
+	cfg.EnableRDP = true
+	cfg.WinPEAgent = true
+	out := string(GenerateAutounattendXML(cfg))
+
+	launcher := strings.ReplaceAll(WinPEAgentLauncherCommand(), "&", "&amp;")
+	winPE := out[strings.Index(out, `pass="windowsPE"`):strings.Index(out, `pass="specialize"`)]
+	for _, part := range strings.Split(winPE, "<Path>")[1:] {
+		cmd := part[:strings.Index(part, "</Path>")]
+		assert.Truef(t, strings.HasPrefix(cmd, "reg add ") || cmd == launcher,
+			"windowsPE RunSynchronous must only contain `reg add` commands or the agent launcher, got: %s", cmd)
+	}
+	assert.NotContains(t, strings.ToLower(winPE), "wmic ",
+		"wmic was removed from current WinPE; invoking it aborts Setup")
+}
+
+func TestGenerateBootstrapScript_DisablesPowerSaving(t *testing.T) {
+	// A VM must never sleep, blank its display, or spin down disks: the
+	// display blanking after ~8 idle minutes made every later screendump
+	// read as an all-black frame, indistinguishable from a hung guest.
+	ps1 := string(GenerateBootstrapScript(DefaultAutounattendConfig()))
+
+	for _, cmd := range []string{
+		"powercfg /setactive",  // high performance scheme
+		"monitor-timeout-ac 0", // never blank the display
+		"monitor-timeout-dc 0",
+		"standby-timeout-ac 0", // never sleep
+		"standby-timeout-dc 0",
+		"disk-timeout-ac 0", // never spin down disks
+		"disk-timeout-dc 0",
+		"hibernate-timeout-ac 0",
+		"powercfg /hibernate off",
+	} {
+		assert.Contains(t, ps1, cmd, "missing power setting: %s", cmd)
+	}
+}
+
+func TestGenerateAutounattendXML_NoWinPEDriveInventory(t *testing.T) {
+	// The windowsPE drive-inventory dump depended on wmic, which current
+	// WinPE no longer ships — and a failing windowsPE command aborts Setup.
+	// Drive-letter visibility comes from the first-logon diagnostics script
+	// (Get-Volume) instead, which runs in the full OS.
+	out := string(GenerateAutounattendXML(DefaultAutounattendConfig()))
+
+	assert.NotContains(t, out, "devcell-drives.txt")
+	// "wmic " with the trailing space: the WMIConfig xmlns is fine, invoking
+	// the removed wmic.exe is not.
+	assert.NotContains(t, strings.ToLower(out), "wmic ")
+	assert.Contains(t, out, BootstrapScriptName,
+		"the bootstrap (which runs the diagnostics) remains the visibility channel")
+}
+
+func TestGenerateGuestDiagnosticsScript_CollectsWhatWeCannotSeeFromTheHost(t *testing.T) {
+	// Everything here is invisible from outside the guest: whether the NIC
+	// driver bound, which letter each volume got, whether sshd/RDP/WSL are on.
+	ps1 := string(GenerateGuestDiagnosticsScript())
+
+	for _, probe := range []string{
+		"Get-NetAdapter",     // did NetKVM bind?
+		"Get-Volume",         // which letter did each device get?
+		"fDenyTSConnections", // is RDP actually enabled?
+		"OpenSSH",            // did the capability install?
+		"sshd",               // is the service running?
+		"Subsystem-Linux",    // is WSL enabled?
+		"Get-NetIPAddress",   // did we get an IP?
+	} {
+		assert.Contains(t, ps1, probe, "diagnostics must probe %s", probe)
+	}
+	assert.Contains(t, ps1, "Start-Transcript", "must capture output, including failures")
+}
+
+func TestWriteAutounattendImage_ShipsTheDiagnosticsScript(t *testing.T) {
+	// The script rides on the same writable volume as the answer file, so the
+	// guest can run it and the host can read the log back out.
+	imgPath := filepath.Join(t.TempDir(), "autounattend.img")
+	require.NoError(t, WriteAutounattendImage(GenerateAutounattendXML(DefaultAutounattendConfig()), imgPath))
+
+	got, err := isokit.ReadFileFromFAT(imgPath, "/"+GuestDiagnosticsScriptName)
+	require.NoError(t, err)
+	assert.Contains(t, string(got), "Get-NetAdapter")
+}
+
+func TestBootstrapRunsDiagnosticsLast(t *testing.T) {
+	// The diagnostics report must record the outcome of every bootstrap step,
+	// so its invocation sits after all of them in the generated script.
+	ps1 := string(GenerateBootstrapScript(DefaultAutounattendConfig()))
+
+	diagIdx := strings.Index(ps1, GuestDiagnosticsScriptName)
+	require.Positive(t, diagIdx)
+	for _, step := range []string{"OpenSSH.Server", "Start-Service sshd", "powercfg /hibernate off"} {
+		assert.Greater(t, diagIdx, strings.Index(ps1, step),
+			"diagnostics must run after: %s", step)
+	}
+	// The log path is chosen by the script, which locates its own volume.
+	assert.Contains(t, string(GenerateGuestDiagnosticsScript()), GuestDiagnosticsLogName)
+}
+
+func TestReadGuestDiagnostics_ReturnsTheLog(t *testing.T) {
+	imgPath := filepath.Join(t.TempDir(), "a.img")
+	require.NoError(t, isokit.CreateFATImage(imgPath, map[string][]byte{
+		"/autounattend.xml":           []byte("<unattend/>"),
+		"/" + GuestDiagnosticsLogName: []byte("NIC: Red Hat VirtIO Ethernet Adapter\n"),
+	}))
+
+	log, err := ReadGuestDiagnostics(imgPath)
+	require.NoError(t, err)
+	assert.Contains(t, log, "VirtIO Ethernet")
+}
+
+func TestReadGuestDiagnostics_MissingLogIsAnError(t *testing.T) {
+	imgPath := filepath.Join(t.TempDir(), "a.img")
+	require.NoError(t, isokit.CreateFATImage(imgPath, map[string][]byte{"/autounattend.xml": []byte("<unattend/>")}))
+
+	_, err := ReadGuestDiagnostics(imgPath)
+	assert.Error(t, err, "a missing log means the guest never ran the script — say so")
+}
+
+// RDP must authenticate during connection setup (NLA/CredSSP), not by
+// pre-filling an interactive logon form. With UserAuthentication=0 the
+// server hands FreeRDP's credentials to the Windows logon UI and waits for
+// a human to press Enter — run 20260802T112212 spent an entire run
+// screenshotting that prompt.
+func TestAutounattend_RDPUsesNetworkLevelAuthentication(t *testing.T) {
+	cfg := DefaultAutounattendConfig()
+	cfg.EnableRDP = true
+	xml := string(GenerateAutounattendXML(cfg))
+
+	assert.Contains(t, xml, "<UserAuthentication>1</UserAuthentication>",
+		"NLA on: credentials are validated before the session, so clients land on the desktop")
+	assert.NotContains(t, xml, "<UserAuthentication>0</UserAuthentication>")
 }

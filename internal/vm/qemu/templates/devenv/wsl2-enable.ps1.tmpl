@@ -1,0 +1,9 @@
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+foreach ($f in 'Microsoft-Windows-Subsystem-Linux','VirtualMachinePlatform') {
+    $r = Enable-WindowsOptionalFeature -Online -FeatureName $f -All -NoRestart
+    Write-Output ($f + ' enabled, restart needed: ' + $r.RestartNeeded)
+}
+foreach ($f in 'Microsoft-Windows-Subsystem-Linux','VirtualMachinePlatform') {
+    Write-Output ('state ' + $f + ': ' + (Get-WindowsOptionalFeature -Online -FeatureName $f).State)
+}

@@ -1,0 +1,20 @@
+$ErrorActionPreference = 'Stop'
+$Username = '{{.Username}}'
+$Password = ConvertTo-SecureString '{{.Password}}' -AsPlainText -Force
+
+# Create user if not exists
+if (-not (Get-LocalUser -Name $Username -ErrorAction SilentlyContinue)) {
+    New-LocalUser -Name $Username -Password $Password -PasswordNeverExpires -AccountNeverExpires
+    Add-LocalGroupMember -Group "Administrators" -Member $Username
+    Write-Output "Created user: $Username"
+} else {
+    Write-Output "User $Username already exists"
+}
+
+# Enable auto-logon
+$RegPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
+Set-ItemProperty -Path $RegPath -Name AutoAdminLogon -Value "1"
+Set-ItemProperty -Path $RegPath -Name DefaultUserName -Value $Username
+Set-ItemProperty -Path $RegPath -Name DefaultPassword -Value '{{.Password}}'
+
+Write-Output "Session user setup complete"

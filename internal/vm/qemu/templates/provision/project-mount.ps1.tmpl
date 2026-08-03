@@ -1,0 +1,8 @@
+$ErrorActionPreference = 'Stop'
+$ProjectDir = "$env:USERPROFILE\{{.ProjectName}}"
+if (-not (Test-Path $ProjectDir)) {
+    New-Item -ItemType Directory -Path $ProjectDir -Force
+    Write-Output "Created project directory: $ProjectDir"
+} else {
+    Write-Output "Project directory exists: $ProjectDir"
+}

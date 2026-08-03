@@ -1,0 +1,36 @@
+$ErrorActionPreference = 'Stop'
+
+function Test-Git {
+    if (Get-Command git -ErrorAction SilentlyContinue) { return $true }
+    return (Test-Path "C:\Program Files\Git\cmd\git.exe")
+}
+
+if (Get-Command winget -ErrorAction SilentlyContinue) {
+    Write-Output "Installing dev tools via winget..."
+    winget install --accept-source-agreements --accept-package-agreements Git.Git
+    if ($LASTEXITCODE -ne 0) { Write-Output "winget failed with exit code $LASTEXITCODE" }
+}
+
+if (-not (Test-Git)) {
+    Write-Output "git not present after winget - installing Chocolatey..."
+    Set-ExecutionPolicy Bypass -Scope Process -Force
+    [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+    Invoke-Expression ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+
+    # Only git. OpenSSH comes from the capability or Microsoft's signed
+    # Win32-OpenSSH release (see bootstrap.ps1); the Chocolatey openssh package
+    # is deprecated by its own maintainers -- "no longer tested with all the
+    # original scenarios it was created for ... will not be fixed for edge
+    # cases" -- and would lay a stale copy over the working one.
+    choco install -y git
+}
+
+# Ensure git is on PATH
+$gitPath = "C:\Program Files\Git\cmd"
+if (Test-Path $gitPath) {
+    $env:Path += ";$gitPath"
+    [Environment]::SetEnvironmentVariable("Path", $env:Path, [EnvironmentVariableTarget]::Machine)
+}
+
+if (-not (Test-Git)) { throw "git is not installed after winget and Chocolatey attempts" }
+Write-Output "Dev tools installed"

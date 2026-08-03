@@ -1,0 +1,35 @@
+$ErrorActionPreference = 'Continue'
+$ProgressPreference = 'SilentlyContinue'
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+{{template "wsl-probe"}}
+if ($wslExit -ne 0 -or $status -match 'not installed') { throw ('wsl engine still missing: ' + $status) }
+Write-Output ('wsl version: ' + ((& wsl.exe --version 2>&1 | Out-String) -replace "`r?`n", ' '))
+
+# NixOS-WSL does not support WSL1.
+wsl --set-default-version 2
+if ($LASTEXITCODE -ne 0) { throw 'wsl --set-default-version 2 failed - is VirtualMachinePlatform enabled?' }
+
+$rel = Invoke-RestMethod -Uri 'https://api.github.com/repos/nix-community/NixOS-WSL/releases/latest' -UseBasicParsing
+# One image per architecture. The x86_64 nixos.wsl imports cleanly on ARM64
+# Windows and then every exec inside the distro fails with ENOEXEC (errno 8).
+$assetName = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'nixos.aarch64.wsl' } else { 'nixos.wsl' }
+$asset = $rel.assets | Where-Object { $_.name -eq $assetName } | Select-Object -First 1
+if (-not $asset) { throw ('no ' + $assetName + ' asset in the latest NixOS-WSL release') }
+$img = Join-Path $env:TEMP $asset.name
+if (-not (Test-Path $img)) { Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $img -UseBasicParsing }
+Write-Output ('fetched ' + $asset.name + ' (' + (Get-Item $img).Length + ' bytes) from ' + $rel.tag_name)
+
+$existing = (& wsl.exe --list --quiet 2>&1 | Out-String)
+if ($existing -notmatch '{{.Distro}}') {
+    # The documented path on WSL 2.4.4+; older engines take the import form.
+    wsl --install --from-file $img
+    if ($LASTEXITCODE -ne 0) {
+        Write-Output 'wsl --install --from-file failed - falling back to wsl --import'
+        New-Item -ItemType Directory -Path C:\wsl\{{.Distro}} -Force | Out-Null
+        wsl --import {{.Distro}} C:\wsl\{{.Distro}} $img --version 2
+        if ($LASTEXITCODE -ne 0) { throw 'wsl --import of nixos.wsl failed' }
+    }
+}
+wsl --list --verbose
+wsl -d {{.Distro}} -- nixos-version
+if ($LASTEXITCODE -ne 0) { throw 'nixos-version failed - the distro is not running NixOS' }

@@ -1,0 +1,19 @@
+$ErrorActionPreference = 'Continue'
+$ProgressPreference = 'SilentlyContinue'
+# WSL2's utility VM is created through the Host Compute Service, which needs a
+# running hypervisor. VirtualMachinePlatform alone does not launch one: the
+# import failed with HCS_E_HYPERV_NOT_INSTALLED while Microsoft-Hyper-V was
+# absent and the BCD hypervisorlaunchtype was unset (run 20260801T090038).
+# The machine does expose EL2 (-machine virt,virtualization=true), so asking
+# for the hypervisor explicitly is the next thing to try.
+foreach ($f in 'Microsoft-Hyper-V-Hypervisor','HypervisorPlatform') {
+    try {
+        $r = Enable-WindowsOptionalFeature -Online -FeatureName $f -All -NoRestart -ErrorAction Stop
+        Write-Output ($f + ' enabled, restart needed: ' + $r.RestartNeeded)
+    } catch {
+        Write-Output ($f + ' ENABLE FAILED: ' + $_.Exception.Message.Trim())
+    }
+}
+bcdedit /set hypervisorlaunchtype auto
+Write-Output ('bcdedit hypervisorlaunchtype auto exit: ' + $LASTEXITCODE)
+Write-Output 'hyperv enable requested (state is asserted after the reboot)'

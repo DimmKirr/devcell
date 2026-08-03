@@ -58,22 +58,32 @@ func DiskInfo(path string) (string, error) {
 	return string(out), nil
 }
 
-// FirmwarePath returns the path to the EDK2 UEFI firmware for ARM64.
-func FirmwarePath() string {
-	if runtime.GOOS == "darwin" {
-		return "/opt/homebrew/share/qemu/edk2-aarch64-code.fd"
-	}
-	// Linux: common package paths + nix profile
-	home, _ := os.UserHomeDir()
+// firmwareCandidates lists where the ARM64 EDK2 firmware may live on Linux, in
+// priority order: distro packages first, then nix profiles.
+//
+// /opt/devcell is the devcell thin-cell nix profile — a stable path that is
+// never remounted and, unlike the session user's $HOME, actually holds the
+// profile (the entrypoint copies dotfiles into $HOME, not the store).
+func firmwareCandidates(home string) []string {
 	candidates := []string{
 		"/usr/share/AAVMF/AAVMF_CODE.fd",
 		"/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
 		"/usr/share/edk2/aarch64/QEMU_EFI.fd",
 	}
+	const nixRelative = ".local/state/nix/profiles/profile/share/qemu/edk2-aarch64-code.fd"
 	if home != "" {
-		candidates = append(candidates, filepath.Join(home, ".local/state/nix/profiles/profile/share/qemu/edk2-aarch64-code.fd"))
+		candidates = append(candidates, filepath.Join(home, nixRelative))
 	}
-	for _, p := range candidates {
+	return append(candidates, filepath.Join("/opt/devcell", nixRelative))
+}
+
+// FirmwarePath returns the path to the EDK2 UEFI firmware for ARM64.
+func FirmwarePath() string {
+	if runtime.GOOS == "darwin" {
+		return "/opt/homebrew/share/qemu/edk2-aarch64-code.fd"
+	}
+	home, _ := os.UserHomeDir()
+	for _, p := range firmwareCandidates(home) {
 		if _, err := os.Stat(p); err == nil {
 			return p
 		}
