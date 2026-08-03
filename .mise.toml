@@ -5,8 +5,10 @@
 # git hooks land automatically.
 #
 # Nix-native contributors get the same behavior from the shellHook
-# in flake.nix; `.tool-versions` handles Go pinning for asdf users.
+# in flake.nix.
 [tools]
+# Keep in sync with the `go` directive in go.mod.
+go = "1.26"
 pre-commit = "4.0.1"
 
 [hooks]

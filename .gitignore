@@ -18,6 +18,16 @@ web/src/content/cell/
 bin/
 .playwright-mcp
 test/testdata/**/nixhome
+test/testdata/windows-arm64.*
+# Versioned ssh-able base images (13+ GB each) the dev-env test builds on.
+test/testdata/windows-sshable-*.qcow
+# WSL-ready checkpoints (drivers + share + WSL engine baked in).
+test/testdata/windows-wsl-*.qcow
+# Nix-provisioned checkpoints (WSL checkpoint + home-manager activated).
+test/testdata/windows-nix-*.qcow
+# Stable $HOME for the CLI-driven Windows build test: holds the cached ISOs and
+# the installed template, so a rerun is a boot rather than a 2h47m reinstall.
+test/testdata/cellhome/
 test/results
 .devcell
 .devcell.toml
