@@ -2,18 +2,37 @@ package runner
 
 import (
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 )
 
 const (
-	testCoreImage  = "ghcr.io/test/devcell:v0.0.0-core"
-	testContainer  = "devcell-thin-builder"
-	testVolume     = "devcell-nix-store"
-	testNixhome    = "/home/bob/nixhome"
-	testThinTag    = "devcell-user:base-thin"
-	testStack      = "base"
+	testCoreImage = "ghcr.io/test/devcell:v0.0.0-core"
+	testContainer = "devcell-thin-builder"
+	testVolume    = "devcell-nix-store"
+	testNixhome   = "/home/bob/nixhome"
+	testThinTag   = "devcell-user:base-thin"
+	testStack     = "base"
 )
+
+func containsArg(argv []string, want string) bool {
+	for _, arg := range argv {
+		if arg == want {
+			return true
+		}
+	}
+	return false
+}
+
+func containsConsecutive(argv []string, first, second string) bool {
+	for i := 0; i+1 < len(argv); i++ {
+		if argv[i] == first && argv[i+1] == second {
+			return true
+		}
+	}
+	return false
+}
 
 func TestThinBuildArgv_DockerRunStructure(t *testing.T) {
 	argv := ThinBuildArgv(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, testStack, "aarch64")
@@ -58,17 +77,16 @@ func TestThinBuildArgv_MountsDockerSocket(t *testing.T) {
 	}
 }
 
-func TestThinBuildArgv_MountsNixhome(t *testing.T) {
+func TestThinBuildArgv_StreamsNixhome(t *testing.T) {
 	argv := ThinBuildArgv(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, testStack, "x86_64")
-	found := false
-	for i, a := range argv {
-		if a == "-v" && i+1 < len(argv) && argv[i+1] == "/home/bob/nixhome:/opt/nixhome" {
-			found = true
-			break
-		}
+	if !containsArg(argv, "-i") {
+		t.Errorf("local nixhome transport must attach stdin: %v", argv)
 	}
-	if !found {
-		t.Errorf("expected nixhome mount in argv: %v", argv)
+	if !containsConsecutive(argv, "-e", "DEVCELL_NIXHOME_TRANSPORT=tar-stdin") {
+		t.Errorf("local nixhome transport env missing: %v", argv)
+	}
+	if !strings.Contains(argv[len(argv)-1], "tar -xf - -C /opt/nixhome") {
+		t.Error("builder must extract the streamed overlay at /opt/nixhome")
 	}
 }
 
@@ -578,17 +596,12 @@ func TestThinBuildArgv_RemoteRefUsedInHomeManagerSwitch(t *testing.T) {
 	}
 }
 
-func TestThinBuildArgv_LocalPathStillMounts(t *testing.T) {
+func TestThinBuildArgv_LocalPathDoesNotUseDaemonBind(t *testing.T) {
 	argv := ThinBuildArgv(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, testStack, "x86_64")
-	found := false
 	for i, a := range argv {
 		if a == "-v" && i+1 < len(argv) && argv[i+1] == testNixhome+":/opt/nixhome" {
-			found = true
-			break
+			t.Fatalf("local nixhome must be streamed, not daemon bind-mounted: %v", argv)
 		}
-	}
-	if !found {
-		t.Errorf("local path must still mount -v %s:/opt/nixhome", testNixhome)
 	}
 }
 
@@ -785,7 +798,6 @@ func TestThinBuildArgv_BakesNixLdEnv(t *testing.T) {
 	}
 }
 
-
 // CELL-358: sudo lives in the nix store at 0555 and the store is a shared,
 // immutable volume — it can never carry a setuid bit. The entrypoint installs
 // a setuid copy at /run/wrappers/bin/sudo (NixOS security-wrappers pattern),
@@ -811,5 +823,366 @@ func TestThinBuildArgv_WrapperDirPrecedesProfileOnPath(t *testing.T) {
 	profile := strings.Index(envPath, "/nix/var/nix/profiles/devcell-tools/bin")
 	if profile != -1 && wrapper > profile {
 		t.Error("/run/wrappers/bin must come BEFORE /nix/var/nix/profiles/devcell-tools/bin on PATH — otherwise the non-setuid profile sudo wins and sudo is broken")
+	}
+}
+
+// argvFlagValue returns the value following the named flag in argv, or "" if
+// the flag is absent. Only handles the separate-token form (`--memory 8g`),
+// which is what ThinBuildArgvFull emits.
+func argvFlagValue(argv []string, flag string) string {
+	for i, a := range argv {
+		if a == flag && i+1 < len(argv) {
+			return argv[i+1]
+		}
+	}
+	return ""
+}
+
+// argvEnvValue returns the value of a `-e KEY=VALUE` pair in argv, or "" if the
+// key is absent.
+func argvEnvValue(argv []string, key string) string {
+	for i, a := range argv {
+		if a != "-e" || i+1 >= len(argv) {
+			continue
+		}
+		if v, ok := strings.CutPrefix(argv[i+1], key+"="); ok {
+			return v
+		}
+	}
+	return ""
+}
+
+// withCapacity stubs the build daemon's advertised capacity for one test.
+func withCapacity(t *testing.T, ncpu int, memBytes int64, ok bool) {
+	t.Helper()
+	prev := dockerCapacityFn
+	dockerCapacityFn = func() (DockerCapacity, bool) {
+		return DockerCapacity{NCPU: ncpu, MemBytes: memBytes}, ok
+	}
+	t.Cleanup(func() { dockerCapacityFn = prev })
+}
+
+const (
+	bigHostCPU = 8
+	bigHostMem = 25 << 30 // 25 GiB — a Docker Desktop-sized daemon
+)
+
+func TestThinBuildArgv_CapsMemoryOnRoomyHost(t *testing.T) {
+	withCapacity(t, bigHostCPU, bigHostMem, true)
+	argv := ThinBuildArgv(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, testStack, "aarch64")
+	// ¾ of 25 GiB, rounded down to whole GiB.
+	if got := argvFlagValue(argv, "--memory"); got != "18g" {
+		t.Errorf("thin build must cap memory at ¾ of the daemon so a nix build spike cannot starve sibling cells; --memory = %q, want 18g", got)
+	}
+}
+
+func TestThinBuildArgv_NoCPUQuotaByDefault(t *testing.T) {
+	withCapacity(t, bigHostCPU, bigHostMem, true)
+	argv := ThinBuildArgv(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, testStack, "aarch64")
+	if got := argvFlagValue(argv, "--cpus"); got != "" {
+		t.Errorf("no CFS quota by default — the memory ceiling is the OOM guard; --cpus = %q, want none", got)
+	}
+}
+
+// The default ceiling is ¾ of the daemon's memory, and nix's concurrency is
+// derived so maxJobs × cores saturates the CPU budget.
+func TestThinBuildArgv_DefaultCeilingDerivesConcurrency(t *testing.T) {
+	t.Setenv("DEVCELL_NIX_MAX_JOBS", "")
+	t.Setenv("DEVCELL_NIX_CORES", "")
+
+	t.Run("8 GiB colima — one job with every core", func(t *testing.T) {
+		withCapacity(t, 8, 8<<30, true)
+		argv := ThinBuildArgv(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, testStack, "aarch64")
+		if got := argvFlagValue(argv, "--memory"); got != "6g" {
+			t.Errorf("--memory = %q, want 6g (¾ of 8 GiB)", got)
+		}
+		if got := argvEnvValue(argv, "DEVCELL_NIX_MAX_JOBS"); got != "1" {
+			t.Errorf("6 GiB is under one %d GiB job budget; max-jobs = %q, want 1", memGiBPerBuildJob, got)
+		}
+		if got := argvEnvValue(argv, "DEVCELL_NIX_CORES"); got != "8" {
+			t.Errorf("cores = %q, want 8 (single job gets every CPU)", got)
+		}
+	})
+
+	t.Run("24 GiB docker desktop — two jobs splitting the CPUs", func(t *testing.T) {
+		withCapacity(t, 8, 24<<30, true)
+		argv := ThinBuildArgv(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, testStack, "aarch64")
+		if got := argvFlagValue(argv, "--memory"); got != "18g" {
+			t.Errorf("--memory = %q, want 18g (¾ of 24 GiB)", got)
+		}
+		if got := argvEnvValue(argv, "DEVCELL_NIX_MAX_JOBS"); got != "2" {
+			t.Errorf("an 18 GiB ceiling budgets 2 x %d GiB jobs; max-jobs = %q, want 2", memGiBPerBuildJob, got)
+		}
+		if got := argvEnvValue(argv, "DEVCELL_NIX_CORES"); got != "4" {
+			t.Errorf("cores = %q, want 4 (8 CPUs / 2 jobs)", got)
+		}
+	})
+}
+
+// Regression for the CELL-359 OOM: the builder died with
+//
+//	setup-hook: line 3: 33 Killed  npm ci --ignore-scripts ...
+//
+// which is a cgroup SIGKILL (exit 137), not an npm error. --cpus is a CFS
+// bandwidth quota, NOT a core count: nproc inside a `--cpus 4` container still
+// reports every host CPU, so `max-jobs = auto` kept scheduling one job per host
+// CPU — 8 concurrent derivations sharing an 8 GiB ceiling. A memory ceiling is
+// only safe if nix's job count is derived from it.
+func TestThinBuildArgv_PinsNixMaxJobsToMemoryCeiling(t *testing.T) {
+	t.Setenv("DEVCELL_NIX_MAX_JOBS", "")
+	withCapacity(t, bigHostCPU, bigHostMem, true)
+	argv := ThinBuildArgv(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, testStack, "aarch64")
+
+	mem := argvFlagValue(argv, "--memory")
+	memBytes, ok := parseMemoryLimit(mem)
+	if !ok {
+		t.Fatalf("expected a memory ceiling to be emitted, got %q", mem)
+	}
+	jobs := argvEnvValue(argv, "DEVCELL_NIX_MAX_JOBS")
+	if jobs == "" {
+		t.Fatal("a --memory ceiling without a matching max-jobs lets nix schedule one job per host CPU inside it — this is the OOM that killed npm ci")
+	}
+	n, err := strconv.Atoi(jobs)
+	if err != nil || n < 1 {
+		t.Fatalf("DEVCELL_NIX_MAX_JOBS = %q, want a positive integer", jobs)
+	}
+	if n > bigHostCPU {
+		t.Errorf("max-jobs %d exceeds the daemon's %d CPUs", n, bigHostCPU)
+	}
+	// Every parallel job must have a real memory budget under the ceiling.
+	if perJob := memBytes / int64(n); perJob < memGiBPerBuildJob<<30 {
+		t.Errorf("max-jobs=%d under a %s ceiling budgets %.2f GiB/job; heavy derivations (chromium, texlive, npm ci over the AWS SDK tree) need >= %d GiB",
+			n, mem, float64(perJob)/(1<<30), memGiBPerBuildJob)
+	}
+}
+
+// Bounding max-jobs alone is not enough: nix's `cores` defaults to 0, meaning
+// "use every CPU", so each of N jobs forks make -j<nproc> and nproc ignores the
+// --cpus quota. The CPU budget has to be spread across the jobs.
+func TestThinBuildArgv_PinsNixCoresToCPUCeiling(t *testing.T) {
+	t.Setenv("DEVCELL_NIX_CORES", "")
+	withCapacity(t, bigHostCPU, bigHostMem, true)
+	argv := ThinBuildArgv(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, testStack, "aarch64")
+
+	cores := argvEnvValue(argv, "DEVCELL_NIX_CORES")
+	if cores == "" {
+		t.Fatal("a --cpus ceiling without a matching nix cores lets every job fork make -j<nproc>, which ignores the CFS quota")
+	}
+	c, err := strconv.Atoi(cores)
+	if err != nil || c < 1 {
+		t.Fatalf("DEVCELL_NIX_CORES = %q, want a positive integer", cores)
+	}
+	jobs, err := strconv.Atoi(argvEnvValue(argv, "DEVCELL_NIX_MAX_JOBS"))
+	if err != nil {
+		t.Fatalf("max-jobs not emitted alongside cores: %v", err)
+	}
+	if jobs*c > bigHostCPU {
+		t.Errorf("max-jobs=%d x cores=%d = %d exceeds the daemon's %d CPUs", jobs, c, jobs*c, bigHostCPU)
+	}
+}
+
+// nix.conf must actually read the value we pass, or pinning it does nothing.
+func TestThinBuildArgv_NixConfDeclaresCores(t *testing.T) {
+	argv := ThinBuildArgv(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, testStack, "aarch64")
+	script := argv[len(argv)-1]
+	if !strings.Contains(script, "cores = ${DEVCELL_NIX_CORES:-0}") {
+		t.Error("nix.conf must set cores from DEVCELL_NIX_CORES (default 0 = nix's own default)")
+	}
+}
+
+// No ceiling means the VM total is the budget, which is what `auto` was always
+// sized against. Pinning concurrency there would only slow builds down.
+func TestThinBuildArgv_LeavesNixConcurrencyAutoWhenUncapped(t *testing.T) {
+	t.Setenv("DEVCELL_NIX_MAX_JOBS", "")
+	t.Setenv("DEVCELL_NIX_CORES", "")
+	withCapacity(t, 0, 0, false)
+	argv := ThinBuildArgv(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, testStack, "aarch64")
+	if got := argvEnvValue(argv, "DEVCELL_NIX_MAX_JOBS"); got != "" {
+		t.Errorf("max-jobs must stay auto when no ceiling is in force, got %q", got)
+	}
+	if got := argvEnvValue(argv, "DEVCELL_NIX_CORES"); got != "" {
+		t.Errorf("cores must stay at nix's default when no ceiling is in force, got %q", got)
+	}
+}
+
+func TestThinBuildArgv_ExplicitNixConcurrencyWins(t *testing.T) {
+	t.Setenv("DEVCELL_NIX_MAX_JOBS", "1")
+	t.Setenv("DEVCELL_NIX_CORES", "3")
+	withCapacity(t, bigHostCPU, bigHostMem, true)
+	argv := ThinBuildArgv(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, testStack, "aarch64")
+	if got := argvEnvValue(argv, "DEVCELL_NIX_MAX_JOBS"); got != "1" {
+		t.Errorf("an explicit DEVCELL_NIX_MAX_JOBS must win over the derived value; got %q", got)
+	}
+	if got := argvEnvValue(argv, "DEVCELL_NIX_CORES"); got != "3" {
+		t.Errorf("an explicit DEVCELL_NIX_CORES must win over the derived value; got %q", got)
+	}
+}
+
+// On a daemon with no more RAM than the (explicit) ceiling, the VM itself is
+// the binding constraint: capping protects nothing and would only OOM the
+// build sooner. The CPU quota goes with it — a quota alone cannot prevent an
+// OOM, it only slows the build down, so a lone --cpus is pure loss.
+func TestThinBuildArgv_DropsCeilingsAsAPairOnASmallDaemon(t *testing.T) {
+	t.Setenv("DEVCELL_NIX_MAX_JOBS", "")
+	t.Setenv("DEVCELL_NIX_CORES", "")
+	t.Setenv("DEVCELL_BUILD_MEMORY", "4g")
+	t.Setenv("DEVCELL_BUILD_CPUS", "4")
+	withCapacity(t, bigHostCPU, 4<<30, true) // 4g ceiling >= 4 GiB daemon total
+	argv := ThinBuildArgv(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, testStack, "aarch64")
+	if got := argvFlagValue(argv, "--memory"); got != "" {
+		t.Errorf("a 4 GiB daemon cannot honour a 4g ceiling; --memory must be omitted, got %q", got)
+	}
+	if got := argvFlagValue(argv, "--cpus"); got != "" {
+		t.Errorf("a CPU quota alone cannot prevent an OOM, it only slows the build; --cpus must be omitted too, got %q", got)
+	}
+	if got := argvEnvValue(argv, "DEVCELL_NIX_MAX_JOBS"); got != "" {
+		t.Errorf("with no ceiling in force max-jobs must stay auto, got %q", got)
+	}
+}
+
+func TestNixConcurrency(t *testing.T) {
+	cases := []struct {
+		name      string
+		memBytes  int64
+		cpuQuota  float64
+		ncpu      int
+		wantJobs  int
+		wantCores int
+	}{
+		// A small ceiling buys one job, which gets the whole CPU quota.
+		{"small ceiling", 4 << 30, 4, 8, 1, 4},
+		// A raised ceiling buys more jobs; the CPU budget is split between them.
+		{"raised ceiling", 16 << 30, 4, 8, 2, 2},
+		{"raised ceiling, no cpu quota", 16 << 30, 0, 8, 2, 4},
+		// Memory is the binding constraint even when CPUs are plentiful —
+		// the single job then gets every CPU.
+		{"memory-bound", 6 << 30, 8, 8, 1, 8},
+		// ...and vice versa on a stock 2-CPU Colima VM.
+		{"cpu-bound", 64 << 30, 2, 2, 2, 1},
+		// A ceiling under one job's budget still has to run one job.
+		{"never zero jobs", 1 << 30, 1, 1, 1, 1},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			jobs, cores := nixConcurrency(c.memBytes, c.cpuQuota, c.ncpu)
+			if jobs != c.wantJobs || cores != c.wantCores {
+				t.Errorf("nixConcurrency(%d, %v, %d) = (%d, %d), want (%d, %d)",
+					c.memBytes, c.cpuQuota, c.ncpu, jobs, cores, c.wantJobs, c.wantCores)
+			}
+		})
+	}
+}
+
+// Regression: a stock Colima VM advertises 2 CPUs. Emitting the 4-CPU default
+// there makes dockerd hard-fail with "range of CPUs is from 0.01 to 2.00" and
+// exit 125 — the build never starts. A ceiling at or above what the daemon
+// has constrains nothing, so it must not be emitted at all.
+func TestThinBuildArgv_OmitsCPUCapExceedingDaemonCPUs(t *testing.T) {
+	withCapacity(t, 2, 2<<30, true)
+	argv := ThinBuildArgv(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, testStack, "aarch64")
+	if got := argvFlagValue(argv, "--cpus"); got != "" {
+		t.Errorf("a 2-CPU daemon cannot honour a 4-CPU ceiling; --cpus must be omitted, got %q", got)
+	}
+}
+
+// Same reasoning for memory: an explicit cap at or above the VM's own total
+// cannot protect anything, and a cap below it would only OOM the build sooner.
+func TestThinBuildArgv_OmitsMemoryCapExceedingDaemonMemory(t *testing.T) {
+	t.Setenv("DEVCELL_BUILD_MEMORY", "2g")
+	withCapacity(t, 2, 2<<30, true)
+	argv := ThinBuildArgv(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, testStack, "aarch64")
+	if got := argvFlagValue(argv, "--memory"); got != "" {
+		t.Errorf("a 2 GiB daemon cannot honour a 2g ceiling; --memory must be omitted, got %q", got)
+	}
+}
+
+// An explicit override is still clamped — the point is that dockerd never
+// receives an argument it will reject.
+func TestThinBuildArgv_ClampsExplicitCPUOverride(t *testing.T) {
+	t.Setenv("DEVCELL_BUILD_CPUS", "16")
+	withCapacity(t, bigHostCPU, bigHostMem, true)
+	argv := ThinBuildArgv(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, testStack, "aarch64")
+	if got := argvFlagValue(argv, "--cpus"); got != "" {
+		t.Errorf("16 CPUs on an 8-CPU daemon must be omitted, got %q", got)
+	}
+}
+
+// If the daemon cannot be probed, emit nothing rather than guess — an absent
+// cap is the long-standing behaviour and never fails the run.
+func TestThinBuildArgv_OmitsCapsWhenProbeFails(t *testing.T) {
+	withCapacity(t, 0, 0, false)
+	argv := ThinBuildArgv(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, testStack, "aarch64")
+	if got := argvFlagValue(argv, "--memory"); got != "" {
+		t.Errorf("--memory must be omitted when capacity is unknown, got %q", got)
+	}
+	if got := argvFlagValue(argv, "--cpus"); got != "" {
+		t.Errorf("--cpus must be omitted when capacity is unknown, got %q", got)
+	}
+}
+
+func TestThinBuildArgv_MemoryCapOverridableByEnv(t *testing.T) {
+	t.Setenv("DEVCELL_BUILD_MEMORY", "12g")
+	withCapacity(t, bigHostCPU, bigHostMem, true)
+	argv := ThinBuildArgv(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, testStack, "aarch64")
+	if got := argvFlagValue(argv, "--memory"); got != "12g" {
+		t.Errorf("DEVCELL_BUILD_MEMORY must override the default; --memory = %q, want 12g", got)
+	}
+}
+
+func TestThinBuildArgv_CPUCapOverridableByEnv(t *testing.T) {
+	t.Setenv("DEVCELL_BUILD_CPUS", "2")
+	withCapacity(t, bigHostCPU, bigHostMem, true)
+	argv := ThinBuildArgv(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, testStack, "aarch64")
+	if got := argvFlagValue(argv, "--cpus"); got != "2" {
+		t.Errorf("DEVCELL_BUILD_CPUS must override the default; --cpus = %q, want 2", got)
+	}
+}
+
+func TestThinBuildArgv_ZeroDisablesCaps(t *testing.T) {
+	t.Setenv("DEVCELL_BUILD_MEMORY", "0")
+	t.Setenv("DEVCELL_BUILD_CPUS", "0")
+	withCapacity(t, bigHostCPU, bigHostMem, true)
+	argv := ThinBuildArgv(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, testStack, "aarch64")
+	if got := argvFlagValue(argv, "--memory"); got != "" {
+		t.Errorf("DEVCELL_BUILD_MEMORY=0 must emit no --memory flag, got %q", got)
+	}
+	if got := argvFlagValue(argv, "--cpus"); got != "" {
+		t.Errorf("DEVCELL_BUILD_CPUS=0 must emit no --cpus flag, got %q", got)
+	}
+}
+
+// --memory-swap stays unset so Docker keeps its 2x default: pinning it equal to
+// --memory would *disable* spill on the hosts that do have swap. It must not be
+// mistaken for headroom though — Lima and Docker Desktop VMs both run swapless
+// (SwapTotal: 0), so the ceiling is hard and has to be generous on its own.
+func TestThinBuildArgv_LeavesMemorySwapUnset(t *testing.T) {
+	withCapacity(t, bigHostCPU, bigHostMem, true)
+	argv := ThinBuildArgv(testCoreImage, testContainer, testVolume, testNixhome, testThinTag, testStack, "aarch64")
+	if got := argvFlagValue(argv, "--memory-swap"); got != "" {
+		t.Errorf("--memory-swap must stay unset to keep Docker's 2x default, got %q", got)
+	}
+}
+
+func TestParseMemoryLimit(t *testing.T) {
+	cases := []struct {
+		in   string
+		want int64
+		ok   bool
+	}{
+		{"8g", 8 << 30, true},
+		{"8G", 8 << 30, true},
+		{"8gb", 8 << 30, true},
+		{"512m", 512 << 20, true},
+		{"1024k", 1024 << 10, true},
+		{"2048", 2048, true},
+		{"", 0, false},
+		{"lots", 0, false},
+		{"8x", 0, false},
+	}
+	for _, c := range cases {
+		got, ok := parseMemoryLimit(c.in)
+		if ok != c.ok || got != c.want {
+			t.Errorf("parseMemoryLimit(%q) = (%d, %v), want (%d, %v)", c.in, got, ok, c.want, c.ok)
+		}
 	}
 }
