@@ -73,6 +73,59 @@ vagrant_box = "utm/bookworm"
 
 On first run the CLI scaffolds a `Vagrantfile`, starts the VM, installs Nix single-user, and applies the same home-manager configuration used by Docker images. Subsequent runs detect whether provisioning is needed and skip it if the binary is already present.
 
+## libvirt engine (host VMs from inside a cell)
+
+Inside a Docker cell on a Mac there is no HVF and no `/dev/kvm`, so `--engine=qemu` falls back to TCG software emulation (10–20× slower). The libvirt engine instead drives QEMU **on the macOS host** — with HVF acceleration — through libvirtd, reached from the cell over `qemu+tcp://host.docker.internal/session`.
+
+Scope: libvirt mode boots and connects to an **already-prepped template**. Build the template once with `cell build --engine=qemu` on the macOS host; `cell build --engine=libvirt` intentionally refuses (CELL-379 tracks install-over-libvirt).
+
+One-time host setup (macOS):
+
+```bash
+brew install libvirt
+brew services start libvirt
+```
+
+Enable TCP listen for the session daemon in `libvirtd.conf` (usually `/opt/homebrew/etc/libvirt/libvirtd.conf`):
+
+```
+listen_tcp = 1
+listen_addr = "127.0.0.1"
+auth_tcp = "none"
+```
+
+> **Security note:** `qemu+tcp` with `auth_tcp = "none"` is unauthenticated — anyone who can reach the port can control your VMs. Keep `listen_addr` on loopback/the Docker bridge only. A hardened `qemu+ssh://` transport is planned; until then treat this as a local-development convenience.
+
+Then from any cell:
+
+```bash
+cell shell --engine=libvirt            # boot the template on the host, SSH in
+cell shell --engine=libvirt --dry-run  # print the resolved URI + domain XML
+```
+
+**Auto-default:** inside a Docker cell on a Mac (container + `host.docker.internal` resolves + no usable `/dev/kvm`), `--engine=qemu` automatically upgrades to libvirt remote mode — local qemu could only mean TCG. Pin the in-container path with `--engine=qemu --local`.
+
+**Project files:** the guest's `~\<project>` is synced over the session's SSH channel — pushed before your agent starts (`push`, default), optionally pulled back on exit (`two-way`), or disabled (`off`).
+
+Configuration (`.devcell.toml`):
+
+```toml
+[cell]
+engine = "libvirt"
+libvirt_uri = "qemu+tcp://host.docker.internal/session"  # default; env: DEVCELL_LIBVIRT_URI
+qemu_project_sync = "push"  # push (default) | two-way | off; env: DEVCELL_QEMU_PROJECT_SYNC
+
+# Container→host path rewrites for the domain XML: QEMU on the host must
+# open disks/firmware at HOST paths, not the cell's bind-mount paths.
+[cell.libvirt_path_map]
+"/devcell-155" = "/Users/dmitry/dev/dimmkirr/devcell"
+"/home/dmitry" = "/Users/dmitry"
+```
+
+The host UEFI firmware defaults to brew's `/opt/homebrew/share/qemu/edk2-aarch64-code.fd`; override with `DEVCELL_LIBVIRT_FIRMWARE`.
+
+Verify connectivity with `virsh -c qemu+tcp://host.docker.internal/session list --all` from inside the cell, or just run any libvirt-engine command — the preflight maps each failure (port closed, wrong service, auth enabled) to the fix.
+
 ## MCP servers
 
 Baked into the image and auto-merged into each agent's config at container startup. User-defined servers are preserved. Where applicable, the backing tools ship too: KiCad, Inkscape, and OpenTofu are installed alongside their MCP servers, so the agent can run `tofu plan`, analyze PCBs, or edit SVGs. New servers ship with image updates.
