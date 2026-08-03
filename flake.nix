@@ -101,6 +101,22 @@
       default = cell;
     });
 
+    # Home-manager module: configure the GLOBAL devcell config declaratively.
+    #   imports = [ devcell.homeManagerModules.default ];
+    #   devcell = { enable = true; prompt = "..."; op.documents = [ ... ]; };
+    # Renders ~/.config/devcell/devcell.toml and installs the cell CLI from
+    # this flake (override with devcell.package). Option tree is generated
+    # from internal/cfg.CellConfig by `task hm:generate` — see
+    # nix/home-manager/options.nix.
+    homeManagerModules = rec {
+      devcell = { config, lib, pkgs, ... }: {
+        imports = [ ./nix/home-manager/module.nix ];
+        config.devcell.package =
+          lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.cell;
+      };
+      default = devcell;
+    };
+
     # `nix develop` for local hacking — provides Go 1.26 + tooling.
     # nix-update rewrites `vendorHash` in this file after go.mod/go.sum
     # changes; pre-commit dispatches the hook defined in
