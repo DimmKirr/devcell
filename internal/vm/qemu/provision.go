@@ -20,6 +20,13 @@ func GenerateCreateSessionUserScript(username, password string) string {
 	}{username, password})
 }
 
+// GenerateHardenEmulationScript returns a PowerShell script that disables
+// WerFault and Defender real-time monitoring — the two biggest resource
+// wasters in a TCG-emulated build VM.
+func GenerateHardenEmulationScript() string {
+	return renderTemplate("provision/harden-emulation.ps1.tmpl", nil)
+}
+
 // GenerateDevToolsScript returns a PowerShell script that installs
 // essential dev tools (Git) via winget with a Chocolatey fallback.
 //
@@ -75,6 +82,12 @@ func DefaultProvisionSteps(pubKey, username, password string) []GuestStage {
 			Name:      "Install dev tools",
 			Script:    GenerateDevToolsScript(),
 			Retries:   2,
+		},
+		{
+			Component: "provisioning",
+			Name:      "Harden for emulation",
+			Script:    GenerateHardenEmulationScript(),
+			Retries:   1,
 		},
 	}
 	return withStageLogging(stages)

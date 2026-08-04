@@ -18,7 +18,7 @@ if ($LASTEXITCODE -ne 0) { throw 'repo not readable through the share in WSL' }
 # - the wsl-* flake configs: their user is the distro default (nixos), not
 #   the Docker cell's devcell@/opt/devcell — home-manager refuses to
 #   activate a config whose username does not match the invoking user
-wsl -d {{.Distro}} -- /bin/sh -lc 'set -e; cd /home/{{.User}}/dev/dimmkirr/devcell; ARCH_SUFFIX=$([ "$(uname -m)" = "aarch64" ] && echo "-aarch64" || echo ""); nix --extra-experimental-features nix-command --extra-experimental-features flakes run home-manager/release-26.05 -- switch -b backup --flake ./nixhome#wsl-base$ARCH_SUFFIX 2>&1 | tail -40'
+wsl -d {{.Distro}} -- /bin/sh -lc 'set -e; cd /home/{{.User}}/dev/dimmkirr/devcell; ARCH_SUFFIX=$([ "$(uname -m)" = "aarch64" ] && echo "-aarch64" || echo ""); nix --extra-experimental-features nix-command --extra-experimental-features flakes run home-manager/release-26.05 -- switch -b backup --flake ./nixhome#wsl-base$ARCH_SUFFIX > /tmp/devcell-hm-activate.log 2>&1; rc=$?; tail -40 /tmp/devcell-hm-activate.log; exit $rc'
 if ($LASTEXITCODE -ne 0) { throw 'home-manager activation failed' }
 
 # Installed means the CLI answers with a real version from the activated

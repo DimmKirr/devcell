@@ -183,16 +183,24 @@ func TestGenerateNixVerifyScript_UsesLoginShell(t *testing.T) {
 // a validation run before a checkpoint refresh must use: the narrow span
 // gives the engine, import and user stages no E2E coverage at all.
 func TestWSL2SpanBounds_DefaultsToTheNixReadyFastPath(t *testing.T) {
+	// The end of the span must be the end of the TABLE. Pinning it to a stage
+	// name let the table grow past it: "adopt the host user in the distro"
+	// was appended after activation and silently fell outside every run, so
+	// the E2E could go green while `whoami` still answered "nixos".
+	all := DevEnvStages("dmitry", "devcell", "Z:")
+	final := all[len(all)-1].Name
+
 	first, last := wsl2SpanBounds()
 	assert.Equal(t, "verify nix in NixOS-WSL", first,
 		"the default span must skip stages the nix-ready image already satisfies")
-	assert.Equal(t, "activate nixhome home-manager", last)
+	assert.Equal(t, final, last,
+		"the span must reach the last stage, or new stages never run")
 
 	t.Setenv("DEVCELL_TEST_FULLSPAN", "1")
 	first, last = wsl2SpanBounds()
 	assert.Equal(t, "install WSL engine", first,
 		"the opt-in span must cover the whole production slice")
-	assert.Equal(t, "activate nixhome home-manager", last)
+	assert.Equal(t, final, last)
 }
 
 // Both spans are named by string, so a renamed stage would silently shrink a
@@ -203,16 +211,17 @@ func TestWSL2SpanBounds_BothSpansResolveAgainstDevEnvStages(t *testing.T) {
 
 	first, last := wsl2SpanBounds()
 	fast := stageSpan(t, all, first, last)
-	assert.Len(t, fast, 2, "the fast span is verify-nix then home-manager")
 	assert.Equal(t, "verify nix in NixOS-WSL", fast[0].Name,
 		"the cheap guard that proves the distro survived the checkpoint")
+	assert.Equal(t, all[len(all)-1].Name, fast[len(fast)-1].Name,
+		"both spans end at the table's last stage — see the span-bounds test")
 
 	t.Setenv("DEVCELL_TEST_FULLSPAN", "1")
 	first, last = wsl2SpanBounds()
 	full := stageSpan(t, all, first, last)
 	assert.Greater(t, len(full), len(fast),
 		"the full span must be a superset of the fast one")
-	assert.Equal(t, "activate nixhome home-manager", full[len(full)-1].Name)
+	assert.Equal(t, all[len(all)-1].Name, full[len(full)-1].Name)
 }
 
 // --- E2E: the working secure-boot WSL chain, on production code --------------
@@ -732,7 +741,10 @@ func shouldRefreshCheckpoint() bool {
 // runs. See TestWSL2SpanBounds_DefaultsToTheNixReadyFastPath for why the
 // default starts where it does, and why it can never start later.
 func wsl2SpanBounds() (first, last string) {
-	const target = "activate nixhome home-manager"
+	// Derived from the table, never a literal: a span pinned to a stage name
+	// stops covering the pipeline the moment a stage is appended after it.
+	all := devEnvStages("", "", "")
+	target := all[len(all)-1].Name
 	if os.Getenv("DEVCELL_TEST_FULLSPAN") != "" {
 		return "install WSL engine", target
 	}

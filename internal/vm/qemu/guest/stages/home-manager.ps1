@@ -59,11 +59,17 @@ Invoke-DevcellStep 'activate nixhome via home-manager' {
     #    subcommand specified" (run 20260802T112212). Relying on an ambient
     #    nix.conf failed earlier too (run 20260802T095306).
     #  - the runner is pinned to the home-manager branch matching this NixOS.
+    #  - the output is truncated through a FILE, never a pipe: `... | tail -40`
+    #    makes $? the status of tail, which always succeeds, so a failed
+    #    activation reported "ok" and only surfaced 36s later as
+    #    `home-manager --version` exit 127 (run 20260803T231223). /bin/sh here
+    #    is not guaranteed to support pipefail, so capture rc explicitly.
     $activate = 'set -e; cd ' + $repo + '; ' +
         'ARCH_SUFFIX=$([ "$(uname -m)" = "aarch64" ] && echo "-aarch64" || echo ""); ' +
         'nix --extra-experimental-features nix-command --extra-experimental-features flakes ' +
         'run home-manager/release-26.05 -- switch -b backup ' +
-        '--flake ./nixhome#wsl-base$ARCH_SUFFIX 2>&1 | tail -40'
+        '--flake ./nixhome#wsl-base$ARCH_SUFFIX > /tmp/devcell-hm-activate.log 2>&1; ' +
+        'rc=$?; tail -40 /tmp/devcell-hm-activate.log; exit $rc'
     (& wsl.exe -d $Distro -- /bin/sh -lc $activate 2>&1 | Out-String).Trim()
     Assert-DevcellExitCode -What 'home-manager switch'
 }

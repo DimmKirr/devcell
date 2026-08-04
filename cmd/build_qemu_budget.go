@@ -130,10 +130,11 @@ func dumpGuestLogs(answerImagePath string) {
 // build: how much guest RAM to give it and how long to wait for the guest to
 // answer SSH.
 type qemuBuildResources struct {
-	Accel       string
-	AccelReason string
-	MemoryGB    uint64
-	SSHDeadline time.Duration
+	Accel         string
+	AccelReason   string
+	MemoryGB      uint64
+	SSHDeadline   time.Duration
+	DiskCacheMode string
 }
 
 // Hardware-virtualization budget. A Windows install under HVF/KVM finishes in
@@ -145,12 +146,12 @@ const (
 
 // Software-emulation budget. TCG runs roughly 20x slower: a full install
 // measured 2h42m in this project's own test runs, so a 45-minute deadline
-// expires while Setup is still applying the image. Memory is 6 GB rather than
+// expires while Setup is still applying the image. Memory is 8 GB rather than
 // 4 because QEMU's RSS under TCG runs well past guest RAM (translation buffers
-// plus block cache) — an 8 GB guest met the OOM killer on a shared host, and
-// 4 GB starves the install itself.
+// plus block cache) — 4 GB starves the install, and values above 8 risk the
+// OOM killer on a shared host.
 const (
-	emulatedMemoryGB    = 6
+	emulatedMemoryGB    = 8
 	emulatedSSHDeadline = 5 * time.Hour
 )
 
@@ -171,6 +172,7 @@ func qemuBuildBudget(cellCfg cfg.CellSection) qemuBuildResources {
 	if strings.HasPrefix(accel, "tcg") {
 		r.MemoryGB = emulatedMemoryGB
 		r.SSHDeadline = emulatedSSHDeadline
+		r.DiskCacheMode = "unsafe"
 		// Windows has a large code footprint and TCG re-translates whatever
 		// falls out of its 32MB default cache — pure waste on a multi-hour
 		// install. Measured worth it only under emulation.

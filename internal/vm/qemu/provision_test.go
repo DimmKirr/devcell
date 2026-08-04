@@ -92,10 +92,19 @@ func TestGenerateEnvSetupScript(t *testing.T) {
 
 func TestDefaultProvisionSteps(t *testing.T) {
 	steps := DefaultProvisionSteps("ssh-ed25519 AAAA...", "devcell", "devcell")
-	assert.Len(t, steps, 3)
+	assert.Len(t, steps, 4)
 	assert.Equal(t, "Configure SSH", steps[0].Name)
 	assert.Equal(t, "Create session user", steps[1].Name)
 	assert.Equal(t, "Install dev tools", steps[2].Name)
+	assert.Equal(t, "Harden for emulation", steps[3].Name)
 	assert.Contains(t, steps[0].Script, "ssh-ed25519 AAAA...")
 	assert.Greater(t, steps[0].Retries, 0)
+}
+
+func TestGenerateHardenEmulationScript(t *testing.T) {
+	script := GenerateHardenEmulationScript()
+	assert.Contains(t, script, "WerFault")
+	assert.Contains(t, script, "WerSvc")
+	assert.Contains(t, script, "DisableRealtimeMonitoring")
+	assert.Contains(t, script, "DisableAntiSpyware")
 }

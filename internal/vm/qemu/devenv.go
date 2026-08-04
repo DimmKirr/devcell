@@ -256,5 +256,17 @@ func devEnvStages(user, tag, drive string) []GuestStage {
 				"Mount":  "/mnt/" + driveLetterLower(drive),
 				"Distro": NixOSWSLDistro,
 			}, Retries: 1},
+		// Last, and only last: home-manager's activation guard compares $USER
+		// against the name baked in from nixhome's wslUser ("nixos"), so the
+		// cell cannot wear the host's identity until activation is done. This
+		// is the WSL analogue of the Docker entrypoint's session-user step —
+		// without it `whoami` inside the distro answers "nixos".
+		{Component: "home-manager", Name: "adopt the host user in the distro",
+			ScriptFile: "wsl-adopt-user.ps1",
+			Args: map[string]string{
+				"User":   user,
+				"From":   WSLDistroUser,
+				"Distro": NixOSWSLDistro,
+			}, Retries: 1},
 	}
 }

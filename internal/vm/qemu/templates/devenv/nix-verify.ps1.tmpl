@@ -9,6 +9,50 @@ wsl -d {{.Distro}} -- /bin/sh -lc 'mkdir -p ~/.config/nix && printf "experimenta
 if ($LASTEXITCODE -ne 0) { throw 'nix.conf write failed' }
 wsl -d {{.Distro}} -- /bin/sh -lc 'sudo nix-channel --update'
 if ($LASTEXITCODE -ne 0) { Write-Output 'nix-channel --update failed (non-fatal, flake path does not need channels)' }
+# NixOS is a MULTI-user store: nix-daemon mediates every write. WSL
+# hardcodes /usr/bin/systemctl (microsoft/WSL#13236) — NixOS puts it at
+# /run/current-system/sw/bin/systemctl, so systemd user sessions fail and
+# socket-activated services like nix-daemon may never start. We poll with
+# the actual store write as the gate, and fall back to manually starting
+# nix-daemon when systemd socket activation is broken.
+# The daemon must be started AND tested in the SAME wsl.exe call: WSL
+# kills background processes when the last session disconnects.
+$deadline = (Get-Date).AddMinutes(10)
+$storeOk = $false
+$attempt = 0
+$daemonStarted = $false
+do {
+    $attempt++
+    wsl -d {{.Distro}} -- /bin/sh -lc 'timeout 30 nix-store --add /etc/hostname' 2>$null
+    if ($LASTEXITCODE -eq 0) { $storeOk = $true; break }
+    Write-Output "nix-store --add attempt $attempt failed, retrying in 20s..."
+    if ($attempt -ge 3 -and -not $daemonStarted) {
+        Write-Output "nix-daemon not running — starting manually (WSL#13236 workaround)"
+        $script = @"
+#!/bin/sh
+set -u
+S=/nix/var/nix/daemon-socket/socket
+rm -f "`$S"
+/run/current-system/sw/bin/nix-daemon &
+i=0; while [ `$i -lt 60 ]; do test -S "`$S" && break; sleep 1; i=`$((`$i+1)); done
+test -S "`$S" && echo SOCKET_OK || { echo SOCKET_FAIL; exit 1; }
+sleep 5
+su - nixos -c 'timeout 30 nix-store --add /etc/hostname 2>&1'
+echo "STORE_EXIT=`$?"
+"@
+        $b64 = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes($script))
+        $combo = (& wsl.exe -d {{.Distro}} -u root -- /bin/sh -c "echo $b64 | base64 -d | sh" 2>&1 | Out-String).Trim()
+        Write-Output "manual daemon result: $combo"
+        $daemonStarted = $true
+        if ($combo -match 'STORE_EXIT=0' -and $combo -match '/nix/store/') { $storeOk = $true; break }
+    }
+    Start-Sleep -Seconds 20
+} while ((Get-Date) -lt $deadline)
+if (-not $storeOk) {
+    wsl -d {{.Distro}} -- /bin/sh -lc 'ps -p 1 -o comm= 2>/dev/null; systemctl is-system-running 2>&1 || true; test -S /nix/var/nix/daemon-socket/socket && echo "socket: present" || echo "socket: MISSING"'
+    throw 'the nix store is not writable by the cell user - nix-daemon is not reachable; home-manager activation would fail on /nix/var/nix/db/big-lock'
+}
+Write-Output "nix store writable after $attempt attempts"
 # Record the environment the distro actually provides: which user the cell
 # runs as, where its home is, and the PATH home-manager will extend (plus
 # the Windows-interop entries that make cmd.exe/powershell.exe callable).

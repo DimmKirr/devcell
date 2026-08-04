@@ -101,6 +101,32 @@ func assertNotContains(t *testing.T, haystack, needle, msg string) {
 	}
 }
 
+// TCG needs 8 GB: QEMU's RSS under TCG runs well past guest RAM (translation
+// buffers + block cache), and 4 GB starved the install. Values above 8 risked
+// the OOM killer on shared hosts, so 8 is the sweet spot.
+func TestTCGBudget_Allocates8GB(t *testing.T) {
+	src, err := os.ReadFile("build_qemu_budget.go")
+	if err != nil {
+		t.Fatalf("reading build_qemu_budget.go: %v", err)
+	}
+	if !regexp.MustCompile(`emulatedMemoryGB\s*=\s*8\b`).Match(src) {
+		t.Error("emulatedMemoryGB must be 8 — TCG needs the headroom for translation buffers")
+	}
+}
+
+// TCG builds must use cache=unsafe to eliminate sync flushes that are pure
+// waste under software emulation (no data-integrity benefit in a build VM
+// that gets discarded on failure).
+func TestQEMUBuildSpec_SetsDiskCacheModeForTCG(t *testing.T) {
+	src, err := os.ReadFile("build_qemu.go")
+	if err != nil {
+		t.Fatalf("reading build_qemu.go: %v", err)
+	}
+	if !regexp.MustCompile(`DiskCacheMode:`).Match(src) {
+		t.Error("cell build must set Spec.DiskCacheMode so TCG builds use cache=unsafe")
+	}
+}
+
 // The machine features Windows' hypervisor needs must be set by the CLI, not
 // only by the dev-env test: `cell build --engine=qemu` is what users run, and
 // a guest built without them cannot start WSL2 no matter what the test proves.

@@ -1,0 +1,49 @@
+$ErrorActionPreference = 'Continue'
+
+# --- Disable Windows Error Reporting (WerFault.exe) ---
+# Under TCG emulation, hundreds of WerFault instances spawn (~5.7 MB each),
+# wasting ~3 GB of guest RAM on crash reports nobody will read in a build VM.
+$werKey = 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting'
+Set-ItemProperty -Path $werKey -Name 'Disabled' -Value 1 -Type DWord -Force
+Set-ItemProperty -Path $werKey -Name 'DontShowUI' -Value 1 -Type DWord -Force
+Stop-Service -Name WerSvc -Force -ErrorAction SilentlyContinue
+Set-Service  -Name WerSvc -StartupType Disabled -ErrorAction SilentlyContinue
+Get-Process WerFault -ErrorAction SilentlyContinue | Stop-Process -Force
+Write-Output 'WerFault disabled'
+
+# --- Disable Defender real-time monitoring ---
+# MsMpEng.exe is the single biggest CPU consumer under TCG (1,286 CPU-seconds
+# observed) and uses ~414 MB RAM scanning files that will never leave the VM.
+# Set-MpPreference is blocked by Tamper Protection, so we use the GPO registry
+# key which takes effect on next service restart.
+$defenderKey = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender\Real-Time Protection'
+if (-not (Test-Path $defenderKey)) { New-Item -Path $defenderKey -Force | Out-Null }
+Set-ItemProperty -Path $defenderKey -Name 'DisableRealtimeMonitoring' -Value 1 -Type DWord -Force
+Set-ItemProperty -Path $defenderKey -Name 'DisableBehaviorMonitoring' -Value 1 -Type DWord -Force
+Set-ItemProperty -Path $defenderKey -Name 'DisableOnAccessProtection' -Value 1 -Type DWord -Force
+Set-ItemProperty -Path $defenderKey -Name 'DisableScanOnRealtimeEnable' -Value 1 -Type DWord -Force
+
+$defenderParent = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows Defender'
+Set-ItemProperty -Path $defenderParent -Name 'DisableAntiSpyware' -Value 1 -Type DWord -Force
+
+Stop-Service -Name WinDefend -Force -ErrorAction SilentlyContinue
+Set-Service  -Name WinDefend -StartupType Disabled -ErrorAction SilentlyContinue
+Write-Output 'Defender real-time monitoring disabled via GPO registry'
+
+# --- Disable Windows Update (TiWorker.exe / wuauserv) ---
+# TiWorker (Trusted Installer) burns ~574 CPU-seconds and ~144 MB under TCG
+# downloading and indexing updates the ephemeral VM will never apply.
+Stop-Service -Name wuauserv -Force -ErrorAction SilentlyContinue
+Set-Service  -Name wuauserv -StartupType Disabled -ErrorAction SilentlyContinue
+Stop-Service -Name TrustedInstaller -Force -ErrorAction SilentlyContinue
+Set-Service  -Name TrustedInstaller -StartupType Disabled -ErrorAction SilentlyContinue
+Stop-Service -Name UsoSvc -Force -ErrorAction SilentlyContinue
+Set-Service  -Name UsoSvc -StartupType Disabled -ErrorAction SilentlyContinue
+Write-Output 'Windows Update disabled'
+
+# --- Disable Windows Search (SearchHost.exe / WSearch) ---
+# SearchHost indexes the filesystem in the background (~141 MB, ~170 CPU-seconds).
+# No one searches a build VM.
+Stop-Service -Name WSearch -Force -ErrorAction SilentlyContinue
+Set-Service  -Name WSearch -StartupType Disabled -ErrorAction SilentlyContinue
+Write-Output 'Windows Search disabled'

@@ -18,7 +18,7 @@ Invoke-DevcellStep 'write .wslconfig for an emulated host' {
     # partitionable GPU here; its hot-add was the last HCS operation before
     # wslservice died with E_UNEXPECTED.
     $cfg = @(
-        '[wsl2]', 'processors=2', 'memory=2GB',
+        '[wsl2]', 'processors=4', 'memory=4GB',
         'kernelBootTimeout=3600000', 'distributionStartTimeout=3600000',
         'gpuSupport=false', 'guiApplications=false'
     ) -join "`n"

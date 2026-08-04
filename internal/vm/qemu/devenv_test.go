@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -165,6 +166,10 @@ func TestGenerateWSLEngineInstallScript_ConfiguresWslForEmulatedHosts(t *testing
 		"vGPU hot-add is the last HCS operation before wslservice died with E_UNEXPECTED")
 	assert.Contains(t, s, "guiApplications=false",
 		"WSLg has no display to serve in a headless cell and drags vGPU back in")
+	assert.Contains(t, s, "processors=4",
+		"TCG ARM64 degrades above 4 vCPUs (Linaro benchmarks) — 4 is the sweet spot")
+	assert.Contains(t, s, "memory=4GB",
+		"WSL needs enough RAM for the NixOS utility VM under double emulation")
 }
 
 // The distro is NixOS-WSL's own image, imported as WSL2 per the project's
@@ -266,6 +271,51 @@ func TestDevEnvStages_WSLStagesAddressTheDistroUserNotTheWindowsUser(t *testing.
 		"the Windows user has no home inside the distro")
 }
 
+// The cell must finally run as the HOST user, like every other engine.
+//
+// Docker gets there by building the profile for a fixed user (`devcell`) and
+// remapping in the entrypoint; WSL builds for `nixos` and never remaps, so
+// `whoami` inside the distro answers "nixos" (run 20260803T231223). The fix is
+// the WSL analogue of that entrypoint step, and its ORDER is load-bearing:
+//
+//   - home-manager's activation guard is `checkUsername <baked-in name>`,
+//     compared against $USER at activation time only. nixhome pins
+//     wslUser.username = "nixos", so activation MUST run as nixos.
+//   - activation is a one-time build step. Afterwards the result is store
+//     paths plus symlinks in /home/nixos, and the guard never runs again —
+//     so the host user can be introduced safely after it.
+//
+// Renaming before activation is what produced
+// `Error: USER is set to "dmitry" but we expect "nixos"`.
+func TestDevEnvStages_HostUserBecomesTheDistroUserAfterActivation(t *testing.T) {
+	const windowsUser = "dmitry"
+	stages := DevEnvStages(windowsUser, "devcell", "Z:")
+
+	idx := func(name string) int {
+		for i, st := range stages {
+			if st.Name == name {
+				return i
+			}
+		}
+		return -1
+	}
+
+	activate := idx("activate nixhome home-manager")
+	require.GreaterOrEqual(t, activate, 0, "activation stage not found")
+
+	adopt := idx("adopt the host user in the distro")
+	require.GreaterOrEqual(t, adopt, 0,
+		"no stage makes the host user the distro's user — `whoami` stays %q",
+		WSLDistroUser)
+
+	assert.Greater(t, adopt, activate,
+		"the host user must be adopted AFTER activation; before it, "+
+			"home-manager's checkUsername guard rejects the config")
+
+	assert.Equal(t, windowsUser, stages[adopt].Args["User"],
+		"the stage adopts the HOST user, not the build-time distro user")
+}
+
 // NixOS ships nix; the old curl|sh single-user install has no place here.
 // This stage only proves the toolchain the image already carries.
 func TestGenerateNixVerifyScript_UsesTheDistrosOwnNix(t *testing.T) {
@@ -301,6 +351,68 @@ func TestGenerateHomeManagerScript_ActivatesNixhomeViaShare(t *testing.T) {
 	assert.Contains(t, s, "home-manager")
 	assert.Contains(t, s, "$LASTEXITCODE",
 		"native wsl calls fail via exit code, not exceptions")
+}
+
+// A failing activation must fail the stage.
+//
+// Run 20260803T231223 lost 9 minutes to this: the activation command ended in
+// `| tail -40`, and in a shell pipeline $? is the LAST command's status. tail
+// always succeeds, so nix's
+//
+//	error: opening lock file "/nix/var/nix/db/big-lock": Permission denied
+//
+// exited non-zero into a pipe that reported success. Assert-DevcellExitCode
+// saw 0 and the step logged "ok in 36s". `set -e` does not catch it either —
+// the pipeline as a whole succeeded. Only the NEXT step (home-manager
+// --version, exit 127) revealed that nothing had been activated.
+// "verify nix" must verify what the next stage needs.
+//
+// Run 20260803T231223: the verify stage passed on `nix --version` and the
+// activation then died with
+//
+//	error: opening lock file "/nix/var/nix/db/big-lock": Permission denied
+//	This command may have been run as non-root in a single-user Nix
+//	installation, or the Nix daemon may have crashed.
+//
+// NixOS is a MULTI-user store: nix-daemon mediates every write, and nothing
+// in the pipeline configures or checks it. `nix --version` answers fine on a
+// store the invoking user cannot write, so the verify stage certified a
+// distro that could not build — 13 minutes before the stage that needed it.
+func TestGenerateNixVerifyScript_ProvesTheStoreIsWritableNotJustThatNixAnswers(t *testing.T) {
+	s := GenerateNixVerifyScript()
+
+	assert.Contains(t, s, "nix --version", "sanity: this is the verify script")
+
+	assert.True(t,
+		strings.Contains(s, "nix-daemon") || strings.Contains(s, "systemctl"),
+		"the stage must record whether nix-daemon is reachable — without it a "+
+			"non-root build fails on /nix/var/nix/db/big-lock, and `nix --version` "+
+			"cannot tell you that")
+
+	assert.True(t,
+		strings.Contains(s, "nix build") || strings.Contains(s, "nix-build") ||
+			strings.Contains(s, "nix-store --add") || strings.Contains(s, "nix store add"),
+		"verification must exercise a real store WRITE as the invoking user; "+
+			"otherwise the next stage is the first thing to discover the store "+
+			"is read-only to it")
+}
+
+func TestGenerateHomeManagerScript_PipeCannotSwallowAFailedActivation(t *testing.T) {
+	s := GenerateHomeManagerScript("dmitry", "Z:")
+
+	require.Contains(t, s, "home-manager", "sanity: this is the activation script")
+
+	// Truncating output is fine; losing the status is not. Either drop the
+	// pipe or make the shell propagate the left-hand status. Matches a real
+	// pipe-into-command, not the `||` in the arch-suffix expression.
+	pipedSwitch := regexp.MustCompile(`switch[^\n]*[^|]\|[^|]\s*\w`)
+	if loc := pipedSwitch.FindString(s); loc != "" {
+		assert.True(t,
+			strings.Contains(s, "pipefail") || strings.Contains(s, "PIPESTATUS"),
+			"the activation pipes its output (%q) without pipefail/PIPESTATUS — "+
+				"$? becomes the pipe's last command and a failed "+
+				"`home-manager switch` reports success", loc)
+	}
 }
 
 // The activation must follow the official standalone-flake path
@@ -653,6 +765,7 @@ func (h *vmHandle) stop() {
 
 func startVM(t *testing.T, spec Spec) *vmHandle {
 	t.Helper()
+	exclusiveQEMU(t)
 	argv := BuildRunCommand(spec)
 	t.Logf("booting: %s", strings.Join(argv, " "))
 	cmd := exec.Command(argv[0], argv[1:]...)
@@ -994,6 +1107,26 @@ func TestDefaultProvisionSteps_AreAGuestStageTableWithLogging(t *testing.T) {
 		assert.Contains(t, st.Script, "Start-Transcript",
 			"step %q must transcript like every other guest stage", st.Name)
 	}
+}
+
+// A build VM under TCG wastes ~3 GB on WerFault instances and Defender scans
+// that serve no purpose in a disposable build environment. The provisioning
+// pipeline must include a hardening step that disables both.
+func TestDefaultProvisionSteps_IncludesEmulationHardening(t *testing.T) {
+	steps := DefaultProvisionSteps("ssh-ed25519 AAAA...", "devcell", "devcell")
+
+	var found bool
+	for _, st := range steps {
+		if st.Name == "Harden for emulation" {
+			found = true
+			assert.Contains(t, st.Script, "WerFault",
+				"hardening step must disable WerFault")
+			assert.Contains(t, st.Script, "DisableRealtimeMonitoring",
+				"hardening step must disable Defender real-time monitoring")
+			break
+		}
+	}
+	assert.True(t, found, "DefaultProvisionSteps must include a 'Harden for emulation' stage")
 }
 
 // A checkpoint may only follow a stage whose success was verified. The engine

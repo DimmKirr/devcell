@@ -80,6 +80,36 @@ func TestNixOSImportStage_ChecksRegistryBeforeNetwork(t *testing.T) {
 	assert.Contains(t, s, "nixos.aarch64.wsl", "ARM64 guests need the aarch64 image")
 }
 
+// The nix-daemon helper is a shell script that nix-verify invokes inside WSL
+// when systemd socket activation is broken (WSL#13236). It must ship on the
+// control volume so the stage can reference it by path instead of encoding it
+// inline (which was the bug class that broke every quoting attempt).
+func TestGuestPayload_CarriesNixDaemonHelper(t *testing.T) {
+	payload, err := GuestPayload()
+	require.NoError(t, err)
+
+	const key = "/devcell/helpers/start-nix-daemon.sh"
+	assert.Contains(t, payload, key,
+		"the nix-daemon helper must ship on the control volume")
+	sh := string(payload[key])
+	assert.Contains(t, sh, "nix-daemon", "the helper starts the daemon")
+	assert.Contains(t, sh, "SOCKET_OK", "the helper reports socket readiness")
+	assert.Contains(t, sh, "STORE_EXIT", "the helper reports the store-write result")
+	assert.Contains(t, sh, "TARGET_USER", "the helper accepts the WSL user as an argument")
+}
+
+// nix-verify references the helper by its control volume path, not inline.
+func TestNixVerifyStage_UsesControlVolumeHelper(t *testing.T) {
+	src, err := GuestFile("stages/nix-verify.ps1")
+	require.NoError(t, err)
+	s := string(src)
+
+	assert.Contains(t, s, "start-nix-daemon.sh",
+		"the daemon fallback must reference the shipped helper, not inline the script")
+	assert.Contains(t, s, "helpers",
+		"the helper lives in the helpers/ directory on the control volume")
+}
+
 // Stages that declare a reboot must be able to withdraw it: on a resumed
 // run the work is usually already done, and a TCG reboot costs ~8 minutes.
 func TestRebootingStages_CanReportNoChange(t *testing.T) {

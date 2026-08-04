@@ -270,8 +270,9 @@ func runBuildQemu(cellName, hostHome, baseDir, stack string, force, noCache, dry
 		// than EL2: a GICv3 with ITS and a secure world. Set here so
 		// `cell build --engine=qemu` produces the same machine the dev-env
 		// pipeline is validated against.
-		NestedVirt:   true,
-		MemoryGB:     budget.MemoryGB,
+		NestedVirt:    true,
+		MemoryGB:      budget.MemoryGB,
+		DiskCacheMode: budget.DiskCacheMode,
 		DiskPath:     templateDisk,
 		FirmwarePath: firmwarePath,
 		VarsPath:     varsPath,
