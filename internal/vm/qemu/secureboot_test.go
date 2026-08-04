@@ -141,6 +141,7 @@ func TestWindowsInstall_SecureBoot(t *testing.T) {
 	require.Contains(t, strings.Join(argv, " "), "secure=on",
 		"the probe is meaningless without the flag under test")
 
+	exclusiveQEMU(t)
 	cmd := exec.Command(argv[0], argv[1:]...)
 	require.NoError(t, cmd.Start())
 	done := make(chan error, 1)
@@ -301,6 +302,7 @@ func TestSecureBoot_FirmwareMatrix(t *testing.T) {
 					"-drive", "if=pflash,format=raw,file="+vars)
 			}
 
+			exclusiveQEMU(t)
 			cmd := exec.Command(argv[0], argv[1:]...)
 			var stderr strings.Builder
 			cmd.Stderr = &stderr

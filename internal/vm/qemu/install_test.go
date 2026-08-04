@@ -152,6 +152,7 @@ func TestWindowsUnattendedInstall_TCG(t *testing.T) {
 	t.Logf("ssh:        port %d, key %s", sshPort, sshKeyPath)
 	t.Logf("QEMU command: %v", argv)
 
+	exclusiveQEMU(t)
 	cmd := exec.Command(argv[0], argv[1:]...)
 	qemuLog := qemuOutput(t, resultsDir, argv)
 	cmd.Stdout = qemuLog

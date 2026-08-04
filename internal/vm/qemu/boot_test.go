@@ -313,6 +313,7 @@ func bootWindowsISO(t *testing.T, cfg windowsBootConfig) {
 		t.Name(), spec.Accel, machineType(spec), cpuType(spec), qemuBin, isoPath, strings.Join(argv, " ")))
 
 	t.Logf("QEMU command: %v", argv)
+	exclusiveQEMU(t)
 	cmd := exec.Command(argv[0], argv[1:]...)
 	qemuLog := qemuOutput(t, resultsDir, argv)
 	cmd.Stdout = qemuLog

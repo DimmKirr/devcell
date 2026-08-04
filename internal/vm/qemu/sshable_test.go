@@ -173,6 +173,7 @@ func TestSSHAble_ConnectAndListFiles(t *testing.T) {
 	spec.ApplyDefaults()
 	require.NoError(t, spec.Validate())
 
+	exclusiveQEMU(t)
 	argv := BuildRunCommand(spec)
 	t.Logf("booting template: %s", strings.Join(argv, " "))
 	vmCmd := exec.Command(argv[0], argv[1:]...)
