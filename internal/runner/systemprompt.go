@@ -88,8 +88,15 @@ type ResolveOpts struct {
 	// EnvFile / EnvInline are the DEVCELL_SYSTEM_PROMPT_FILE /
 	// DEVCELL_SYSTEM_PROMPT env vars. Read by every surface.
 	EnvFile, EnvInline string
-	// CellCfg supplies [llm].system_prompt and [llm].system_prompt_file
-	// from the merged devcell.toml.
+	// AppendFlagFile / AppendFlagInline are the --append-system-prompt-file /
+	// --append-system-prompt CLI flags. Currently exposed only on `cell serve`.
+	AppendFlagFile, AppendFlagInline string
+	// AppendEnvFile / AppendEnvInline are DEVCELL_APPEND_SYSTEM_PROMPT_FILE /
+	// DEVCELL_APPEND_SYSTEM_PROMPT. Read by every surface.
+	AppendEnvFile, AppendEnvInline string
+	// CellCfg supplies [llm].system_prompt / system_prompt_file (base) and
+	// [llm].append_system_prompt / append_system_prompt_file (overlay) from
+	// the merged devcell.toml.
 	CellCfg cfg.CellConfig
 	// CfgBaseDir is the project base dir, used to resolve a relative
 	// `[llm].system_prompt_file` path. Empty disables relative resolution
@@ -103,8 +110,8 @@ type ResolveOpts struct {
 // to guess which one won. Across tiers, higher silently shadows lower:
 // the layering is the whole point of having multiple sources.
 //
-// Returns ("", nil) when no source is set — callers concatenate this
-// with ContainerContext via AssembleSystemPrompt.
+// Returns ("", nil) when no source is set, which is the signal that no base
+// is configured and Claude Code's built-in prompt must stay in effect.
 //
 // Resolution order (first match wins):
 //
@@ -116,50 +123,115 @@ type ResolveOpts struct {
 //  6. CellCfg.LLM.SystemPrompt      ([llm].system_prompt)
 //  7. ""
 func ResolveSystemPrompt(opts ResolveOpts) (string, error) {
-	if opts.FlagFile != "" && opts.FlagInline != "" {
-		return "", fmt.Errorf("--system-prompt and --system-prompt-file are mutually exclusive")
-	}
-	if opts.FlagFile != "" {
-		return readPromptFile(opts.FlagFile, "--system-prompt-file")
-	}
-	if opts.FlagInline != "" {
-		return opts.FlagInline, nil
-	}
-
-	if opts.EnvFile != "" && opts.EnvInline != "" {
-		return "", fmt.Errorf("DEVCELL_SYSTEM_PROMPT and DEVCELL_SYSTEM_PROMPT_FILE are mutually exclusive")
-	}
-	if opts.EnvFile != "" {
-		return readPromptFile(opts.EnvFile, "DEVCELL_SYSTEM_PROMPT_FILE")
-	}
-	if opts.EnvInline != "" {
-		return opts.EnvInline, nil
-	}
-
-	tomlFile := opts.CellCfg.LLM.SystemPromptFile
-	tomlInline := opts.CellCfg.LLM.SystemPrompt
-	if tomlFile != "" && tomlInline != "" {
-		return "", fmt.Errorf("[llm].system_prompt and [llm].system_prompt_file are mutually exclusive")
-	}
-	if tomlFile != "" {
-		// Resolve relative paths against the project base dir, matching
-		// the convention `[[volumes]]` already uses.
-		path := tomlFile
-		if !filepath.IsAbs(path) && opts.CfgBaseDir != "" {
-			path = filepath.Join(opts.CfgBaseDir, path)
-		}
-		return readPromptFile(path, "[llm].system_prompt_file")
-	}
-	return tomlInline, nil
+	return resolveTiers(promptSources{
+		flagFile:   opts.FlagFile,
+		flagInline: opts.FlagInline,
+		flagLabels: "--system-prompt and --system-prompt-file",
+		envFile:    opts.EnvFile,
+		envInline:  opts.EnvInline,
+		envLabels:  "DEVCELL_SYSTEM_PROMPT and DEVCELL_SYSTEM_PROMPT_FILE",
+		tomlFile:   opts.CellCfg.LLM.SystemPromptFile,
+		tomlInline: opts.CellCfg.LLM.SystemPrompt,
+		tomlLabels: "[llm].system_prompt and [llm].system_prompt_file",
+		fileSource: map[string]string{
+			"flag": "--system-prompt-file",
+			"env":  "DEVCELL_SYSTEM_PROMPT_FILE",
+			"toml": "[llm].system_prompt_file",
+		},
+	}, opts.CfgBaseDir)
 }
 
-// AssembleSystemPrompt is the single entry point callers should use to
-// build the string passed to claude's --append-system-prompt (or any
-// future agent's equivalent). It prepends ContainerContext to the
-// resolved prompt with a blank-line separator. When the resolved prompt
-// is empty, returns just ContainerContext.
-func AssembleSystemPrompt(c config.Config, cellCfg cfg.CellConfig, opts ResolveOpts) (string, error) {
-	resolved, err := ResolveSystemPrompt(opts)
+// ResolveAppendPrompt walks the same tier chain over the *append* sources.
+// It never reads the base sources: after the split, [llm].system_prompt
+// replaces Claude Code's built-in prompt while the append layer stacks on
+// top of whichever base ends up in effect.
+//
+// Resolution order (first match wins):
+//
+//  1. opts.AppendFlagFile   (--append-system-prompt-file)
+//  2. opts.AppendFlagInline (--append-system-prompt)
+//  3. opts.AppendEnvFile    (DEVCELL_APPEND_SYSTEM_PROMPT_FILE)
+//  4. opts.AppendEnvInline  (DEVCELL_APPEND_SYSTEM_PROMPT)
+//  5. CellCfg.LLM.AppendSystemPromptFile ([llm].append_system_prompt_file)
+//  6. CellCfg.LLM.AppendSystemPrompt     ([llm].append_system_prompt)
+//  7. ""
+func ResolveAppendPrompt(opts ResolveOpts) (string, error) {
+	return resolveTiers(promptSources{
+		flagFile:   opts.AppendFlagFile,
+		flagInline: opts.AppendFlagInline,
+		flagLabels: "--append-system-prompt and --append-system-prompt-file",
+		envFile:    opts.AppendEnvFile,
+		envInline:  opts.AppendEnvInline,
+		envLabels:  "DEVCELL_APPEND_SYSTEM_PROMPT and DEVCELL_APPEND_SYSTEM_PROMPT_FILE",
+		tomlFile:   opts.CellCfg.LLM.AppendSystemPromptFile,
+		tomlInline: opts.CellCfg.LLM.AppendSystemPrompt,
+		tomlLabels: "[llm].append_system_prompt and [llm].append_system_prompt_file",
+		fileSource: map[string]string{
+			"flag": "--append-system-prompt-file",
+			"env":  "DEVCELL_APPEND_SYSTEM_PROMPT_FILE",
+			"toml": "[llm].append_system_prompt_file",
+		},
+	}, opts.CfgBaseDir)
+}
+
+// promptSources is one layer's worth of inputs for the tier walk. Both the
+// base and the append layer have identical precedence rules, so the walk is
+// written once and parameterised by source names for error messages.
+type promptSources struct {
+	flagFile, flagInline, flagLabels string
+	envFile, envInline, envLabels    string
+	tomlFile, tomlInline, tomlLabels string
+	fileSource                       map[string]string
+}
+
+func resolveTiers(src promptSources, cfgBaseDir string) (string, error) {
+	if src.flagFile != "" && src.flagInline != "" {
+		return "", fmt.Errorf("%s are mutually exclusive", src.flagLabels)
+	}
+	if src.flagFile != "" {
+		return readPromptFile(src.flagFile, src.fileSource["flag"])
+	}
+	if src.flagInline != "" {
+		return src.flagInline, nil
+	}
+
+	if src.envFile != "" && src.envInline != "" {
+		return "", fmt.Errorf("%s are mutually exclusive", src.envLabels)
+	}
+	if src.envFile != "" {
+		return readPromptFile(src.envFile, src.fileSource["env"])
+	}
+	if src.envInline != "" {
+		return src.envInline, nil
+	}
+
+	if src.tomlFile != "" && src.tomlInline != "" {
+		return "", fmt.Errorf("%s are mutually exclusive", src.tomlLabels)
+	}
+	if src.tomlFile != "" {
+		// Resolve relative paths against the project base dir, matching
+		// the convention `[[volumes]]` already uses.
+		path := src.tomlFile
+		if !filepath.IsAbs(path) && cfgBaseDir != "" {
+			path = filepath.Join(cfgBaseDir, path)
+		}
+		return readPromptFile(path, src.fileSource["toml"])
+	}
+	return src.tomlInline, nil
+}
+
+// AssembleOverlayPrompt builds the overlay: the auto-generated container
+// context followed by the resolved append prompt. This is what reaches claude
+// via --append-system-prompt-file.
+//
+// Container context lives on the overlay rather than the base deliberately —
+// it is regenerated per run from live container facts, so a user-supplied
+// base prompt must not be able to displace it.
+//
+// When the append layer resolves empty, the container context alone is
+// returned; it is never empty, so the overlay file is always written.
+func AssembleOverlayPrompt(c config.Config, cellCfg cfg.CellConfig, opts ResolveOpts) (string, error) {
+	resolved, err := ResolveAppendPrompt(opts)
 	if err != nil {
 		return "", err
 	}

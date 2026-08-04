@@ -96,3 +96,21 @@ func TestHMOptionsNix_BalancedBracesAndParens(t *testing.T) {
 		t.Errorf("unbalanced parens: %+d", n)
 	}
 }
+
+// The global home-manager layer must be able to express BOTH prompt layers.
+// options.nix is generated from CellConfig, so the leaves appear only if the
+// Go fields exist — this guards the regeneration step.
+func TestHMOptionsNix_EmitsBothPromptLayers(t *testing.T) {
+	out := HMOptionsNix()
+
+	for _, leaf := range []string{
+		"system_prompt = opt types.str;",
+		"system_prompt_file = opt types.str;",
+		"append_system_prompt = opt types.str;",
+		"append_system_prompt_file = opt types.str;",
+	} {
+		if !strings.Contains(out, leaf) {
+			t.Errorf("generated options.nix missing %q", leaf)
+		}
+	}
+}

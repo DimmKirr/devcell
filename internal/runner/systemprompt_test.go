@@ -224,9 +224,9 @@ func TestResolveSystemPrompt_FileNotFound(t *testing.T) {
 	}
 }
 
-func TestAssembleSystemPrompt_PrependsContainerContext(t *testing.T) {
-	out, err := AssembleSystemPrompt(sampleConfig(), cfg.CellConfig{}, ResolveOpts{
-		FlagInline: "be terse",
+func TestAssembleOverlayPrompt_PrependsContainerContext(t *testing.T) {
+	out, err := AssembleOverlayPrompt(sampleConfig(), cfg.CellConfig{}, ResolveOpts{
+		AppendFlagInline: "be terse",
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -244,8 +244,8 @@ func TestAssembleSystemPrompt_PrependsContainerContext(t *testing.T) {
 	}
 }
 
-func TestAssembleSystemPrompt_EmptyResolverReturnsContextOnly(t *testing.T) {
-	out, err := AssembleSystemPrompt(sampleConfig(), cfg.CellConfig{}, ResolveOpts{})
+func TestAssembleOverlayPrompt_EmptyResolverReturnsContextOnly(t *testing.T) {
+	out, err := AssembleOverlayPrompt(sampleConfig(), cfg.CellConfig{}, ResolveOpts{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

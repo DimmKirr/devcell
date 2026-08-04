@@ -400,16 +400,27 @@ type LLMModelsSection struct {
 
 // LLMSection holds [llm] config — all AI agent settings in one place.
 //
-// SystemPrompt and SystemPromptFile are mutually exclusive — set one or
-// neither. The resolver in internal/runner.ResolveSystemPrompt validates
+// Two independent layers, each with an inline and a file form:
+//
+//   - SystemPrompt / SystemPromptFile REPLACE Claude Code's built-in prompt
+//     (claude --system-prompt-file). Setting this discards the stock tool
+//     guidance and safety instructions — you own the whole prompt.
+//   - AppendSystemPrompt / AppendSystemPromptFile layer on top of whichever
+//     base is in effect (claude --append-system-prompt-file), alongside the
+//     container context devcell always contributes.
+//
+// Within a layer the inline and file forms are mutually exclusive — set one
+// or neither. The resolver in internal/runner.ResolveSystemPrompt validates
 // this and returns an error when both are set, so we don't fail config
 // load for projects where the conflict is harmless (e.g. callers that
 // don't read system prompts).
 type LLMSection struct {
-	SystemPrompt     string           `toml:"system_prompt"`
-	SystemPromptFile string           `toml:"system_prompt_file"`
-	UseOllama        bool             `toml:"use_ollama"`
-	Models           LLMModelsSection `toml:"models"`
+	SystemPrompt           string           `toml:"system_prompt"`
+	SystemPromptFile       string           `toml:"system_prompt_file"`
+	AppendSystemPrompt     string           `toml:"append_system_prompt"`
+	AppendSystemPromptFile string           `toml:"append_system_prompt_file"`
+	UseOllama              bool             `toml:"use_ollama"`
+	Models                 LLMModelsSection `toml:"models"`
 }
 
 // GitSection holds [git] config for git identity inside the container.
@@ -855,6 +866,12 @@ func Merge(global, project CellConfig) CellConfig {
 	}
 	if project.LLM.SystemPromptFile != "" {
 		out.LLM.SystemPromptFile = project.LLM.SystemPromptFile
+	}
+	if project.LLM.AppendSystemPrompt != "" {
+		out.LLM.AppendSystemPrompt = project.LLM.AppendSystemPrompt
+	}
+	if project.LLM.AppendSystemPromptFile != "" {
+		out.LLM.AppendSystemPromptFile = project.LLM.AppendSystemPromptFile
 	}
 	if project.LLM.UseOllama {
 		out.LLM.UseOllama = true

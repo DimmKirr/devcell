@@ -140,21 +140,21 @@ func TestServer_LogPromptsToggle(t *testing.T) {
 	}
 }
 
-// TestServer_SystemPromptThreadedToExec proves SetSystemPrompt on the Server
-// reaches ExecOpts.SystemPrompt on every chat-completions request — the
-// contract that lets `cell serve --system-prompt` actually take effect.
+// TestServer_SystemPromptThreadedToExec proves SetSystemPromptFile on the
+// Server reaches ExecOpts.SystemPromptFile on every chat-completions request
+// — the contract that lets `cell serve --system-prompt` actually take effect.
 func TestServer_SystemPromptThreadedToExec(t *testing.T) {
 	fe := &fakeExec{stdout: "ok"}
 	srv := NewServer(fe, 0)
-	srv.SetSystemPrompt("you are a backend assistant")
+	srv.SetSystemPromptFile("/devcell-85/.devcell/prompts/main/additional-systemprompt.md")
 
-	h := NewChatHandler(fe, false, srv.systemPrompt)
+	h := NewChatHandler(fe, false, srv.systemPromptFile, "")
 	rec := postChat(t, h, `{"model":"claude","messages":[{"role":"user","content":"hi"}]}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
 	}
-	if fe.systemPrompt != "you are a backend assistant" {
-		t.Errorf("ExecOpts.SystemPrompt = %q, want operator-level value", fe.systemPrompt)
+	if fe.systemPromptFile != "/devcell-85/.devcell/prompts/main/additional-systemprompt.md" {
+		t.Errorf("ExecOpts.SystemPromptFile = %q, want operator-level value", fe.systemPromptFile)
 	}
 }
 

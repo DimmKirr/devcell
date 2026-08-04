@@ -401,7 +401,7 @@ func buildPrompt(instructions string, input json.RawMessage) (string, error) {
 // @Failure 405 {object} APIError "Only POST is allowed"
 // @Security BearerAuth
 // @Router /v1/responses [post]
-func NewResponsesHandler(exec Executor, store *JobStore, logPrompts bool, systemPrompt string) http.Handler {
+func NewResponsesHandler(exec Executor, store *JobStore, logPrompts bool, systemPromptFile, basePromptFile string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeAPIError(w, http.StatusMethodNotAllowed,
@@ -473,11 +473,12 @@ func NewResponsesHandler(exec Executor, store *JobStore, logPrompts bool, system
 		}
 
 		opts := ExecOpts{
-			Agent:        agent,
-			Prompt:       prompt,
-			Model:        submodel,
-			Effort:       effort,
-			SystemPrompt: systemPrompt,
+			Agent:            agent,
+			Prompt:           prompt,
+			Model:            submodel,
+			Effort:           effort,
+			SystemPromptFile: systemPromptFile,
+			BasePromptFile:   basePromptFile,
 		}
 
 		// stream + background together is unsupported in the first pass:

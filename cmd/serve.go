@@ -144,20 +144,31 @@ Environment:
     LOG_LEVEL                    debug|info|warn|error (default: warn)
     DEVCELL_LOG_PROMPTS=1        Log full prompt + response bodies at INFO level
                                  (off by default; prompts may contain secrets)
-    DEVCELL_SYSTEM_PROMPT        Inline system prompt (overridden by --system-prompt)
-    DEVCELL_SYSTEM_PROMPT_FILE   Path to a file used as the system prompt
+    DEVCELL_SYSTEM_PROMPT        Inline BASE prompt (overridden by --system-prompt)
+    DEVCELL_SYSTEM_PROMPT_FILE   Path to a file used as the BASE prompt
                                  (overridden by --system-prompt-file)
+    DEVCELL_APPEND_SYSTEM_PROMPT      Inline overlay text
+                                 (overridden by --append-system-prompt)
+    DEVCELL_APPEND_SYSTEM_PROMPT_FILE Path to a file used as overlay text
+                                 (overridden by --append-system-prompt-file)
 
-System-prompt resolution order (first match wins):
-    1. --system-prompt-file
-    2. --system-prompt
-    3. DEVCELL_SYSTEM_PROMPT_FILE
-    4. DEVCELL_SYSTEM_PROMPT
-    5. [llm].system_prompt_file in devcell.toml (path relative to project)
-    6. [llm].system_prompt in devcell.toml (inline)
+Two independent layers, each resolved over the same chain:
 
-A container-context preamble (bind mounts, host paths, runtime
-constraints) is auto-prepended to whichever prompt resolves above.
+    BASE    replaces Claude Code's built-in prompt entirely (~10.6 KB of
+            tool guidance and safety instructions). Leave it unset to keep
+            the built-in prompt.
+      1. --system-prompt-file            4. DEVCELL_SYSTEM_PROMPT
+      2. --system-prompt                 5. [llm].system_prompt_file
+      3. DEVCELL_SYSTEM_PROMPT_FILE      6. [llm].system_prompt
+
+    OVERLAY layers on top of whichever base is in effect; nothing is removed.
+      1. --append-system-prompt-file     4. DEVCELL_APPEND_SYSTEM_PROMPT
+      2. --append-system-prompt          5. [llm].append_system_prompt_file
+      3. DEVCELL_APPEND_SYSTEM_PROMPT_FILE  6. [llm].append_system_prompt
+
+A container-context preamble (bind mounts, host paths, runtime constraints)
+is auto-prepended to the OVERLAY. Both layers are written to
+.devcell/prompts/<cell>/ and passed to claude as file paths.
 Per-request 'instructions' (Responses) / 'system' role (Chat) from
 the API body still merge into the user prompt independently.
 
@@ -173,8 +184,10 @@ Examples:
 
 var (
 	servePort             int
-	serveSystemPrompt     string
-	serveSystemPromptFile string
+	serveSystemPrompt           string
+	serveSystemPromptFile       string
+	serveAppendSystemPrompt     string
+	serveAppendSystemPromptFile string
 	serveHTTPS            bool
 	serveDebug            bool
 	serveWorkspace        bool
@@ -188,10 +201,18 @@ var (
 func init() {
 	serveCmd.Flags().IntVar(&servePort, "port", serve.DefaultPort, "port to listen on")
 	serveCmd.Flags().StringVar(&serveSystemPrompt, "system-prompt", "",
-		"system prompt passed to claude as --append-system-prompt on every request "+
-			"(env: DEVCELL_SYSTEM_PROMPT). Composes with per-request `instructions`/`system` from the API body.")
+		"BASE prompt passed to claude as --system-prompt-file on every request — "+
+			"REPLACES Claude Code's built-in prompt (env: DEVCELL_SYSTEM_PROMPT). "+
+			"Composes with per-request `instructions`/`system` from the API body.")
+	serveCmd.Flags().StringVar(&serveAppendSystemPrompt, "append-system-prompt", "",
+		"text layered on top of the base prompt, passed to claude as "+
+			"--append-system-prompt-file (env: DEVCELL_APPEND_SYSTEM_PROMPT). "+
+			"Composes with the container context devcell always contributes.")
+	serveCmd.Flags().StringVar(&serveAppendSystemPromptFile, "append-system-prompt-file", "",
+		"path to a file whose contents are layered on top of the base prompt "+
+			"(env: DEVCELL_APPEND_SYSTEM_PROMPT_FILE). Mutually exclusive with --append-system-prompt.")
 	serveCmd.Flags().StringVar(&serveSystemPromptFile, "system-prompt-file", "",
-		"path to a file whose contents are used as the system prompt "+
+		"path to a file whose contents REPLACE Claude Code's built-in prompt "+
 			"(env: DEVCELL_SYSTEM_PROMPT_FILE). Mutually exclusive with --system-prompt.")
 	serveCmd.Flags().BoolVar(&serveHTTPS, "https", false,
 		"serve over HTTPS with an auto-generated self-signed certificate")
@@ -254,14 +275,23 @@ func runServe(cmd *cobra.Command, args []string) error {
 	}
 	cellCfg := cfg.LoadFromOS(c.ConfigDir, c.BaseDir)
 
-	systemPrompt, err := runner.AssembleSystemPrompt(c, cellCfg, runner.ResolveOpts{
-		FlagFile:   serveSystemPromptFile,
-		FlagInline: serveSystemPrompt,
-		EnvFile:    os.Getenv("DEVCELL_SYSTEM_PROMPT_FILE"),
-		EnvInline:  os.Getenv("DEVCELL_SYSTEM_PROMPT"),
-		CellCfg:    cellCfg,
-		CfgBaseDir: c.BaseDir,
-	})
+	promptOpts := runner.ResolveOpts{
+		FlagFile:         serveSystemPromptFile,
+		FlagInline:       serveSystemPrompt,
+		EnvFile:          os.Getenv("DEVCELL_SYSTEM_PROMPT_FILE"),
+		EnvInline:        os.Getenv("DEVCELL_SYSTEM_PROMPT"),
+		AppendFlagFile:   serveAppendSystemPromptFile,
+		AppendFlagInline: serveAppendSystemPrompt,
+		AppendEnvFile:    os.Getenv("DEVCELL_APPEND_SYSTEM_PROMPT_FILE"),
+		AppendEnvInline:  os.Getenv("DEVCELL_APPEND_SYSTEM_PROMPT"),
+		CellCfg:          cellCfg,
+		CfgBaseDir:       c.BaseDir,
+	}
+	systemPromptFile, err := runner.WriteOverlayPrompt(c, cellCfg, promptOpts)
+	if err != nil {
+		return fmt.Errorf("system prompt: %w", err)
+	}
+	basePromptFile, err := runner.WriteBasePrompt(c, promptOpts)
 	if err != nil {
 		return fmt.Errorf("system prompt: %w", err)
 	}
@@ -276,7 +306,8 @@ func runServe(cmd *cobra.Command, args []string) error {
 	}
 	srv := serve.NewServer(executor, servePort)
 	srv.SetAPIKey(apiKey)
-	srv.SetSystemPrompt(systemPrompt)
+	srv.SetSystemPromptFile(systemPromptFile)
+	srv.SetBasePromptFile(basePromptFile)
 	// Off by default. Setting DEVCELL_LOG_PROMPTS=1 makes /v1/chat/completions
 	// and /v1/responses log full prompt + response text at INFO level. Useful
 	// for debugging client integrations; risky for prod logs because prompts

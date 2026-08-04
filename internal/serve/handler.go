@@ -40,11 +40,21 @@ type ExecOpts struct {
 	// Effort, when set, is passed as --effort to the claude CLI.
 	// Valid values: "low", "medium", "high". Empty = CLI default.
 	Effort string
-	// SystemPrompt, when set, is passed as --append-system-prompt to claude.
-	// Operator-level baseline (set on `cell serve` startup), composes with
-	// any per-request `instructions` / `system` role from the OpenAI body —
-	// it does NOT override them. Ignored for opencode (no equivalent flag).
-	SystemPrompt string
+	// SystemPromptFile is the path to the generated overlay prompt file,
+	// passed as --append-system-prompt-file to claude. Operator-level
+	// baseline (materialized on `cell serve` startup), composes with any
+	// per-request `instructions` / `system` role from the OpenAI body — it
+	// does NOT override them. Ignored for opencode (no equivalent flag).
+	//
+	// A path rather than the text itself: the prompt used to travel as one
+	// argv element, which capped it at MAX_ARG_STRLEN and published it to
+	// `ps aux`.
+	SystemPromptFile string
+	// BasePromptFile is the path to the generated base prompt, passed as
+	// --system-prompt-file to claude. Empty leaves Claude Code's built-in
+	// prompt in effect — setting it discards that prompt entirely, including
+	// its tool guidance and safety instructions. Ignored for opencode.
+	BasePromptFile string
 }
 
 // ExecResult holds the output of an agent execution.
@@ -218,7 +228,7 @@ func chatcmplID() string {
 // @Failure 405 {string} string "Only POST is allowed"
 // @Security BearerAuth
 // @Router /v1/chat/completions [post]
-func NewChatHandler(exec Executor, logPrompts bool, systemPrompt string) http.Handler {
+func NewChatHandler(exec Executor, logPrompts bool, systemPromptFile, basePromptFile string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -276,11 +286,12 @@ func NewChatHandler(exec Executor, logPrompts bool, systemPrompt string) http.Ha
 		}
 
 		opts := ExecOpts{
-			Agent:        agent,
-			Prompt:       prompt,
-			Model:        submodel,
-			Effort:       effort,
-			SystemPrompt: systemPrompt,
+			Agent:            agent,
+			Prompt:           prompt,
+			Model:            submodel,
+			Effort:           effort,
+			SystemPromptFile: systemPromptFile,
+			BasePromptFile:   basePromptFile,
 		}
 
 		// Streaming path: only claude has a token-level streaming surface

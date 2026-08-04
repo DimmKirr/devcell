@@ -2266,3 +2266,62 @@ mount = "/path/with\~invalid/escape:/bar"
 		t.Fatal("LoadFromOSWithDirs must return an error when project TOML has a parse error")
 	}
 }
+
+// The append surface is separate from system_prompt: after CELL-408,
+// system_prompt replaces Claude Code's built-in prompt, so a distinct key is
+// needed for text that layers on top of whichever base is in effect.
+func TestLoadFile_LLMAppendSystemPrompt(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "devcell.toml")
+	if err := os.WriteFile(path, []byte(`
+[llm]
+append_system_prompt = "always run gofmt"
+append_system_prompt_file = "prompts/extra.md"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := cfg.LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	if c.LLM.AppendSystemPrompt != "always run gofmt" {
+		t.Errorf("append_system_prompt = %q", c.LLM.AppendSystemPrompt)
+	}
+	if c.LLM.AppendSystemPromptFile != "prompts/extra.md" {
+		t.Errorf("append_system_prompt_file = %q", c.LLM.AppendSystemPromptFile)
+	}
+}
+
+// Merge is hand-written per LLM field, so a new key silently ignores the
+// project value unless an explicit override line is added.
+func TestMerge_LLMAppendSystemPromptProjectOverridesGlobal(t *testing.T) {
+	global := cfg.CellConfig{LLM: cfg.LLMSection{
+		AppendSystemPrompt:     "global append",
+		AppendSystemPromptFile: "global.md",
+	}}
+	project := cfg.CellConfig{LLM: cfg.LLMSection{
+		AppendSystemPrompt:     "project append",
+		AppendSystemPromptFile: "project.md",
+	}}
+
+	out := cfg.Merge(global, project)
+
+	if out.LLM.AppendSystemPrompt != "project append" {
+		t.Errorf("append_system_prompt = %q, want project value", out.LLM.AppendSystemPrompt)
+	}
+	if out.LLM.AppendSystemPromptFile != "project.md" {
+		t.Errorf("append_system_prompt_file = %q, want project value", out.LLM.AppendSystemPromptFile)
+	}
+}
+
+// An unset project value must not blank out the global one.
+func TestMerge_LLMAppendSystemPromptGlobalSurvivesEmptyProject(t *testing.T) {
+	global := cfg.CellConfig{LLM: cfg.LLMSection{AppendSystemPrompt: "global append"}}
+
+	out := cfg.Merge(global, cfg.CellConfig{})
+
+	if out.LLM.AppendSystemPrompt != "global append" {
+		t.Errorf("append_system_prompt = %q, want global value preserved", out.LLM.AppendSystemPrompt)
+	}
+}

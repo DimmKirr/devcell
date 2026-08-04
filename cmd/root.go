@@ -620,24 +620,27 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 		}
 	}
 
-	// Inject system prompt for Claude Code — container context (mounts, host
-	// paths, constraints) plus the operator/project prompt resolved from env
-	// vars and devcell.toml. See runner.AssembleSystemPrompt for the full
-	// source-precedence chain. Fatal: a bad system prompt produces a broken
+	// Inject prompts for Claude Code as generated files. The overlay carries
+	// container context (mounts, host paths, constraints) plus the append
+	// prompt; the base, when configured, replaces Claude Code's built-in
+	// prompt entirely. See runner.ResolveSystemPrompt / ResolveAppendPrompt
+	// for the source-precedence chains. Fatal: a bad prompt produces a broken
 	// claude session, fail loudly here.
 	if binary == "claude" {
 		if err := pr.PhaseDetailed("System prompt", func() (string, error) {
-			prompt, spErr := runner.AssembleSystemPrompt(c, cellCfg, runner.ResolveOpts{
-				EnvFile:    os.Getenv("DEVCELL_SYSTEM_PROMPT_FILE"),
-				EnvInline:  os.Getenv("DEVCELL_SYSTEM_PROMPT"),
-				CellCfg:    cellCfg,
-				CfgBaseDir: c.BaseDir,
+			flags, spErr := claudePromptFlags(c, cellCfg, runner.ResolveOpts{
+				EnvFile:         os.Getenv("DEVCELL_SYSTEM_PROMPT_FILE"),
+				EnvInline:       os.Getenv("DEVCELL_SYSTEM_PROMPT"),
+				AppendEnvFile:   os.Getenv("DEVCELL_APPEND_SYSTEM_PROMPT_FILE"),
+				AppendEnvInline: os.Getenv("DEVCELL_APPEND_SYSTEM_PROMPT"),
+				CellCfg:         cellCfg,
+				CfgBaseDir:      c.BaseDir,
 			})
 			if spErr != nil {
 				return "", spErr
 			}
-			defaultFlags = append(defaultFlags, "--append-system-prompt", prompt)
-			return fmt.Sprintf("%d bytes", len(prompt)), nil
+			defaultFlags = append(defaultFlags, flags...)
+			return flags[len(flags)-1], nil
 		}); err != nil {
 			return fmt.Errorf("system prompt: %w", err)
 		}

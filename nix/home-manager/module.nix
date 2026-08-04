@@ -24,7 +24,7 @@ let
 
   # Options this module adds on top of the generated TOML schema — they
   # configure the module itself and must not leak into devcell.toml.
-  metaKeys = [ "enable" "package" "prompt" ];
+  metaKeys = [ "enable" "package" "prompt" "appendPrompt" ];
 
   # Drop null leaves and the sections they empty out, so an unset option is
   # ABSENT from the TOML (matching hand-written configs) instead of null.
@@ -53,12 +53,29 @@ in
     prompt = lib.mkOption {
       type = lib.types.nullOr lib.types.lines;
       default = null;
-      description = "Shorthand for devcell.llm.system_prompt.";
+      description = ''
+        Shorthand for devcell.llm.system_prompt — the BASE prompt, which
+        REPLACES Claude Code's built-in one (~10.6 KB of tool guidance and
+        safety instructions). Setting this globally applies to every cell and
+        every project; to layer text on top of the built-in prompt instead,
+        use devcell.appendPrompt.
+      '';
+    };
+    appendPrompt = lib.mkOption {
+      type = lib.types.nullOr lib.types.lines;
+      default = null;
+      description = ''
+        Shorthand for devcell.llm.append_system_prompt — text layered on top
+        of whichever base prompt is in effect, alongside the container context
+        devcell always contributes. Nothing is removed, so this is the
+        lower-risk of the two.
+      '';
     };
   };
 
   config = lib.mkIf cfg.enable {
     devcell.llm.system_prompt = lib.mkDefault cfg.prompt;
+    devcell.llm.append_system_prompt = lib.mkDefault cfg.appendPrompt;
     home.packages = lib.optional (cfg.package != null) cfg.package;
     xdg.configFile."devcell/devcell.toml".source =
       tomlFormat.generate "devcell.toml" settings;

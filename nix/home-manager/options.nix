@@ -60,6 +60,8 @@ in
   llm = {
     system_prompt = opt types.str;
     system_prompt_file = opt types.str;
+    append_system_prompt = opt types.str;
+    append_system_prompt_file = opt types.str;
     use_ollama = opt types.bool;
     models = {
       default = opt types.str;
