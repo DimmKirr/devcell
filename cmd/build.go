@@ -17,6 +17,7 @@ import (
 	"github.com/DimmKirr/devcell/internal/config"
 	"github.com/DimmKirr/devcell/internal/runner"
 	"github.com/DimmKirr/devcell/internal/scaffold"
+	"github.com/DimmKirr/devcell/internal/telemetry"
 	"github.com/DimmKirr/devcell/internal/ux"
 	"github.com/DimmKirr/devcell/internal/version"
 	"github.com/spf13/cobra"
@@ -52,6 +53,17 @@ func init() {
 
 func runBuild(cmd *cobra.Command, _ []string) error {
 	applyOutputFlagsWithLog("build")
+
+	telemetry.Track("build", map[string]any{
+		"engine":    scanStringFlag("--engine"),
+		"subcommand": "build",
+		"update":    scanFlag("--update"),
+		"no_cache":  scanFlag("--no-cache"),
+		"force":     scanFlag("--force"),
+		"impure":    scanFlag("--impure") || scanFlag("--debian"),
+		"thin":      !scanFlag("--no-thin") && !scanFlag("--thick"),
+	})
+
 	update, _ := cmd.Flags().GetBool("update")
 	noGenerate, _ := cmd.Flags().GetBool("no-generate")
 	impure, _ := cmd.Flags().GetBool("impure")

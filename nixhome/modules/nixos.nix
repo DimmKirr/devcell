@@ -34,6 +34,7 @@ in {
       deadnix             # detect unused nix code (use: deadnix file.nix)
       statix              # nix linter / anti-pattern checker (use: statix check .)
       nix-output-monitor  # prettier nix build output (use: nom build ... or pipe: nix build |& nom)
+      nix-update          # update vendorHash / package versions in flake.nix (use: nix-update --flake cell)
     ];
 
     # devcell.managedMcp.servers.nixos = {

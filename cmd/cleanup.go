@@ -7,6 +7,7 @@ import (
 	"syscall"
 
 	"github.com/DimmKirr/devcell/internal/runner"
+	"github.com/DimmKirr/devcell/internal/telemetry"
 	"github.com/DimmKirr/devcell/internal/ux"
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
@@ -38,6 +39,7 @@ func init() {
 }
 
 func runCleanup(cmd *cobra.Command, _ []string) error {
+	telemetry.Track("cleanup", nil)
 	yes, _ := cmd.Flags().GetBool("yes")
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

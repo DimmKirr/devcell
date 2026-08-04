@@ -20,6 +20,7 @@ import (
 	"github.com/DimmKirr/devcell/internal/runner"
 	"github.com/DimmKirr/devcell/internal/scaffold"
 	"github.com/DimmKirr/devcell/internal/session"
+	"github.com/DimmKirr/devcell/internal/telemetry"
 	"github.com/DimmKirr/devcell/internal/ux"
 	"github.com/DimmKirr/devcell/internal/version"
 	"github.com/DimmKirr/devcell/internal/vm/libvirt"
@@ -66,6 +67,8 @@ tools inside a consistent Docker dev environment.`,
 
 func Execute() {
 	defer ux.CloseDebugLog()
+	telemetry.Init(resolveConfigDir())
+	defer telemetry.Close()
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "\n cell %s\n", version.Full())
 		baseVer, userVer := runner.ImageVersions(context.Background())
@@ -114,6 +117,7 @@ func init() {
 		modulesCmd,
 		serveCmd,
 		authCmd,
+		telemetryCmd,
 	)
 }
 
@@ -274,6 +278,7 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 		engine = "vagrant"
 	}
 	if engine == "vagrant" {
+		telemetry.Track("command_run", map[string]any{"command": filepath.Base(binary), "engine": "vagrant"})
 		vagrantBox := scanStringFlag("--vagrant-box")
 		if vagrantBox == "" {
 			vagrantBox = cellCfgForEngine.Cell.VagrantBox
@@ -300,6 +305,7 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 		)
 	}
 	if engine == "tart" {
+		telemetry.Track("command_run", map[string]any{"command": filepath.Base(binary), "engine": "tart"})
 		return runTartAgent(
 			binary, defaultFlags, userArgs,
 			cellCfgForEngine,
@@ -317,6 +323,7 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 		engine = "libvirt"
 	}
 	if engine == "qemu" {
+		telemetry.Track("command_run", map[string]any{"command": filepath.Base(binary), "engine": "qemu"})
 		return runQemuAgent(
 			binary, defaultFlags, userArgs,
 			cellCfgForEngine,
@@ -327,6 +334,7 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 		)
 	}
 	if engine == "libvirt" {
+		telemetry.Track("command_run", map[string]any{"command": filepath.Base(binary), "engine": "libvirt"})
 		return runLibvirtAgent(
 			binary, defaultFlags, userArgs,
 			cellCfgForEngine,
@@ -361,6 +369,7 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 	if !thin {
 		runner.WarnThickDeprecation()
 	}
+	telemetry.TrackCommandRun(filepath.Base(binary), "docker", runner.Stack, runner.Modules, thin)
 	imageTag := func() string {
 		if thin {
 			return runner.PickImageTagThin()
@@ -788,6 +797,7 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 	if sessErr != nil {
 		ux.Debugf("session begin: %v", sessErr)
 	}
+	startTime := time.Now()
 
 	if err := cmd.Start(); err != nil {
 		if sess != nil {
@@ -815,6 +825,7 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 	}()
 
 	waitErr := cmd.Wait()
+	telemetry.TrackCommandFinish(filepath.Base(binary), time.Since(startTime).Milliseconds(), waitErr == nil)
 	if sess != nil {
 		if err := sess.Finish(c.BaseDir, waitErr); err != nil {
 			ux.Debugf("session finish: %v", err)

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/DimmKirr/devcell/internal/config"
+	"github.com/DimmKirr/devcell/internal/telemetry"
 	"github.com/DimmKirr/devcell/internal/ux"
 	"github.com/spf13/cobra"
 )
@@ -90,6 +91,8 @@ func chromeBinary() (string, error) {
 
 func runChrome(cmd *cobra.Command, args []string) error {
 	applyOutputFlagsWithLog("chrome")
+	telemetry.Track("auth_chrome", map[string]any{"sync_only": chromeSyncOnly, "no_sync": chromeNoSync, "force": chromeForce})
+
 	c, err := config.LoadFromOS()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)

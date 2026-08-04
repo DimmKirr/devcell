@@ -6,6 +6,7 @@ import (
 
 	"github.com/DimmKirr/devcell/internal/cfg"
 	"github.com/DimmKirr/devcell/internal/config"
+	"github.com/DimmKirr/devcell/internal/telemetry"
 	"github.com/DimmKirr/devcell/internal/ux"
 	"github.com/spf13/cobra"
 )
@@ -34,6 +35,7 @@ func runInit(cmd *cobra.Command, _ []string) error {
 	applyOutputFlagsWithLog("init")
 
 	engine := scanStringFlag("--engine")
+	telemetry.Track("init", map[string]any{"engine": engine, "stack": cmd.Flags().Lookup("stack").Value.String()})
 	if engine == "tart" {
 		c, err := config.LoadFromOS()
 		if err != nil {

@@ -13,6 +13,7 @@ import (
 	"github.com/DimmKirr/devcell/internal/config"
 	internalrdp "github.com/DimmKirr/devcell/internal/rdp"
 	"github.com/DimmKirr/devcell/internal/runner"
+	"github.com/DimmKirr/devcell/internal/telemetry"
 	"github.com/DimmKirr/devcell/internal/ux"
 	internalvnc "github.com/DimmKirr/devcell/internal/vnc"
 	"github.com/DimmKirr/devcell/internal/vm/qemu"
@@ -45,6 +46,8 @@ func runVNC(cmd *cobra.Command, args []string) error {
 	list, _ := cmd.Flags().GetBool("list")
 	vncGlobal, _ = cmd.Flags().GetBool("global")
 	vncViewer, _ = cmd.Flags().GetString("viewer")
+
+	telemetry.Track("vnc", map[string]any{"viewer": vncViewer, "list": list, "global": vncGlobal})
 
 	if list {
 		return vncList()

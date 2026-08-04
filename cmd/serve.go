@@ -16,6 +16,7 @@ import (
 	"github.com/DimmKirr/devcell/internal/logger"
 	"github.com/DimmKirr/devcell/internal/runner"
 	"github.com/DimmKirr/devcell/internal/serve"
+	"github.com/DimmKirr/devcell/internal/telemetry"
 	"github.com/spf13/cobra"
 )
 
@@ -233,6 +234,14 @@ func init() {
 }
 
 func runServe(cmd *cobra.Command, args []string) error {
+	telemetry.Track("serve", map[string]any{
+		"port":   servePort,
+		"https":  serveHTTPS,
+		"docker": serveDocker,
+		"pty":    servePTY,
+		"stop":   serveStop,
+	})
+
 	if serveStop {
 		return stopServeDaemon()
 	}

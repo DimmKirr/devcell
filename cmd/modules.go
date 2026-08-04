@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/DimmKirr/devcell/internal/runner"
+	"github.com/DimmKirr/devcell/internal/telemetry"
 	"github.com/spf13/cobra"
 )
 
@@ -35,6 +36,7 @@ func init() {
 }
 
 func runModulesList(cmd *cobra.Command, args []string) error {
+	telemetry.Track("modules_list", nil)
 	flakeRef := resolveModulesFlakeRef()
 
 	ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)

@@ -13,6 +13,7 @@ import (
 	"github.com/DimmKirr/devcell/internal/config"
 	internalrdp "github.com/DimmKirr/devcell/internal/rdp"
 	"github.com/DimmKirr/devcell/internal/runner"
+	"github.com/DimmKirr/devcell/internal/telemetry"
 	"github.com/DimmKirr/devcell/internal/ux"
 	"github.com/DimmKirr/devcell/internal/vm/qemu"
 	"github.com/spf13/cobra"
@@ -46,6 +47,8 @@ func runRDP(cmd *cobra.Command, args []string) error {
 	rdpGlobal, _ = cmd.Flags().GetBool("global")
 	rdpFullscreen, _ = cmd.Flags().GetBool("fullscreen")
 	rdpViewer, _ = cmd.Flags().GetString("viewer")
+
+	telemetry.Track("rdp", map[string]any{"viewer": rdpViewer, "list": list, "global": rdpGlobal, "fullscreen": rdpFullscreen})
 
 	if list {
 		return rdpList()

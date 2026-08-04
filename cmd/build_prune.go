@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"github.com/DimmKirr/devcell/internal/runner"
+	"github.com/DimmKirr/devcell/internal/telemetry"
 	"github.com/DimmKirr/devcell/internal/ux"
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
@@ -62,6 +63,8 @@ func runBuildPrune(cmd *cobra.Command, _ []string) error {
 	pure, _ := cmd.Flags().GetBool("pure")
 	force, _ := cmd.Flags().GetBool("force")
 	yes, _ := cmd.Flags().GetBool("yes")
+
+	telemetry.Track("build_prune", map[string]any{"pure": pure, "force": force})
 
 	homeDir, _ := os.UserHomeDir()
 	opts := runner.PruneOpts{
