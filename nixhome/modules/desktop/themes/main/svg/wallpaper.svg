@@ -425,4 +425,14 @@
        stroke="none"
        id="circle48" />
   </g>
+  <text
+     x="3760"
+     y="2080"
+     font-family="Fira Sans"
+     font-weight="600"
+     font-size="80"
+     fill="#1abc9c"
+     fill-opacity="0.35"
+     text-anchor="end"
+     id="cell-id-label">{{CELL_ID}}</text>
 </svg>

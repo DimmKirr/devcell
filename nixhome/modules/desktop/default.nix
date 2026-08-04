@@ -125,6 +125,7 @@ in
 
     # Background image setter — sets wallpaper before/after WM starts
     feh
+    librsvg # rsvg-convert at startup: SVG wallpaper template → PNG with cell ID baked in
 
     # Clipboard utilities — used by entrypoint.sh clipboard sync daemon
     xclip # read/write X11 selections; used in PRIMARY↔CLIPBOARD sync loop
@@ -479,11 +480,15 @@ in
     ".icewm/preferences".text = icewmTheme.preferences;
     ".icewm/menu".text = icewmTheme.mkMenu config;
     ".icewm/wallpaper.png".source = wallpaper;
+    ".icewm/wallpaper-template.svg".source = ./themes/main/svg/wallpaper.svg;
     ".icewm/startup" = {
       executable = true;
       text = ''
         #!/bin/bash
-        feh --bg-fill "$HOME/.icewm/wallpaper.png" 2>/dev/null &
+        CELL_ID="''${DEVCELL_CELL_NAME:-$(hostname)}"
+        sed "s/{{CELL_ID}}/$CELL_ID/g" "$HOME/.icewm/wallpaper-template.svg" \
+          | rsvg-convert -w 3840 -h 2160 -o "$HOME/.icewm/wallpaper-live.png"
+        feh --bg-fill "$HOME/.icewm/wallpaper-live.png" 2>/dev/null &
       '';
     };
   };

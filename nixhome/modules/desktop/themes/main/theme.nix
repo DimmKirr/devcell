@@ -253,7 +253,8 @@ let
   wallpaper = pkgs.runCommand "devcell-wallpaper" {
     nativeBuildInputs = [ pkgs.librsvg ];
   } ''
-    rsvg-convert -w 3840 -h 2160 ${./svg/wallpaper.svg} -o $out
+    sed 's/{{CELL_ID}}//g' ${./svg/wallpaper.svg} > clean.svg
+    rsvg-convert -w 3840 -h 2160 clean.svg -o $out
   '';
 
 in { inherit c f cfg init xresources pixmaps wallpaper; }
