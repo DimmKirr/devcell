@@ -84,7 +84,7 @@
     # attribute; this attrset mirrors them statically so CLI can read without
     # evaluating the full home-manager module system.
     devcellModules = {
-      android        = { description = "Android dev: ADB+fastboot (all arch), Android SDK + emulator + apktool + jadx (x86_64 only)"; mcpServers = []; sizeMb = 2500; };
+      android        = { description = "Android dev: ADB+fastboot + app RE toolkit (apktool, jadx, cfr, dex2jar, enjarify, procyon, androguard, apkeep, bundletool, apksigner, apkleaks, apkid, quark-engine, mitmproxy, frida-tools, jnitrace, scrcpy, OTA/boot-image tools) all arch; Android SDK + emulator (x86_64 only)"; mcpServers = []; sizeMb = 2750; };
       apple          = { description = "Swift toolchain for CGO and Apple-platform cross-compilation"; mcpServers = []; sizeMb = 900; };
       build          = { description = "C/C++ build toolchain: clang/cmake/make/llvm/lld"; mcpServers = []; sizeMb = 1500; };
       desktop        = { description = "GUI desktop: IceWM/Fluxbox WM, Xvfb display, VNC + RDP servers, PulseAudio, screenshot tools"; mcpServers = []; sizeMb = 1200; };

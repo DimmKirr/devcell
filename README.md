@@ -46,7 +46,7 @@ Add-on modules (set `modules = ["android"]` in `.devcell.toml`):
 
 | Module | What's inside |
 |---|---|
-| **android** | ADB + fastboot (all platforms), Android SDK + build-tools + emulator + apktool + jadx (x86_64 only) |
+| **android** | ADB + fastboot and the full app RE toolkit — decompilers (jadx, apktool, cfr, dex2jar, enjarify, procyon, androguard), APK acquisition/signing (apkeep, bundletool, apksigner), static triage (apkleaks, apkid, quark-engine), dynamic analysis (mitmproxy, mitmproxy2swagger, frida-tools, jnitrace, scrcpy), OTA/boot-image tools — all platforms; Android SDK + build-tools + emulator (x86_64 only) |
 | **desktop** | GUI desktop: VNC, RDP, Fluxbox, PulseAudio |
 | **scraping** | Playwright stealth scripts, anti-fingerprint Chromium config |
 | **infra** | Cloud CLI tools: AWS, GCP, Azure |
