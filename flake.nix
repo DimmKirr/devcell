@@ -132,6 +132,7 @@
           pkgs.go-task
           pkgs.nix-update
           pkgs.pre-commit
+          pkgs.powershell
         ];
         shellHook = ''
           if [ -d .git ] && [ -f .pre-commit-config.yaml ] && \

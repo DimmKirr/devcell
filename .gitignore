@@ -35,6 +35,7 @@ test/results
 .gomodcache
 docs/
 .nixhome-tmp/
+.rendered-ps1/
 
 # macOS
 .DS_Store

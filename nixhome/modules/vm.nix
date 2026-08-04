@@ -18,6 +18,8 @@ in {
   config = lib.mkIf cfg.enable {
     home.packages = with pkgs; [
       qemu       # full system emulation + utilities (use: qemu-system-x86_64, qemu-system-aarch64, qemu-img, qemu-nbd)
+      virtiofsd  # vhost-user virtio-fs daemon — shares host directories into QEMU guests (use: virtiofsd)
+      powershell # cross-platform shell — lint and run Windows provisioning scripts on the host (use: pwsh)
       swtpm      # software TPM 2.0 emulator — required for Windows 11 guests
     ] ++ lib.optionals pkgs.stdenv.isx86_64 [
       OVMF       # UEFI firmware for x86_64 VMs — depends on syslinux (x86-only)

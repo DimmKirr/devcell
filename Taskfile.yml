@@ -206,6 +206,51 @@ tasks:
         rm -f /tmp/vendorhash-check.$$
         exit 1
 
+  test:powershell:render:
+    desc: Render all .ps1.tmpl templates to a temp directory for linting
+    dir: "{{.TASKFILE_DIR}}"
+    silent: true
+    cmds:
+      - go run ./tools/renderps1 -out "{{.TASKFILE_DIR}}/.rendered-ps1"
+
+  test:powershell:lint:
+    desc: Render templates then lint all PowerShell scripts (.ps1, .psm1) with PSScriptAnalyzer
+    dir: "{{.TASKFILE_DIR}}"
+    deps: [test:powershell:render]
+    silent: true
+    cmds:
+      - |
+        set -e
+        if ! command -v pwsh >/dev/null 2>&1; then
+          echo "pwsh not found — install: nix profile install nixpkgs#powershell" >&2
+          exit 1
+        fi
+        pwsh -NoProfile -NonInteractive -Command '
+          if (-not (Get-Module -ListAvailable PSScriptAnalyzer)) {
+            Write-Output "Installing PSScriptAnalyzer..."
+            Install-Module PSScriptAnalyzer -Force -Scope CurrentUser -Repository PSGallery
+          }
+          $files = @(
+            Get-ChildItem -Recurse -Path "internal/vm/qemu/guest" -Include "*.ps1","*.psm1"
+            Get-ChildItem -Path ".rendered-ps1" -Include "*.ps1" -Recurse
+          )
+          if ($files.Count -eq 0) { Write-Output "No .ps1/.psm1 files found"; exit 0 }
+          $fail = $false
+          foreach ($f in $files) {
+            $results = Invoke-ScriptAnalyzer -Path $f.FullName -Severity Error,Warning
+            if ($results) {
+              $fail = $true
+              foreach ($r in $results) {
+                Write-Output ("  {0}:{1} [{2}] {3}" -f $r.ScriptName, $r.Line, $r.Severity, $r.Message)
+              }
+            } else {
+              Write-Output ("  OK   {0}" -f $f.FullName)
+            }
+          }
+          if ($fail) { exit 1 } else { Write-Output "All scripts clean." }
+        '
+      - rm -rf .rendered-ps1
+
   bake:validate:
     desc: Print resolved docker-bake config (HCL parse check, no build)
     dir: "{{.TASKFILE_DIR}}"
