@@ -48,30 +48,21 @@ Invoke-DevcellStep 'prove the repo is readable through the share' {
 }
 
 Invoke-DevcellStep 'activate nixhome via home-manager' {
-    # The official standalone-flake activation
-    # (nix-community.github.io/home-manager/installation.html), with three
-    # details that each cost a multi-hour run:
-    #  - LOGIN shell (-lc): NixOS-WSL puts nix on PATH via /etc/profile only,
-    #    so a bare `wsl -- nix` is exit 127 on a working distro.
-    #  - the experimental features travel as REPEATED flags, never as one
-    #    quoted pair: inner double quotes do not survive the
-    #    PowerShell -> wsl.exe -> sh -lc chain and nix then reports "no
-    #    subcommand specified" (run 20260802T112212). Relying on an ambient
-    #    nix.conf failed earlier too (run 20260802T095306).
-    #  - the runner is pinned to the home-manager branch matching this NixOS.
-    #  - the output is truncated through a FILE, never a pipe: `... | tail -40`
-    #    makes $? the status of tail, which always succeeds, so a failed
-    #    activation reported "ok" and only surfaced 36s later as
-    #    `home-manager --version` exit 127 (run 20260803T231223). /bin/sh here
-    #    is not guaranteed to support pipefail, so capture rc explicitly.
-    $activate = 'set -e; cd ' + $repo + '; ' +
-        'ARCH_SUFFIX=$([ "$(uname -m)" = "aarch64" ] && echo "-aarch64" || echo ""); ' +
-        'nix --extra-experimental-features nix-command --extra-experimental-features flakes ' +
-        'run home-manager/release-26.05 -- switch -b backup ' +
-        '--flake ./nixhome#wsl-base$ARCH_SUFFIX > /tmp/devcell-hm-activate.log 2>&1; ' +
-        'rc=$?; tail -40 /tmp/devcell-hm-activate.log; exit $rc'
-    (& wsl.exe -d $Distro -- /bin/sh -lc $activate 2>&1 | Out-String).Trim()
-    Assert-DevcellExitCode -What 'home-manager switch'
+    # The whole activation — nix-daemon ensure, nixhome extraction to ext4,
+    # switch — runs as ONE wsl.exe call through the shipped helper. Split any
+    # of it out and it breaks: WSL kills background processes per session, so
+    # a daemon from an earlier call is dead (WSL#13236); and nix cannot read
+    # the share directly — it ingests the repo as a dirty git tree and dies
+    # on readlink for the share's symlinks (run 20260804). The nixhome
+    # tarball ships on the control volume beside this script.
+    $volLetter = (Split-Path (Split-Path $PSScriptRoot) -Qualifier) -replace ':$',''
+    $volMount  = "/mnt/$($volLetter.ToLower())"
+    wsl.exe -d $Distro -u root -- /bin/sh -c "mkdir -p $volMount; mountpoint -q $volMount || mount -t drvfs ${volLetter}: $volMount"
+    Assert-DevcellExitCode -What "mounting the control volume at $volMount"
+    $helper  = "$volMount/devcell/helpers/activate-home-manager.sh"
+    $tarball = "$volMount/devcell/nixhome.tgz"
+    (& wsl.exe -d $Distro -u root -- /bin/sh -c "sh '$helper' '$User' '$tarball'" 2>&1 | Out-String).Trim()
+    Assert-DevcellExitCode -What 'home-manager switch (via activation helper)'
 }
 
 Invoke-DevcellStep 'prove home-manager is on the activated profile' {

@@ -17,10 +17,10 @@ import (
 func attachGuestLogVolume(t *testing.T, workDir, resultsDir string, logNames []string) string {
 	t.Helper()
 	img := filepath.Join(workDir, "guest-logs.img")
-	payload, payloadErr := GuestPayload()
-	require.NoError(t, payloadErr, "the guest tree must embed")
+	payload, payloadErr := GuestPayloadWithNixhome(filepath.Join(repoRoot(t), "nixhome"))
+	require.NoError(t, payloadErr, "the guest tree must embed and nixhome must pack")
 	require.NoError(t, BuildControlVolume(img, payload),
-		"the control volume carries the guest module and stage scripts in, logs out")
+		"the control volume carries the guest module, stage scripts and nixhome.tgz in, logs out")
 	t.Cleanup(func() {
 		for _, l := range CollectVolumeLogs(img, logNames) {
 			if l.Err != nil {

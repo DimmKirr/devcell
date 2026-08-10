@@ -1,10 +1,15 @@
 package qemu
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"embed"
 	"fmt"
 	"io/fs"
+	"os"
 	"path"
+	"path/filepath"
 	"strings"
 )
 
@@ -53,5 +58,87 @@ func GuestPayload() (map[string][]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("collecting guest payload: %w", err)
 	}
+	return payload, nil
+}
+
+// NixhomeTarball packs a nixhome directory for control-volume delivery, all
+// contents under a top-level "nixhome/" so extraction recreates the layout.
+//
+// A tarball, not a live reference: activating straight from the project
+// share fails twice over — nix ingests the surrounding repo as a dirty
+// git+file input, and the share's symlinks (36 in the icewm theme alone) die
+// on readlink across virtiofs+drvfs (run 20260804). Inside a tarball the
+// symlinks are just entries; extracted onto the distro's ext4 they work.
+func NixhomeTarball(dir string) ([]byte, error) {
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+
+	err := filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(dir, p)
+		if err != nil {
+			return err
+		}
+		name := path.Join("nixhome", filepath.ToSlash(rel))
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		var link string
+		if info.Mode()&os.ModeSymlink != 0 {
+			if link, err = os.Readlink(p); err != nil {
+				return err
+			}
+		}
+		hdr, err := tar.FileInfoHeader(info, link)
+		if err != nil {
+			return err
+		}
+		hdr.Name = name
+		if d.IsDir() {
+			hdr.Name += "/"
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			return err
+		}
+		if info.Mode().IsRegular() {
+			data, err := os.ReadFile(p)
+			if err != nil {
+				return err
+			}
+			if _, err := tw.Write(data); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("packing nixhome from %s: %w", dir, err)
+	}
+	if err := tw.Close(); err != nil {
+		return nil, err
+	}
+	if err := gz.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// GuestPayloadWithNixhome is GuestPayload plus the nixhome tarball the
+// home-manager stage extracts inside the distro — one control volume carries
+// both the scripts and the config they activate.
+func GuestPayloadWithNixhome(nixhomeDir string) (map[string][]byte, error) {
+	payload, err := GuestPayload()
+	if err != nil {
+		return nil, err
+	}
+	tgz, err := NixhomeTarball(nixhomeDir)
+	if err != nil {
+		return nil, err
+	}
+	payload[GuestControlDir+"/nixhome.tgz"] = tgz
 	return payload, nil
 }

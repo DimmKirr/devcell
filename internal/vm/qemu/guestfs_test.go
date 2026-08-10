@@ -1,6 +1,12 @@
 package qemu
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -98,6 +104,21 @@ func TestGuestPayload_CarriesNixDaemonHelper(t *testing.T) {
 	assert.Contains(t, sh, "TARGET_USER", "the helper accepts the WSL user as an argument")
 }
 
+// The user declaration must override NixOS-WSL's stock configuration.nix,
+// which pins wsl.defaultUser = "nixos" at normal priority. Without mkForce
+// nixos-rebuild dies on "conflicting definition values" (run 20260804,
+// first-ever E2E of this stage) and the distro never adopts the host user.
+func TestAdoptUserStage_ForcesDefaultUserOverride(t *testing.T) {
+	src, err := GuestFile("stages/wsl-adopt-user.ps1")
+	require.NoError(t, err)
+	s := string(src)
+
+	assert.Contains(t, s, "lib.mkForce",
+		"wsl.defaultUser must be forced past the stock config's own definition")
+	assert.Regexp(t, `wsl\.defaultUser\s*=\s*lib\.mkForce`, s,
+		"the force must apply to wsl.defaultUser specifically")
+}
+
 // nix-verify references the helper by its control volume path, not inline.
 func TestNixVerifyStage_UsesControlVolumeHelper(t *testing.T) {
 	src, err := GuestFile("stages/nix-verify.ps1")
@@ -149,16 +170,22 @@ func TestHomeManagerStage_KeepsTheHardWonInvocationDetails(t *testing.T) {
 	require.NoError(t, err)
 	s := string(src)
 
+	// The nix invocation now lives in the activation helper (one wsl.exe
+	// session with the daemon), so the flag invariants are asserted THERE.
+	helper, err := GuestFile("helpers/activate-home-manager.sh")
+	require.NoError(t, err)
+	h := string(helper)
+
 	// Run 20260802T112212: inner double quotes do not survive
 	// PowerShell -> wsl.exe -> sh -lc, and nix then reports "no subcommand
 	// specified". The features must travel as REPEATED flags.
-	assert.Equal(t, 2, strings.Count(s, "--extra-experimental-features"),
+	assert.Equal(t, 2, strings.Count(h, "--extra-experimental-features"),
 		"nix-command and flakes must be two separate flags, never one quoted pair")
+	assert.Contains(t, h, "release-26.05",
+		"the home-manager runner is pinned to the branch matching this NixOS")
 	// Run 20260802: nix is on PATH only via /etc/profile in NixOS-WSL, so a
 	// bare `wsl -- nix` exits 127 on a perfectly working distro.
 	assert.Contains(t, s, "/bin/sh -lc", "every nix call needs a login shell")
-	assert.Contains(t, s, "release-26.05",
-		"the home-manager runner is pinned to the branch matching this NixOS")
 	// The repo path must be derived from the $User PARAMETER, never baked in:
 	// the whole point of the file-backed stage is that the distro user is
 	// passed, not interpolated by Go.
@@ -200,4 +227,136 @@ func TestNixOSImportStage_SkipsRedundantBootWhenAlreadyRegistered(t *testing.T) 
 	assert.Less(t, skipAt, proveAt,
 		"the short-circuit must come before the verification boot")
 	assert.Contains(t, s, NoChangeMarker, "a no-op import must not cost a reboot either")
+}
+
+// --- Stage 13/14 fixes proven interactively on 20260804-05 (first-ever E2E) ---
+
+// The home-manager activation and the nix-daemon MUST share one wsl.exe
+// process tree: WSL kills background processes when the session ends, so the
+// daemon nix-verify started is dead by the time this stage runs. The helper
+// carries the whole sequence — daemon ensure, nixhome extraction to ext4,
+// switch as the distro user.
+func TestGuestPayload_CarriesHomeManagerActivationHelper(t *testing.T) {
+	payload, err := GuestPayload()
+	require.NoError(t, err)
+
+	const key = "/devcell/helpers/activate-home-manager.sh"
+	require.Contains(t, payload, key,
+		"the activation helper must ship on the control volume")
+	sh := string(payload[key])
+	assert.Contains(t, sh, "nix-daemon", "the helper ensures the daemon in-session")
+	assert.Contains(t, sh, "tar -xzf",
+		"nixhome must be extracted to ext4 — symlinks in the virtiofs+drvfs share do not readlink (run 20260804)")
+	assert.Contains(t, sh, "home-manager/release-26.05", "the pinned runner branch")
+	assert.Contains(t, sh, "switch -b backup", "the standalone-flake activation form")
+	assert.Contains(t, sh, "wsl-base", "the WSL flake attribute family")
+}
+
+// The stage must hand the work to the helper in ONE wsl.exe call, and feed it
+// the nixhome tarball from the control volume — never the share path, which
+// nix rejects (dirty git tree ingestion + readlink failures, run 20260804).
+func TestHomeManagerStage_ActivatesViaControlVolumeHelper(t *testing.T) {
+	src, err := GuestFile("stages/home-manager.ps1")
+	require.NoError(t, err)
+	s := string(src)
+
+	assert.Contains(t, s, "activate-home-manager.sh",
+		"activation must go through the shipped helper (daemon + switch, one session)")
+	assert.Contains(t, s, "nixhome.tgz",
+		"nixhome travels as a tarball; activating from the share path fails on symlinks")
+	assert.NotContains(t, s, "--flake ./nixhome",
+		"the share path must never be the flake source")
+}
+
+// NixhomeTarball is what puts nixhome.tgz on the control volume. Symlinks
+// are the reason the tarball exists at all — flattening them would silently
+// reintroduce the bug class the tarball solves.
+func TestNixhomeTarball_PreservesSymlinks(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "icons"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "flake.nix"), []byte("{}"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "icons", "a.xpm"), []byte("x"), 0o644))
+	require.NoError(t, os.Symlink("a.xpm", filepath.Join(dir, "icons", "b.xpm")))
+
+	data, err := NixhomeTarball(dir)
+	require.NoError(t, err)
+
+	gz, err := gzip.NewReader(bytes.NewReader(data))
+	require.NoError(t, err)
+	tr := tar.NewReader(gz)
+	entries := map[string]byte{}
+	links := map[string]string{}
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		entries[hdr.Name] = hdr.Typeflag
+		if hdr.Typeflag == tar.TypeSymlink {
+			links[hdr.Name] = hdr.Linkname
+		}
+	}
+	assert.Contains(t, entries, "nixhome/flake.nix",
+		"contents must sit under nixhome/ so extraction recreates the expected layout")
+	require.Contains(t, links, "nixhome/icons/b.xpm", "the symlink must survive as a symlink")
+	assert.Equal(t, "a.xpm", links["nixhome/icons/b.xpm"], "with its original target")
+}
+
+// nixos-rebuild as root uses the LOCAL store by default, and this image's
+// local-mode temproot handling is broken (ENOENT on
+// /nix/var/nix/temproots/<pid> across three runs, 20260805). Every
+// daemon-mediated operation worked, so the rebuild must run with
+// NIX_REMOTE=daemon — and the daemon ensured in the same session.
+func TestGuestPayload_CarriesRebuildBootHelper(t *testing.T) {
+	payload, err := GuestPayload()
+	require.NoError(t, err)
+
+	const key = "/devcell/helpers/nixos-rebuild-boot.sh"
+	require.Contains(t, payload, key,
+		"the rebuild helper must ship on the control volume")
+	sh := string(payload[key])
+	assert.Contains(t, sh, "NIX_REMOTE=daemon",
+		"root's local-mode store is broken in this image; the daemon path is the proven one")
+	assert.Contains(t, sh, "temproots",
+		"the image ships without /nix/var/nix/temproots")
+	assert.Contains(t, sh, "nix-daemon", "the daemon must be ensured in this same session")
+	assert.Contains(t, sh, "nixos-rebuild boot",
+		"boot, never switch — the upstream change-username procedure is explicit")
+}
+
+// The adopt stage's rebuild must go through the helper, and the home
+// ownership fix must wait for the cycle: the new user does not exist until
+// the new generation boots, so a pre-cycle chown dies with "invalid spec"
+// (run 20260805) and the assert would sink the stage.
+func TestAdoptUserStage_RebuildViaHelperAndChownAfterCycle(t *testing.T) {
+	src, err := GuestFile("stages/wsl-adopt-user.ps1")
+	require.NoError(t, err)
+	s := string(src)
+
+	assert.Contains(t, s, "nixos-rebuild-boot.sh",
+		"the rebuild needs the daemon + NIX_REMOTE=daemon wrapper")
+
+	cycleAt := strings.Index(s, "wsl.exe --terminate")
+	chownAt := strings.Index(s, "chown -R")
+	require.Positive(t, cycleAt, "the stage must cycle the distro")
+	require.Positive(t, chownAt, "the stage must own the carried home to the new user")
+	assert.Less(t, cycleAt, chownAt,
+		"chown must follow the cycle — the user only exists once the new generation boots")
+}
+
+// The tarball must ride the same control volume as the stage that consumes
+// it — a payload without it means stage 13 fails an hour into a build.
+func TestGuestPayloadWithNixhome_CarriesTheTarball(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "flake.nix"), []byte("{}"), 0o644))
+
+	payload, err := GuestPayloadWithNixhome(dir)
+	require.NoError(t, err)
+
+	require.Contains(t, payload, "/devcell/nixhome.tgz",
+		"nixhome.tgz must land beside the stage scripts")
+	assert.Contains(t, payload, "/devcell/helpers/activate-home-manager.sh",
+		"the base guest tree must still be present")
+	assert.NotEmpty(t, payload["/devcell/nixhome.tgz"])
 }
