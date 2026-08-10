@@ -485,10 +485,16 @@ in
       executable = true;
       text = ''
         #!/bin/bash
-        CELL_ID="''${DEVCELL_CELL_NAME:-$(hostname)}"
-        sed "s/{{CELL_ID}}/$CELL_ID/g" "$HOME/.icewm/wallpaper-template.svg" \
-          | rsvg-convert -w 3840 -h 2160 -o "$HOME/.icewm/wallpaper-live.png"
-        feh --bg-fill "$HOME/.icewm/wallpaper-live.png" 2>/dev/null &
+        # Only runs under icewm-session — bare `icewm` (what 50-gui.sh starts)
+        # never executes this; 50-gui.sh renders the same wallpaper itself.
+        # The privcfg dir is a read-only nix-store symlink farm → render to /tmp.
+        CFG="''${ICEWM_PRIVCFG:-$HOME/.icewm}"
+        CELL_ID="''${APP_NAME:-''${HOSTNAME:-}}"
+        if [ -f "$CFG/wallpaper-template.svg" ]; then
+          sed "s|{{CELL_ID}}|$CELL_ID|g" "$CFG/wallpaper-template.svg" \
+            | rsvg-convert -w 3840 -h 2160 -o /tmp/wallpaper-live.png \
+            && feh --bg-fill /tmp/wallpaper-live.png 2>/dev/null &
+        fi
       '';
     };
   };

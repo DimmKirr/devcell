@@ -258,9 +258,22 @@ HIDPI
     ;;
 
   icewm)
-    # Wallpaper — feh before WM starts (icewm startup script also sets it)
-    if [ -f "$DEVCELL_HOME/.icewm/wallpaper.png" ]; then
-        gosu "$USER" $_NIX_ENV feh --bg-fill "$DEVCELL_HOME/.icewm/wallpaper.png" 2>/dev/null || true
+    # Wallpaper with cell-ID watermark (CELL-415). Rendered here, not in the
+    # icewm startup script: bare `icewm` (unlike icewm-session) never runs
+    # startup, and $DEVCELL_HOME/.icewm is a read-only nix-store symlink farm.
+    ICEWM_WALLPAPER="$DEVCELL_HOME/.icewm/wallpaper.png"
+    CELL_ID="${APP_NAME:-${HOSTNAME:-}}"
+    # Render at the framebuffer's own size — a fixed 4K render + feh --bg-fill
+    # crops the sides on non-16:9 screens, cutting off the corner label.
+    RES_WH="${RESOLUTION%x*}"
+    if [ -f "$DEVCELL_HOME/.icewm/wallpaper-template.svg" ]; then
+        if sed "s|{{CELL_ID}}|${CELL_ID}|g" "$DEVCELL_HOME/.icewm/wallpaper-template.svg" \
+            | gosu "$USER" $_NIX_ENV rsvg-convert -w "${RES_WH%x*}" -h "${RES_WH#*x}" -o /tmp/wallpaper-live.png 2>/dev/null; then
+            ICEWM_WALLPAPER=/tmp/wallpaper-live.png
+        fi
+    fi
+    if [ -f "$ICEWM_WALLPAPER" ]; then
+        gosu "$USER" $_NIX_ENV feh --bg-fill "$ICEWM_WALLPAPER" 2>/dev/null || true
     else
         gosu "$USER" $_NIX_ENV xsetroot -solid '#1e1e2e' 2>/dev/null || true
     fi
@@ -312,14 +325,14 @@ HIDPI
     sleep 0.2
     setsid gosu "$USER" $_NIX_ENV env \
         ICEWM_PRIVCFG="$DEVCELL_HOME/.icewm" \
-        icewm --preferences="$ICEWM_PREFS" \
+        icewm --config="$ICEWM_PREFS" \
         < /dev/null > /tmp/icewm.log 2>&1 &
     for i in $(seq 1 20); do
         pgrep -u "$USER" icewm >/dev/null 2>&1 && break
         sleep 0.05
     done
-    if [ -f "$DEVCELL_HOME/.icewm/wallpaper.png" ]; then
-        gosu "$USER" $_NIX_ENV feh --bg-fill "$DEVCELL_HOME/.icewm/wallpaper.png" 2>/dev/null || true
+    if [ -f "$ICEWM_WALLPAPER" ]; then
+        gosu "$USER" $_NIX_ENV feh --bg-fill "$ICEWM_WALLPAPER" 2>/dev/null || true
     fi
     ;;
 
