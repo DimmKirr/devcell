@@ -275,6 +275,7 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 	// Core env vars
 	e := func(k, v string) { argv = append(argv, "-e", k+"="+v) }
 	e("APP_NAME", c.AppName)
+	e("DEVCELL_CELL_NAME", c.CellName)
 	e("HOST_USER", c.HostUser)
 	e("HOME", "/home/"+c.HostUser)
 	e("IS_SANDBOX", "1")

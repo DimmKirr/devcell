@@ -200,6 +200,22 @@ func TestArgv_MandatoryEnvVars(t *testing.T) {
 	}
 }
 
+func TestArgv_CellNameEnvVar(t *testing.T) {
+	argv := buildArgv(t)
+	if !hasArg(argv, "DEVCELL_CELL_NAME=main") {
+		t.Errorf("missing -e DEVCELL_CELL_NAME=main in argv: %v", argv)
+	}
+}
+
+func TestArgv_CellNameEnvVar_Explicit(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.Config.CellName = "bunkhouse"
+	})
+	if !hasArg(argv, "DEVCELL_CELL_NAME=bunkhouse") {
+		t.Errorf("missing -e DEVCELL_CELL_NAME=bunkhouse in argv: %v", argv)
+	}
+}
+
 func TestArgv_UserAndGroupAdd(t *testing.T) {
 	argv := buildArgv(t)
 	if !hasConsecutive(argv, "--user", "0") {
