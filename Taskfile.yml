@@ -785,6 +785,819 @@ tasks:
         echo ""
         echo "saved to: $LOG"
 
+  # ── QEMU Windows debug VM (boot an existing debug disk) ─────────────
+  debug:windows:start:
+    desc: "Boot the Windows.utm disk with qemu-system-aarch64 — same hardware as UTM (see .context/UTMCommand.txt), macOS-native hvf, vmnet-shared network. Vars: DISK, EFI_VARS, SMP, MEM, ACCEL (hvf|tcg)"
+    silent: true
+    vars:
+      # The UTM bundle's own disk, booted in place: Windows state stays
+      # continuous whether the VM last ran under UTM or under this task.
+      DISK: '{{.DISK | default (printf "%s/test/testdata/Windows.utm/Data/D76FB0BC-D7CC-4481-A6B6-492BEB4D834B.qcow2" .TASKFILE_DIR)}}'
+      # UEFI variable store from the same bundle — boot entries and
+      # firmware state the machine was installed with.
+      EFI_VARS: '{{.EFI_VARS | default (printf "%s/test/testdata/Windows.utm/Data/efi_vars.fd" .TASKFILE_DIR)}}'
+      # UTM profile: cpus=4,sockets=1,cores=4,threads=1 and 8 GiB.
+      SMP: '{{.SMP | default "4"}}'
+      MEM: '{{.MEM | default "8192"}}'
+      # hvf = macOS-native virtualization, near-native speed; no guest EL2
+      # on stock QEMU <= 11.0, so Hyper-V/WSL2 cannot start (QEMU 11.1+ on
+      # M3+/macOS 15+ lifts this). tcg = full emulation: slow, but the EL3
+      # secure machine where the whole WSL2 chain works.
+      ACCEL: '{{.ACCEL | default (eq OS "darwin" | ternary "hvf" "tcg")}}'
+      # NESTED=0 disables guest EL2 on hvf even when QEMU supports it —
+      # the proven plain-virt boot (with TPM), at the cost of no WSL2.
+      NESTED: '{{.NESTED | default "1"}}'
+      # SECURE=0 boots qemu's plain EDK2 instead of UTM's Secure-Boot-
+      # enforcing build. Windows runs fine without Secure Boot; use this
+      # when the firmware refuses to launch it (signature/SB errors).
+      SECURE: '{{.SECURE | default "1"}}'
+      # tcg only: kernel-loaded EL3 firmware (hvf boots EDK2 pflash).
+      FIRMWARE: '{{.FIRMWARE | default (printf "%s/.devcell/cache/qemu/QEMU_EFI.kernel.fd" .HOME)}}'
+      # VNC console on 127.0.0.1:5907 (open with Screen Sharing) — the only
+      # way to see pre-OS screens like BitLocker prompts. VNC=0 disables.
+      VNC: '{{.VNC | default "1"}}'
+      # Directory shared into the guest over SMB (drive Z:). No virtiofsd
+      # exists on macOS and Windows speaks no 9p, so the share is served
+      # by a disposable samba container on the host (needs docker).
+      SHARE_DIR: '{{.SHARE_DIR | default .USER_WORKING_DIR}}'
+    preconditions:
+      - sh: command -v qemu-system-aarch64 >/dev/null
+        msg: qemu-system-aarch64 not found on PATH
+      - sh: test -f "{{.DISK}}"
+        msg: "no disk at {{.DISK}} — copy the Windows.utm bundle into test/testdata or set DISK="
+    cmds:
+      - |
+        set -euo pipefail
+        # All runtime state (pid, logs, sockets) lives in the repo-local
+        # .tmp/ (gitignored).
+        D="{{.TASKFILE_DIR}}/.tmp"; mkdir -p "$D"
+        PIDFILE="$D/qemu-windows.pid"
+
+        # vmnet-shared needs the com.apple.vm.networking entitlement, which
+        # a plain qemu binary lacks — root is the workaround UTM does not
+        # need (its app bundle is entitled).
+        SUDO=""
+        [ "$(uname)" = "Darwin" ] && [ "$(id -u)" != "0" ] && SUDO="sudo"
+
+        # Simple pid lock. NOTE: 'kill'/'ps' must go through env/command in
+        # these tasks — task's embedded shell (mvdan/sh) has a job-control
+        # kill builtin that silently no-ops on external pids.
+        if [ -f "$PIDFILE" ] && ps -p "$(cat "$PIDFILE")" >/dev/null 2>&1; then
+          echo "already running (pid $(cat "$PIDFILE")) — task debug:windows:stop first"
+          exit 1
+        fi
+        rm -f "$PIDFILE"
+
+        # The disk's own write lock catches everything else (UTM itself,
+        # a hand-launched qemu): fail with a pointer instead of reaping.
+        if ! qemu-img info "{{.DISK}}" >/dev/null 2>&1; then
+          echo "ERROR: {{.DISK}} is write-locked — is the VM running in UTM or another qemu?"
+          echo "       close it there (or: ps aux | grep qemu-system) and retry"
+          exit 1
+        fi
+
+        # Hardware mirrors .context/UTMCommand.txt: -machine virt -cpu host,
+        # nvme with the bundle's serial, virtio-net with UTM's MAC on
+        # vmnet-shared (same network, so the guest keeps its 192.168.64.x
+        # DHCP lease). The SPICE/audio/usb-redir/swtpm plumbing is UTM
+        # frontend glue and intentionally dropped.
+        # QEMU 11.1+ enforces the NVMe spec's 20-char serial limit (older
+        # builds accepted the full bundle UUID). Windows identifies the
+        # boot volume by GPT, not disk serial, so truncation is safe.
+        serial=$(basename "{{.DISK}}" .qcow2 | cut -c1-20)
+        nested=0
+        if [ "{{.ACCEL}}" = "hvf" ]; then
+          machine="virt"; cpu=host; accel=hvf
+          # QEMU 11.1+ (rc builds report 11.0.9x) can expose EL2 to hvf
+          # guests on M3+/macOS 15+ — the capability Hyper-V/WSL2 needs.
+          # Older QEMU rejects virtualization=on under hvf, so gate on
+          # version and fall back to the plain machine silently.
+          qv=$(qemu-system-aarch64 --version | sed -n 's/.*version \([0-9.]*\).*/\1/p')
+          [ "{{.NESTED}}" = "0" ] && qv=disabled
+          case "$qv" in
+            11.0.9*|11.[1-9]*|1[2-9].*|[2-9][0-9].*)
+              # gic-version=3: EL2 guests need the GICv3's interrupt
+              # virtualization (the tcg WSL2 path uses it too); the virt
+              # machine's default GICv2 hangs the Windows bootloader here.
+              machine="virt,virtualization=on,gic-version=3"; nested=1
+              # fake-el2=on: our patched hvf emulates VHE in the sysreg
+              # trap handler — Apple's nested API is nVHE-only, and
+              # Windows' hypervisor refuses to launch without VHE (Event
+              # 43 'EL2 not present'). Both flags are required together:
+              # virtualization=on exposes EL2, fake-el2=on makes it VHE.
+              # Gate on the property existing (scan the binary — there is
+              # no CLI help for accel sub-options, and a live probe would
+              # boot the VM) so a stock QEMU still starts, just VHE-less.
+              if grep -aq fake-el2 "$(command -v qemu-system-aarch64)"; then
+                accel="hvf,fake-el2=on"
+                echo "fake-el2=on: VHE emulation active — Windows Hyper-V/WSL2 can launch"
+              else
+                echo "note: this qemu has no fake-el2 — Windows boots, but Hyper-V/WSL2 won't start (VHE missing)"
+              fi
+              # Known issue in the hvf nested-virt series: EDK2 hangs
+              # forever at 'Start boot option' under EL2; the documented
+              # workaround is the zero-delay boot menu (qemu-devel,
+              # 'HVF: Add support for platform vGIC and nested virt').
+              set -- "$@" -boot menu=on,splash-time=0
+              echo "QEMU $qv: nested virtualization (EL2) enabled — Hyper-V/WSL2 can start"
+              ;;
+          esac
+          # UTM's EDK2 build drives virtio-gpu (its virtio-ramfb-gl is a
+          # virtio-gpu variant), NOT stock ramfb — with ramfb the console
+          # stays "guest has not initialized the display". The UTM guest
+          # tools already installed Windows' virtio-gpu driver.
+          dispdev=virtio-gpu-pci
+          # EDK2 code image: UTM's secure-code build if cached (matches the
+          # efi_vars layout), else the one qemu ships.
+          CODE_FD="$HOME/Library/Containers/com.utmapp.UTM/Data/Library/Caches/qemu/edk2-aarch64-secure-code.fd"
+          [ "{{.SECURE}}" = "0" ] && CODE_FD=""
+          [ -f "$CODE_FD" ] || CODE_FD="$(dirname "$(command -v qemu-system-aarch64)")/../share/qemu/edk2-aarch64-code.fd"
+          if [ ! -f "$CODE_FD" ] || [ ! -f "{{.EFI_VARS}}" ]; then
+            echo "ERROR: need EDK2 code image ($CODE_FD) and vars ({{.EFI_VARS}})"
+            exit 1
+          fi
+          set -- "$@" \
+            -drive if=pflash,format=raw,unit=0,file="$CODE_FD",file.locking=off,readonly=on \
+            -drive if=pflash,unit=1,file="{{.EFI_VARS}}"
+        else
+          # EL3 secure machine, kernel-loaded firmware — the only boot
+          # environment where Windows' hypervisor (and WSL2) runs today.
+          machine="virt,virtualization=on,gic-version=3,secure=on"
+          cpu=neoverse-n1; accel=tcg,thread=multi
+          # Our kernel-loaded EL3 firmware drives stock ramfb.
+          dispdev=ramfb
+          FW="{{.FIRMWARE}}"
+          [ -f "$FW" ] || FW="${DEVCELL_QEMU_EFI_KERNEL:-}"
+          if [ -z "$FW" ] || [ ! -f "$FW" ]; then FW="{{.TASKFILE_DIR}}/test/testdata/QEMU_EFI.kernel.fd"; fi
+          if [ ! -f "$FW" ]; then
+            echo "ERROR: no kernel-bootable firmware (FIRMWARE / \$DEVCELL_QEMU_EFI_KERNEL / testdata)"
+            exit 1
+          fi
+          set -- -kernel "$FW"
+        fi
+
+        # TPM: Windows was installed with one under UTM (BitLocker seals
+        # against it). swtpm replays the bundle's own tpmdata, so the guest
+        # sees the very TPM it has always had. swtpm comes from the dev
+        # shell (flake.nix) or `nix profile install nixpkgs#swtpm`.
+        TPMDATA="$(dirname "{{.DISK}}")/tpmdata"
+        if [ "$nested" = "1" ]; then
+          # QEMU 11.1-rc rejects the TPM's MMIO mapping under EL2
+          # (HV_BAD_ARGUMENT in hvf-all.c). This guest's BitLocker has
+          # Protection Off (clear key), so it boots fine without one.
+          echo "note: skipping TPM — tpm-tis-device is incompatible with nested virt in this QEMU"
+        elif command -v swtpm >/dev/null 2>&1 && [ -f "$TPMDATA" ]; then
+          rm -f "$D/swtpm.sock"
+          # terminate: swtpm exits by itself when qemu disconnects.
+          swtpm socket --tpm2 \
+            --tpmstate backend-uri=file://"$TPMDATA" \
+            --ctrl type=unixio,path="$D/swtpm.sock",terminate \
+            --daemon --pid file="$D/swtpm.pid"
+          for _ in $(seq 1 25); do [ -S "$D/swtpm.sock" ] && break; sleep 0.2; done
+          # UTM's fork exposes the TPM as CRB; stock qemu on ARM has TIS.
+          # Windows drives both.
+          tpmdev=tpm-tis-device
+          qemu-system-aarch64 -device help 2>/dev/null | grep -q tpm-crb-device && tpmdev=tpm-crb-device
+          set -- "$@" \
+            -chardev socket,id=chrtpm0,path="$D/swtpm.sock" \
+            -tpmdev emulator,id=tpm0,chardev=chrtpm0 \
+            -device "$tpmdev",tpmdev=tpm0
+        else
+          echo "WARNING: no swtpm or no $TPMDATA — booting without TPM (BitLocker may demand a recovery key)"
+        fi
+
+        # File share: a samba container on the host serves SHARE_DIR
+        # read-write; the guest maps it with its native SMB client (the
+        # net use line is printed at the end). Recreated every start so
+        # the shared directory always matches SHARE_DIR.
+        SMB=""
+        if command -v docker >/dev/null 2>&1; then
+          docker rm -f devcell-smb >/dev/null 2>&1 || true
+          if docker run -d --name devcell-smb --restart unless-stopped \
+               -p 445:445 -e USER=dmitry -e PASS=rdp -e NAME=devcell \
+               -v "{{.SHARE_DIR}}:/storage" dockurr/samba >/dev/null 2>&1; then
+            SMB=1
+          else
+            echo "WARNING: samba container failed to start — no Z: share this boot"
+          fi
+        else
+          echo "WARNING: docker not found — no SMB share for {{.SHARE_DIR}}"
+        fi
+
+        # Logs and pidfile must be user-owned BEFORE the sudo'd qemu opens
+        # them — root only writes into the existing files, so ownership
+        # stays with the user (the sockets can't be pre-created; those get
+        # chmod'd after launch).
+        $SUDO rm -f "$D/serial.log" "$D/qemu.log" "$D/qmp.sock" "$D/qga.sock"
+        touch "$D/serial.log" "$D/qemu.log" "$PIDFILE"
+
+        # Debug breadcrumb (H1: was fake-el2 actually applied?): the exact
+        # binary, its version, and the resolved machine/accel/extra argv,
+        # readable from the devcell container via the bind-mounted .tmp/.
+        {
+          echo "date:    $(date)"
+          echo "binary:  $(command -v qemu-system-aarch64)"
+          echo "version: $(qemu-system-aarch64 --version | head -1)"
+          echo "machine: $machine"
+          echo "accel:   $accel"
+          echo "nested:  $nested"
+          echo "extra:   $*"
+        } > "$D/launch-info.txt"
+
+        [ -n "$SUDO" ] && echo "vmnet-shared networking needs root: sudo will prompt"
+        if ! $SUDO qemu-system-aarch64 "$@" \
+          -machine "$machine" -cpu "$cpu" -accel "$accel" \
+          -smp cpus={{.SMP}},sockets=1,cores={{.SMP}},threads=1 -m {{.MEM}} \
+          -drive if=none,media=disk,id=disk0,file="{{.DISK}}",discard=unmap,detect-zeroes=unmap \
+          -device nvme,drive=disk0,serial="$serial",bootindex=1 \
+          -device virtio-net-pci,mac=72:5B:B2:09:74:68,netdev=net0 \
+          -netdev vmnet-shared,id=net0 \
+          -device virtio-rng-pci \
+          -device virtio-serial \
+          -chardev socket,id=qga0,path="$D/qga.sock",server=on,wait=off \
+          -device virtserialport,chardev=qga0,name=org.qemu.guest_agent.0 \
+          -device nec-usb-xhci,id=usb-bus \
+          -device usb-kbd,bus=usb-bus.0 -device usb-tablet,bus=usb-bus.0 \
+          {{if ne .VNC "0"}}-object secret,id=vncpw,data=vnc -vnc 127.0.0.1:7,password-secret=vncpw{{else}}-display none{{end}} -device "$dispdev" \
+          -rtc base=localtime \
+          -serial file:"$D/serial.log" \
+          -D "$D/qemu.log" \
+          -qmp unix:"$D/qmp.sock",server,nowait \
+          -name devcell-debug-windows \
+          -daemonize -pidfile "$PIDFILE"; then
+          # Post-daemonize errors go to -D only; replay them here.
+          echo "ERROR: qemu failed to start — last lines of $D/qemu.log:"
+          tail -5 "$D/qemu.log" 2>/dev/null | sed 's/^/  /'
+          exit 1
+        fi
+
+        # The sudo'd qemu writes the pidfile and control sockets as root;
+        # open them up so the pid lock, IP discovery and the stop task's
+        # graceful shutdown work unprivileged.
+        [ -n "$SUDO" ] && $SUDO chmod 644 "$PIDFILE" && $SUDO chmod 666 "$D/qga.sock" "$D/qmp.sock" 2>/dev/null || true
+
+        echo "started (pid $(cat "$PIDFILE")), disk {{.DISK}}, accel {{.ACCEL}}"
+        [ "{{.ACCEL}}" = "tcg" ] && echo "TCG boot is slow — expect 10-25 min until the guest answers."
+
+        # Block until the guest is genuinely reachable, then report and
+        # exit — the VM itself stays daemonized. Order: VNC console (up in
+        # seconds — early eyes on firmware/BitLocker screens), then the
+        # DHCP lease, then SSH answering. Logs go to their files only (the
+        # serial line is a VT100 UI, not readable log output).
+        slow=1; [ "{{.ACCEL}}" = "tcg" ] && slow=20
+
+        {{if ne .VNC "0"}}
+        printf "1/4 waiting for the VNC console..."
+        for _ in $(seq 1 60); do nc -z -G 2 127.0.0.1 5907 2>/dev/null && break; sleep 1; done
+        echo " up — open vnc://127.0.0.1:5907 (password: vnc)"
+        {{end}}
+
+        # IP discovery. Authoritative source: qemu-guest-agent inside
+        # Windows (the UTM guest tools run it) answering over the
+        # virtio-serial channel. Fallback: bootpd's lease file — but it
+        # keeps STALE leases for our MAC from earlier boots on other vmnet
+        # subnets (seen: 192.168.64.43 recorded while the guest actually
+        # got 192.168.2.2), so lease candidates only count when the live
+        # ARP entry for that IP shows our MAC.
+        MAC_LEASE="72:5b:b2:9:74:68"
+        GUEST_IP=""
+        # macOS nc -U never surfaces responses from qemu's unix sockets
+        # (both QMP and qga probes came back empty on live sockets, run
+        # 20260805) — talk to them with perl instead.
+        qmsg() {
+          perl -MIO::Socket::UNIX -e '
+            my ($path, @msgs) = @ARGV;
+            my $s = IO::Socket::UNIX->new(Peer => $path) or exit 1;
+            my $out = "";
+            eval {
+              local $SIG{ALRM} = sub { die };
+              alarm 4;
+              for my $m (@msgs) {
+                print $s $m, "\n";
+                my $buf = ""; sysread($s, $buf, 65536); $out .= $buf;
+              }
+              alarm 0;
+            };
+            print $out;
+          ' "$@"
+        }
+        printf "2/4 discovering the guest IP..."
+        for _ in $(seq 1 $((90 * slow))); do
+          resp=$(qmsg "$D/qga.sock" '{"execute":"guest-network-get-interfaces"}' 2>/dev/null || true)
+          GUEST_IP=$(printf '%s' "$resp" \
+            | perl -ne 'while (/"ip-address"\s*:\s*"(\d+\.\d+\.\d+\.\d+)"/g) { print "$1\n" }' 2>/dev/null \
+            | grep -Ev '^(127\.|169\.254\.)' | head -1 || true)
+          [ -n "$GUEST_IP" ] && break
+          # The Mac IS the vmnet gateway, so its ARP table maps our MAC to
+          # the live IP as soon as the guest talks — catches the case where
+          # Windows silently reuses its old lease (no fresh dhcpd_leases
+          # entry, run 20260805).
+          # 169.254.* is APIPA — the guest's pre-DHCP self-assignment; it
+          # lands in the ARP cache but routes nowhere (seen 169.254.81.138
+          # while the real lease was still coming, run 20260805).
+          GUEST_IP=$(arp -an 2>/dev/null | sed -n "s/.*(\([0-9.]*\)) at $MAC_LEASE .*/\1/p" \
+            | grep -Ev '^(169\.254\.|127\.)' | head -1 || true)
+          [ -n "$GUEST_IP" ] && break
+          for ip in $(awk -v mac="$MAC_LEASE" '
+              /ip_address=/ { ip = $0; sub(/.*=/, "", ip) }
+              /hw_address=/ && index($0, mac) { print ip }
+            ' /var/db/dhcpd_leases 2>/dev/null | sort -u); do
+            ping -c 1 -t 1 "$ip" >/dev/null 2>&1 || continue
+            if arp -n "$ip" 2>/dev/null | grep -qi "$MAC_LEASE"; then GUEST_IP="$ip"; break; fi
+          done
+          [ -n "$GUEST_IP" ] && break
+          sleep 2
+        done
+        if [ -z "$GUEST_IP" ]; then
+          echo " not found"
+          echo "ERROR: guest IP not discovered. Diagnostics:"
+          echo "--- qga raw response (empty = agent silent / nc issue):"
+          qmsg "$D/qga.sock" '{"execute":"guest-network-get-interfaces"}' 2>&1 | head -c 300 || true
+          echo ""
+          echo "--- arp entries for $MAC_LEASE:"
+          arp -an 2>/dev/null | grep -i "$MAC_LEASE" || echo "(none)"
+          echo "--- leases for $MAC_LEASE:"
+          grep -B2 "$MAC_LEASE" /var/db/dhcpd_leases 2>/dev/null || echo "(none)"
+          exit 1
+        fi
+        echo " $GUEST_IP"
+
+        printf "3/4 waiting for SSH..."
+        up=""
+        for _ in $(seq 1 $((150 * slow))); do
+          if nc -z -G 2 "$GUEST_IP" 22 2>/dev/null; then up=1; break; fi
+          sleep 2
+        done
+        if [ -z "$up" ]; then
+          echo " not answering"
+          echo "ERROR: guest holds $GUEST_IP but SSH never came up — check the VNC console (BitLocker/recovery screen?)"
+          exit 1
+        fi
+        echo " up"
+
+        # The guest agent powers IP discovery and the stop task's graceful
+        # shutdown — verify it actually answers (guest-ping -> {"return"}).
+        # Non-fatal: without it everything still works via ssh/arp.
+        printf "4/4 checking qemu guest agent..."
+        GA=""
+        for _ in $(seq 1 15); do
+          if qmsg "$D/qga.sock" '{"execute":"guest-ping"}' 2>/dev/null | grep -q '"return"'; then GA=1; break; fi
+          sleep 2
+        done
+        if [ -n "$GA" ]; then echo " ok"; else echo " SILENT (QEMU-GA service not answering — discovery/shutdown fall back to arp/ssh)"; fi
+
+        echo "VM is up"
+        {{if ne .VNC "0"}}echo "  VNC:  open vnc://127.0.0.1:5907  (password: vnc)"{{end}}
+        echo "  RDP:  $GUEST_IP:3389  (user dmitry, password rdp)"
+        echo "  SSH:  ssh dmitry@$GUEST_IP"
+        if [ -n "$SMB" ]; then
+          GW=$(echo "$GUEST_IP" | sed 's/\.[0-9]*$/.1/')
+          echo "  Share: {{.SHARE_DIR}} — in the guest run:  net use Z: \\\\$GW\\devcell /user:dmitry rdp"
+        fi
+        echo "  logs: $D/serial.log, $D/qemu.log"
+
+  debug:windows:stop:
+    desc: "Stop the QEMU Windows debug VM started by debug:windows:start"
+    silent: true
+    vars:
+      DISK: '{{.DISK | default (printf "%s/test/testdata/Windows.utm/Data/D76FB0BC-D7CC-4481-A6B6-492BEB4D834B.qcow2" .TASKFILE_DIR)}}'
+    cmds:
+      - |
+        set -eu
+        D="{{.TASKFILE_DIR}}/.tmp"
+        PIDFILE="$D/qemu-windows.pid"
+        SUDO=""; [ "$(uname)" = "Darwin" ] && [ "$(id -u)" != "0" ] && SUDO="sudo"
+
+        # macOS nc -U never surfaces responses from qemu's unix sockets —
+        # talk to QMP/qga with perl (same helper as the start task).
+        qmsg() {
+          perl -MIO::Socket::UNIX -e '
+            my ($path, @msgs) = @ARGV;
+            my $s = IO::Socket::UNIX->new(Peer => $path) or exit 1;
+            my $out = "";
+            eval {
+              local $SIG{ALRM} = sub { die };
+              alarm 4;
+              for my $m (@msgs) {
+                print $s $m, "\n";
+                my $buf = ""; sysread($s, $buf, 65536); $out .= $buf;
+              }
+              alarm 0;
+            };
+            print $out;
+          ' "$@"
+        }
+
+        # env kill, never bare kill: task's embedded shell (mvdan/sh) has a
+        # job-control kill builtin that silently no-ops on external pids.
+        _kill() { # pid
+          $SUDO env kill "$1" 2>/dev/null || true
+          for _ in $(seq 1 20); do ps -p "$1" >/dev/null 2>&1 || return 0; sleep 0.5; done
+          $SUDO env kill -9 "$1" 2>/dev/null || true
+          sleep 1
+          ! ps -p "$1" >/dev/null 2>&1
+        }
+
+        stopped=0
+        if [ -f "$PIDFILE" ]; then
+          # A launch that died pre-chmod leaves the pidfile root-owned 0600.
+          pid=$(cat "$PIDFILE" 2>/dev/null || $SUDO cat "$PIDFILE")
+          if ps -p "$pid" >/dev/null 2>&1; then
+            # Graceful first — killing qemu is a power cut: the guest logs
+            # Event 41 and spends the next boot in crash recovery (that
+            # WAS the 'boot loop', run 20260805). ~1 min total budget.
+            # Cleanest: shutdown over SSH — the one channel proven to
+            # work. BatchMode: succeeds only when the Mac's key is
+            # authorized in the guest; falls through instantly otherwise.
+            GIP=$(arp -an 2>/dev/null | sed -n 's/.*(\([0-9.]*\)) at 72:5b:b2:9:74:68 .*/\1/p' | head -1)
+            if [ -n "$GIP" ] && ps -p "$pid" >/dev/null 2>&1; then
+              if ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
+                   "dmitry@$GIP" "shutdown /s /t 0" >/dev/null 2>&1; then
+                printf "guest shutdown via ssh — waiting..."
+                for _ in $(seq 1 15); do ps -p "$pid" >/dev/null 2>&1 || break; sleep 2; done
+                echo ""
+              fi
+            fi
+            # Then qemu-ga (no JSON response expected; watch the pid).
+            if [ -S "$D/qga.sock" ] && ps -p "$pid" >/dev/null 2>&1; then
+              qmsg "$D/qga.sock" '{"execute":"guest-shutdown"}' >/dev/null 2>&1 || true
+              printf "guest-agent shutdown requested — waiting..."
+              for _ in $(seq 1 10); do ps -p "$pid" >/dev/null 2>&1 || break; sleep 2; done
+              echo ""
+            fi
+            # Last graceful resort: ACPI power-button via QMP.
+            if [ -S "$D/qmp.sock" ] && ps -p "$pid" >/dev/null 2>&1; then
+              resp=$(qmsg "$D/qmp.sock" '{"execute":"qmp_capabilities"}' '{"execute":"system_powerdown"}' 2>/dev/null || true)
+              if printf '%s' "$resp" | grep -q '"return"'; then
+                printf "ACPI powerdown sent — waiting for guest shutdown..."
+                for _ in $(seq 1 10); do ps -p "$pid" >/dev/null 2>&1 || break; sleep 2; done
+                echo ""
+              else
+                echo "QMP powerdown failed (no response) — falling back to kill"
+              fi
+            fi
+            if ! ps -p "$pid" >/dev/null 2>&1; then echo "guest shut down cleanly (pid $pid)"; stopped=1
+            elif _kill "$pid"; then echo "stopped qemu (pid $pid) — forced; guest will crash-recover next boot"; stopped=1
+            else echo "WARNING: qemu (pid $pid) survived SIGKILL — check 'ps -p $pid'"; fi
+          fi
+          $SUDO rm -f "$PIDFILE"
+        fi
+        # Fallback: a crashed start left no usable pidfile but qemu still
+        # holds the disk.
+        for pid in $(pgrep -f "qemu-system-aarch64.*$(basename "{{.DISK}}")" 2>/dev/null || true); do
+          if _kill "$pid"; then echo "stopped stray qemu (pid $pid)"; stopped=1; fi
+        done
+        # swtpm self-terminates when qemu disconnects; sweep a leftover.
+        if [ -f "$D/swtpm.pid" ]; then
+          pid=$(cat "$D/swtpm.pid")
+          ps -p "$pid" >/dev/null 2>&1 && _kill "$pid" >/dev/null 2>&1 || true
+          rm -f "$D/swtpm.pid"
+        fi
+        # The SMB share container serves no one once the VM is down.
+        if command -v docker >/dev/null 2>&1; then
+          docker rm -f devcell-smb >/dev/null 2>&1 && echo "stopped SMB share container" || true
+        fi
+        rm -f "$D/qmp.sock" "$D/swtpm.sock" 2>/dev/null || true
+        [ "$stopped" -eq 1 ] || echo "nothing to stop"
+
+  debug:alpine:start:
+    desc: "Boot an Alpine ISO under hvf with guest EL2 — sanity test for nested virtualization (vars: ISO, SMP, MEM, NESTED=0 to disable EL2)"
+    silent: true
+    vars:
+      ISO: '{{.ISO | default (printf "%s/.tmp/alpine-virt-aarch64.iso" .TASKFILE_DIR)}}'
+      SMP: '{{.SMP | default "2"}}'
+      MEM: '{{.MEM | default "2048"}}'
+      NESTED: '{{.NESTED | default "1"}}'
+      # Serial console on tcp:<port> (all interfaces) — interactive, e.g.
+      # `nc 127.0.0.1 5910`. SERIAL_PORT= (empty) logs to a file instead
+      # and makes the task block until the login prompt appears there.
+      SERIAL_PORT: '{{.SERIAL_PORT | default "5910"}}'
+    preconditions:
+      - sh: command -v qemu-system-aarch64 >/dev/null
+        msg: qemu-system-aarch64 not found on PATH
+      - sh: test -f "{{.ISO}}"
+        msg: "no ISO at {{.ISO}}"
+    cmds:
+      - |
+        set -euo pipefail
+        D="{{.TASKFILE_DIR}}/.tmp"; mkdir -p "$D"
+        PIDFILE="$D/qemu-alpine.pid"
+
+        # Same pid-lock discipline as debug:windows:start ('kill'/'ps' must
+        # go through env — mvdan/sh has a job-control kill builtin).
+        if [ -f "$PIDFILE" ] && ps -p "$(cat "$PIDFILE")" >/dev/null 2>&1; then
+          echo "already running (pid $(cat "$PIDFILE")) — task debug:alpine:stop first"
+          exit 1
+        fi
+        rm -f "$PIDFILE"
+
+        machine="virt,gic-version=3"; bootfix=""; accel=hvf
+        if [ "{{.NESTED}}" != "0" ]; then
+          machine="virt,virtualization=on,gic-version=3"
+          # EDK2 hangs at 'Start boot option' under hvf nested virt (known
+          # upstream issue); the zero-delay boot menu skips the hung path.
+          bootfix="-boot menu=on,splash-time=0"
+          # H2 litmus: with our patched hvf (fake-el2 VHE emulation) Linux
+          # must print 'kvm-arm: ... VHE mode initialized' instead of
+          # nVHE. If dmesg still says nVHE here, the patch isn't
+          # advertising VHE (ID_AA64MMFR1_EL1.VH) to the guest at all —
+          # no point retrying Windows. Same binary-scan gate as the
+          # windows task so a stock QEMU still boots.
+          if grep -aq fake-el2 "$(command -v qemu-system-aarch64)"; then
+            accel="hvf,fake-el2=on"
+            echo "fake-el2=on: check dmesg for 'VHE mode initialized' (vs nVHE)"
+          fi
+        fi
+
+        CODE_FD="$(dirname "$(command -v qemu-system-aarch64)")/../share/qemu/edk2-aarch64-code.fd"
+        if [ ! -f "$CODE_FD" ]; then
+          echo "ERROR: no EDK2 code image at $CODE_FD"
+          exit 1
+        fi
+
+        rm -f "$D/alpine-serial.log" "$D/alpine-qemu.log"
+        touch "$D/alpine-serial.log" "$D/alpine-qemu.log" "$PIDFILE"
+
+        # Same breadcrumb as debug:windows:start (H1-style: which binary /
+        # accel actually ran) — dates the boot, so a stale VM from before a
+        # qemu rebuild can't masquerade as a fresh litmus result.
+        {
+          echo "date:    $(date)"
+          echo "binary:  $(command -v qemu-system-aarch64)"
+          echo "version: $(qemu-system-aarch64 --version | head -1)"
+          echo "machine: $machine"
+          echo "accel:   $accel"
+        } > "$D/alpine-launch-info.txt"
+        serialdev="file:$D/alpine-serial.log"
+        [ -n "{{.SERIAL_PORT}}" ] && serialdev="tcp:0.0.0.0:{{.SERIAL_PORT}},server=on,wait=off"
+
+        # No network, no sudo — this VM exists only to answer one question:
+        # does a guest boot with EL2 under hvf on this host/QEMU?
+        if ! qemu-system-aarch64 \
+          -machine "$machine" -cpu host -accel "$accel" \
+          -smp {{.SMP}} -m {{.MEM}} \
+          -drive if=pflash,format=raw,readonly=on,file="$CODE_FD" \
+          $bootfix \
+          -cdrom "{{.ISO}}" \
+          -display none \
+          -serial "$serialdev" \
+          -D "$D/alpine-qemu.log" \
+          -name devcell-debug-alpine \
+          -daemonize -pidfile "$PIDFILE"; then
+          echo "ERROR: qemu failed to start — last lines of $D/alpine-qemu.log:"
+          tail -5 "$D/alpine-qemu.log" 2>/dev/null | sed 's/^/  /'
+          exit 1
+        fi
+        echo "started (pid $(cat "$PIDFILE")), machine $machine"
+
+        # Success = the login prompt on serial. The kernel's entry
+        # exception level ("CPU: All CPU(s) started at ELx") is the
+        # nested-virt verdict when it's visible — Alpine boots with
+        # 'quiet', so its absence proves nothing.
+        if [ -n "{{.SERIAL_PORT}}" ]; then
+          echo "serial console on tcp port {{.SERIAL_PORT}} — connect with: nc 127.0.0.1 {{.SERIAL_PORT}}"
+          echo "stop with: task debug:alpine:stop"
+          exit 0
+        fi
+        printf "waiting for the boot (up to 120s)..."
+        up=""
+        for _ in $(seq 1 60); do
+          grep -q "login:" "$D/alpine-serial.log" 2>/dev/null && up=1 && break
+          sleep 2
+        done
+        echo ""
+        if [ -z "$up" ]; then
+          echo "no login prompt after 120s — guest never booted. Tail of serial:"
+          tail -5 "$D/alpine-serial.log" | sed 's/^/  /'
+          exit 1
+        fi
+        echo "  guest is up (login prompt on serial)"
+        # H2 verdict, printed inline: entry EL + which Hyp mode KVM chose.
+        # 'VHE mode initialized'  -> fake-el2 advertises VHE, Windows-worthy;
+        # 'nVHE mode initialized' -> guest still reads ID_AA64MMFR1_EL1.VH=0
+        #                            (ID regs aren't trapped at EL1) — fix
+        #                            belongs in hvf's cached ID registers.
+        grep -iE "started at EL|CPU features|kvm.*(VHE|nVHE|mode initialized)" \
+          "$D/alpine-serial.log" 2>/dev/null | sed 's/^/  /' || true
+        if grep -q "Hyp VHE mode initialized" "$D/alpine-serial.log" 2>/dev/null; then
+          echo "  VERDICT: VHE — the fake-el2 patch presents VHE to the guest"
+        elif grep -qi "nVHE mode initialized" "$D/alpine-serial.log" 2>/dev/null; then
+          echo "  VERDICT: nVHE — guest still sees ID_AA64MMFR1_EL1.VH=0; Windows will keep failing"
+        fi
+        echo "  serial log: $D/alpine-serial.log"
+        echo "  stop with: task debug:alpine:stop"
+
+  debug:alpine:stop:
+    desc: "Stop the Alpine nested-virt test VM"
+    silent: true
+    cmds:
+      - |
+        set -eu
+        D="{{.TASKFILE_DIR}}/.tmp"
+        PIDFILE="$D/qemu-alpine.pid"
+        _kill() { # pid — env kill: mvdan/sh's builtin no-ops on external pids
+          env kill "$1" 2>/dev/null || true
+          for _ in $(seq 1 10); do ps -p "$1" >/dev/null 2>&1 || return 0; sleep 0.5; done
+          env kill -9 "$1" 2>/dev/null || true
+          sleep 1
+          ! ps -p "$1" >/dev/null 2>&1
+        }
+        stopped=0
+        if [ -f "$PIDFILE" ]; then
+          pid=$(cat "$PIDFILE" 2>/dev/null || true)
+          if [ -n "$pid" ] && ps -p "$pid" >/dev/null 2>&1; then
+            # A live-CD guest holds no state worth a graceful shutdown.
+            if _kill "$pid"; then echo "stopped qemu (pid $pid)"; stopped=1; fi
+          fi
+          rm -f "$PIDFILE"
+        fi
+        for pid in $(pgrep -f "qemu-system-aarch64.*devcell-debug-alpine" 2>/dev/null || true); do
+          if _kill "$pid"; then echo "stopped stray qemu (pid $pid)"; stopped=1; fi
+        done
+        [ "$stopped" -eq 1 ] || echo "nothing to stop"
+
+  debug:qemu:
+    desc: "One-shot QEMU fake-el2/VHE diagnostic report (run on the Mac): binary provenance, patch content, litmus verdicts, guest event log. Vars: PATCH (path to hvf-vhe-emulation.patch), GUEST_IP"
+    silent: true
+    vars:
+      # The nixhome repo's patch — override when it lives elsewhere:
+      #   task debug:qemu PATCH=/path/to/hvf-vhe-emulation.patch
+      PATCH: '{{.PATCH | default ""}}'
+      GUEST_IP: '{{.GUEST_IP | default "192.168.2.2"}}'
+    cmds:
+      - |
+        set -u
+        D="{{.TASKFILE_DIR}}/.tmp"
+        # Persist the report for the /continue-debug loop: full history in
+        # .context/debug/, always-current copy at .tmp/debug-qemu.txt (both
+        # bind-mounted into the devcell container).
+        RPT_DIR="{{.TASKFILE_DIR}}/.context/debug"; mkdir -p "$RPT_DIR"
+        RPT="$RPT_DIR/qemu-$(date +%Y%m%dT%H%M%S).log"
+        sect() { printf '\n===== %s =====\n' "$1"; }
+        # GNU stat vs BSD stat: uname is NOT a reliable discriminator — a
+        # nix profile puts GNU coreutils first on PATH even on macOS (seen
+        # live: 'stat -f %Sm' dumped filesystem info). Try GNU syntax
+        # first, fall back to BSD.
+        fmtime() {
+          stat -c '%y' "$1" 2>/dev/null || stat -f '%Sm' "$1" 2>/dev/null || echo "unknown"
+        }
+
+        report() {
+        # ---- 1. Binary provenance (H1-class: WHICH qemu would run?) ----
+        sect "QEMU BINARY"
+        BIN="$(command -v qemu-system-aarch64 || true)"
+        if [ -z "$BIN" ]; then
+          echo "FAIL: qemu-system-aarch64 not on PATH"
+        else
+          echo "path:       $BIN"
+          # readlink -f resolves the nix profile indirection to the store
+          # path — this is the line that changes when a rebuild actually
+          # landed (same store hash = same binary, whatever anyone claims).
+          echo "store path: $(readlink -f "$BIN" 2>/dev/null || echo 'unresolvable')"
+          echo "version:    $("$BIN" --version | head -1)"
+          # Nix normalizes store mtimes to epoch+1 — the store HASH is the
+          # only build-identity signal. Reports are persisted; diff the
+          # 'store path' line against the previous report to prove a
+          # rebuild actually landed.
+          if grep -aq fake-el2 "$(readlink -f "$BIN")" 2>/dev/null; then
+            echo "fake-el2:   PRESENT in binary"
+          else
+            echo "fake-el2:   ABSENT — stock build, nothing to test"
+          fi
+        fi
+
+        # ---- 2. The patch itself (does it touch the ID regs?) ----
+        sect "VHE PATCH CONTENT"
+        P="{{.PATCH}}"
+        if [ -z "$P" ]; then
+          # Plain if/break — a failing `[ -f ] && ...` list would trip
+          # task's errexit on the last miss and kill the whole report.
+          for c in \
+            "$HOME/dev/dimmkirr/nixhome/home/dmitry/packages/patches/hvf-vhe-emulation.patch" \
+            "$HOME/nixhome/home/dmitry/packages/patches/hvf-vhe-emulation.patch"; do
+            if [ -f "$c" ]; then P="$c"; break; fi
+          done
+          # Known locations missed — hunt for it (bounded depth, quick).
+          if [ -z "$P" ]; then
+            P="$(find "$HOME/dev" "$HOME/src" "$HOME/nixhome" \
+                   -maxdepth 7 -name hvf-vhe-emulation.patch -print 2>/dev/null | head -1 || true)"
+            if [ -n "$P" ]; then echo "(auto-found via find: $P)"; fi
+          fi
+        fi
+        if [ -z "$P" ] || [ ! -f "$P" ]; then
+          echo "patch not found — pass PATCH=/path/to/hvf-vhe-emulation.patch"
+        else
+          echo "patch: $P ($(wc -l < "$P" | tr -d ' ') lines, mtime $(fmtime "$P"))"
+          echo "--- files touched ---"
+          grep -E '^\+\+\+ ' "$P" | sed 's/^/  /'
+          echo "--- VH / ID-reg hunks (NMD-256 blocker: must set ID_AA64MMFR1_EL1.VH=1) ---"
+          if grep -nE 'ID_AA64MMFR1|AA64MMFR1_EL1|, VH,|FIELD_DP64' "$P" | head -20 | sed 's/^/  /' | grep .; then :; else
+            echo "  NONE — patch never touches the ID registers; guest will read VH=0 (nVHE)"
+          fi
+        fi
+
+        # ---- 3. Last recorded launches (what actually ran) ----
+        sect "LAST LAUNCHES (.tmp breadcrumbs)"
+        for f in "$D/launch-info.txt" "$D/alpine-launch-info.txt"; do
+          if [ -f "$f" ]; then
+            echo "--- $(basename "$f") ---"
+            sed 's/^/  /' "$f"
+          else
+            echo "--- $(basename "$f"): none ---"
+          fi
+        done
+
+        # ---- 4. Alpine litmus verdict (H2: does the guest see VHE?) ----
+        sect "ALPINE LITMUS VERDICT"
+        if [ -s "$D/alpine-serial.log" ]; then
+          grep -aiE "started at EL|Virtualization Host|VHE|nVHE" "$D/alpine-serial.log" | head -8 | sed 's/^/  /'
+          if grep -aq "Hyp VHE mode initialized" "$D/alpine-serial.log"; then
+            echo "  VERDICT: VHE — fake-el2 presents VHE to the guest"
+          elif grep -aqi "nVHE mode initialized" "$D/alpine-serial.log"; then
+            echo "  VERDICT: nVHE — guest still reads ID_AA64MMFR1_EL1.VH=0"
+          else
+            echo "  VERDICT: inconclusive (no kvm mode line in log)"
+          fi
+        else
+          echo "no file-mode serial log. Interactive VM running?"
+          if [ -f "$D/qemu-alpine.pid" ] && ps -p "$(cat "$D/qemu-alpine.pid")" >/dev/null 2>&1; then
+            echo "  yes (pid $(cat "$D/qemu-alpine.pid")) — serial is on tcp; for a self-reporting run:"
+          fi
+          echo "  task debug:alpine:stop && task debug:alpine:start SERIAL_PORT="
+        fi
+
+        # ---- 5. Windows guest verdict (H3: did the hypervisor launch?) ----
+        sect "WINDOWS GUEST (Event 43 check)"
+        if ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
+             "dmitry@{{.GUEST_IP}}" "wevtutil qe System /q:\"*[System[Provider[@Name='Microsoft-Windows-Hyper-V-Hypervisor']]]\" /c:2 /rd:true /f:text" \
+             2>/dev/null | tr -d '\0\r' | grep -E "Date:|Event ID:|present|failed|successfully" | sed 's/^/  /' | grep .; then
+          :
+        else
+          echo "  guest not reachable at {{.GUEST_IP}} (VM down, or key not authorized) — skipped"
+        fi
+
+        sect "NEXT STEP"
+        echo "fake-el2 ABSENT           -> rebuild/install the patched qemu (store path must change)"
+        echo "no VH hunk in patch       -> fix is in the wrong layer; see NMD-256 'Field evidence'"
+        echo "VERDICT: nVHE             -> VH bit still not advertised; re-check patch + rebuild"
+        echo "VERDICT: VHE              -> task debug:windows:stop && task debug:windows:start SECURE=0"
+        echo "Event 43 gone on new boot -> hypervisor is up; proceed to WSL2/nixos-import"
+        }
+        report 2>&1 | tee "$RPT" "$D/debug-qemu.txt"
+        printf '\nreport saved: %s\n' "$RPT"
+
+  debug:windows:status:
+    desc: "Snapshot the debug VM + guest state into .context/debug/windows-vm-<ts>.log (run while the VM is up; one ssh password prompt: rdp)"
+    silent: true
+    vars:
+      IP: '{{.IP | default ""}}'
+    cmds:
+      - |
+        set -euo pipefail
+        D="{{.TASKFILE_DIR}}/.tmp"
+        LOG="{{.TASKFILE_DIR}}/.context/debug/windows-vm-$(date -u +%Y%m%dT%H%M%SZ).log"
+        mkdir -p "$(dirname "$LOG")"
+
+        { echo "===== HOST: qemu process ====="
+          pgrep -fl qemu-system-aarch64 || echo "no qemu running"
+          echo; echo "===== HOST: QMP status ====="
+          printf '{"execute":"qmp_capabilities"}\n{"execute":"query-status"}\n' \
+            | nc -U -w 2 "$D/qmp.sock" 2>&1 || echo "qmp unavailable"
+          echo; echo "===== HOST: serial tail (boot manager entries = boot count) ====="
+          tr -d '\000-\010\013-\037' < "$D/serial.log" 2>/dev/null | sed 's/\[[0-9;=]*[A-Za-z]//g' | grep -a BdsDxe || true
+        } > "$LOG" 2>&1
+
+        # Guest IP: explicit IP= var, else ask the guest agent.
+        GUEST_IP="{{.IP}}"
+        if [ -z "$GUEST_IP" ]; then
+          GUEST_IP=$(printf '{"execute":"guest-network-get-interfaces"}\n' \
+            | nc -U -w 2 "$D/qga.sock" 2>/dev/null \
+            | perl -ne 'while (/"ip-address"\s*:\s*"(\d+\.\d+\.\d+\.\d+)"/g) { print "$1\n" }' \
+            | grep -Ev '^(127\.|169\.254\.)' | head -1 || true)
+        fi
+        if [ -z "$GUEST_IP" ]; then
+          echo "guest IP unknown (agent silent) — pass IP=<addr>"; echo "partial log: $LOG"; exit 1
+        fi
+        echo "guest: $GUEST_IP — one ssh password prompt (rdp) collects everything"
+
+        # One ssh session, one prompt. Each block is tagged with the
+        # hypothesis it confirms or refutes:
+        #   H1 BitLocker/TPM blocked TPM-less boots  -> manage-bde, Get-Tpm, BitLocker events
+        #   H2 Automatic Repair after unclean kills  -> System events 41/6008
+        #   H3 benign reboot (updates/PnP installs)  -> System event 1074 + boot time
+        ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 "dmitry@$GUEST_IP" '
+          echo ===== GUEST: identity/boot ===== & ver & systeminfo | findstr /i /c:"Boot Time" &
+          echo ===== H1: BitLocker status ===== & manage-bde -status C: 2>&1 &
+          echo ===== H1: TPM state ===== & powershell -NoProfile -Command "Get-Tpm | Format-List TpmPresent,TpmReady,TpmEnabled 2>&1" &
+          echo ===== H1: BitLocker events ===== & wevtutil qe "Microsoft-Windows-BitLocker/BitLocker Management" /c:5 /rd:true /f:text 2>&1 &
+          echo ===== H2: unclean shutdowns (41/6008) ===== & wevtutil qe System "/q:*[System[(EventID=41) or (EventID=6008)]]" /c:5 /rd:true /f:text 2>&1 &
+          echo ===== H3: orderly restarts (1074, who asked) ===== & wevtutil qe System "/q:*[System[(EventID=1074)]]" /c:5 /rd:true /f:text 2>&1 &
+          echo ===== WSL: engine + distros + virt capability ===== & set WSL_UTF8=1 & wsl.exe --version 2>&1 & wsl.exe --list --verbose 2>&1 &
+          powershell -NoProfile -Command "(Get-CimInstance Win32_ComputerSystem).HypervisorPresent; (Get-CimInstance Win32_Processor).VirtualizationFirmwareEnabled"
+        ' >> "$LOG" 2>&1 || echo "guest collection incomplete (see log)"
+
+        echo "saved: $LOG"
+
   # ── Host Nix installation debugging ──────────────────────────────────
   debug:nix:
     desc: Collect comprehensive info about the host Nix/Lix installation (run on macOS)

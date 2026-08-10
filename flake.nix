@@ -133,6 +133,9 @@
           pkgs.nix-update
           pkgs.pre-commit
           pkgs.powershell
+          # TPM emulator for `task debug:windows:start` — the Windows debug
+          # VM carries its TPM state in the .utm bundle (BitLocker).
+          pkgs.swtpm
         ];
         shellHook = ''
           if [ -d .git ] && [ -f .pre-commit-config.yaml ] && \
