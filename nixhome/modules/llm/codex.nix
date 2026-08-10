@@ -97,10 +97,15 @@ in
     # Stage Codex MCP config when servers are defined
     home.activation.setupManagedCodex = lib.mkIf hasServers (
       lib.hm.dag.entryAfter [ "writeBoundary" ] ''
-        export PATH="/usr/bin:/bin:$PATH"
-        $DRY_RUN_CMD sudo mkdir -p /etc/codex
-        $DRY_RUN_CMD sudo rm -f /etc/codex/managed_config.toml
-        $DRY_RUN_CMD sudo cp ${codexConfig} /etc/codex/nix-mcp-servers.toml
+        # /run/wrappers/bin: NixOS keeps the sudo setuid wrapper there only.
+        export PATH="/usr/bin:/bin:/run/wrappers/bin:$PATH"
+        if command -v sudo >/dev/null 2>&1; then
+          $DRY_RUN_CMD sudo mkdir -p /etc/codex
+          $DRY_RUN_CMD sudo rm -f /etc/codex/managed_config.toml
+          $DRY_RUN_CMD sudo cp ${codexConfig} /etc/codex/nix-mcp-servers.toml
+        else
+          echo "setupManagedCodex: sudo not available — skipping /etc/codex staging"
+        fi
       ''
     );
   };

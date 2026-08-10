@@ -59,9 +59,14 @@ in {
     # Stage Gemini MCP config when servers are defined
     home.activation.setupManagedGemini = lib.mkIf hasServers (
       lib.hm.dag.entryAfter ["writeBoundary"] ''
-        export PATH="/usr/bin:/bin:$PATH"
-        $DRY_RUN_CMD sudo mkdir -p /etc/gemini
-        $DRY_RUN_CMD sudo cp ${geminiConfig} /etc/gemini/nix-mcp-servers.json
+        # /run/wrappers/bin: NixOS keeps the sudo setuid wrapper there only.
+        export PATH="/usr/bin:/bin:/run/wrappers/bin:$PATH"
+        if command -v sudo >/dev/null 2>&1; then
+          $DRY_RUN_CMD sudo mkdir -p /etc/gemini
+          $DRY_RUN_CMD sudo cp ${geminiConfig} /etc/gemini/nix-mcp-servers.json
+        else
+          echo "setupManagedGemini: sudo not available — skipping /etc/gemini staging"
+        fi
       ''
     );
   };

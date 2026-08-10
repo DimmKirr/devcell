@@ -98,14 +98,19 @@ in {
     # Stage providers + MCP servers when configured
     home.activation.setupManagedOpencode = lib.mkIf (hasProviders || hasServers) (
       lib.hm.dag.entryAfter ["writeBoundary"] ''
-        export PATH="/usr/bin:/bin:$PATH"
-        $DRY_RUN_CMD sudo mkdir -p /etc/opencode
-        ${lib.optionalString hasProviders ''
-          $DRY_RUN_CMD sudo cp ${providersFile} /etc/opencode/nix-providers.json
-        ''}
-        ${lib.optionalString hasServers ''
-          $DRY_RUN_CMD sudo cp ${openCodeConfig} /etc/opencode/nix-mcp-servers.json
-        ''}
+        # /run/wrappers/bin: NixOS keeps the sudo setuid wrapper there only.
+        export PATH="/usr/bin:/bin:/run/wrappers/bin:$PATH"
+        if command -v sudo >/dev/null 2>&1; then
+          $DRY_RUN_CMD sudo mkdir -p /etc/opencode
+          ${lib.optionalString hasProviders ''
+            $DRY_RUN_CMD sudo cp ${providersFile} /etc/opencode/nix-providers.json
+          ''}
+          ${lib.optionalString hasServers ''
+            $DRY_RUN_CMD sudo cp ${openCodeConfig} /etc/opencode/nix-mcp-servers.json
+          ''}
+        else
+          echo "setupManagedOpencode: sudo not available — skipping /etc/opencode staging"
+        fi
       ''
     );
   };

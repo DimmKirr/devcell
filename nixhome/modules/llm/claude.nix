@@ -116,20 +116,29 @@ in {
     # Stage hooks + settings + MCP servers when configured
     home.activation.setupManagedClaude = lib.mkIf (hasHooks || hasSettings || hasServers) (
       lib.hm.dag.entryAfter ["writeBoundary"] ''
-        export PATH="/usr/bin:/bin:$PATH"
-        $DRY_RUN_CMD sudo mkdir -p /etc/claude-code/hooks
-        ${lib.concatStringsSep "\n" (lib.mapAttrsToList (name: drv: ''
-          $DRY_RUN_CMD sudo cp ${drv} /etc/claude-code/hooks/${name}
-          $DRY_RUN_CMD sudo chmod +x /etc/claude-code/hooks/${name}
-        '') hookDerivations)}
-        ${lib.optionalString hasSettings ''
-          $DRY_RUN_CMD sudo cp ${settingsFile} /etc/claude-code/nix-settings.json
-        ''}
+        # /run/wrappers/bin: where NixOS (and NixOS-WSL) put the sudo setuid
+        # wrapper — it is never in /usr/bin there.
+        export PATH="/usr/bin:/bin:/run/wrappers/bin:$PATH"
+        # Staging /etc/claude-code is a convenience; a host without sudo must
+        # skip it, not abort the whole activation (NixOS-WSL, run 20260804).
+        if command -v sudo >/dev/null 2>&1; then
+          $DRY_RUN_CMD sudo mkdir -p /etc/claude-code/hooks
+          ${lib.concatStringsSep "\n" (lib.mapAttrsToList (name: drv: ''
+            $DRY_RUN_CMD sudo cp ${drv} /etc/claude-code/hooks/${name}
+            $DRY_RUN_CMD sudo chmod +x /etc/claude-code/hooks/${name}
+          '') hookDerivations)}
+          ${lib.optionalString hasSettings ''
+            $DRY_RUN_CMD sudo cp ${settingsFile} /etc/claude-code/nix-settings.json
+          ''}
+          ${lib.optionalString hasServers ''
+            # Remove legacy files that had undesired exclusive-control or requirements semantics.
+            $DRY_RUN_CMD sudo rm -f /etc/claude-code/managed-mcp.json
+            $DRY_RUN_CMD sudo cp ${claudeConfig} /etc/claude-code/nix-mcp-servers.json
+          ''}
+        else
+          echo "setupManagedClaude: sudo not available — skipping /etc/claude-code staging"
+        fi
         ${lib.optionalString hasServers ''
-          # Remove legacy files that had undesired exclusive-control or requirements semantics.
-          $DRY_RUN_CMD sudo rm -f /etc/claude-code/managed-mcp.json
-          $DRY_RUN_CMD sudo cp ${claudeConfig} /etc/claude-code/nix-mcp-servers.json
-
           # Live-merge into ~/.claude.json so mid-session home-manager switch picks up
           # new MCP server paths without requiring container restart.
           _nix_file="/etc/claude-code/nix-mcp-servers.json"
