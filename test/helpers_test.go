@@ -635,27 +635,8 @@ func hostProjectPath(rel string) string {
 	if dir := os.Getenv("DEVCELL_TEST_PROJECT_DIR"); dir != "" {
 		return filepath.Join(dir, rel)
 	}
-	// Detect devcell container by checking if /devcell-68 mount exists in mountinfo.
-	if data, err := os.ReadFile("/proc/1/mountinfo"); err == nil {
-		for _, line := range strings.Split(string(data), "\n") {
-			// Example: 511 477 0:44 /dmitry/dev/dimmkirr/devcell /devcell-68 rw,...- fakeowner /run/host_mark/Users rw,...
-			if strings.Contains(line, " /devcell-68 ") || strings.Contains(line, " "+os.Getenv("WORKSPACE")+" ") {
-				fields := strings.Fields(line)
-				if len(fields) >= 4 {
-					// fields[3] = mount source relative path (e.g. /dmitry/dev/dimmkirr/devcell)
-					// Find the filesystem root after the " - " separator
-					for i, f := range fields {
-						if f == "-" && i+2 < len(fields) {
-							fsRoot := fields[i+2] // e.g. /run/host_mark/Users
-							// macOS Docker: /run/host_mark/Users → /Users
-							hostRoot := strings.TrimPrefix(fsRoot, "/run/host_mark")
-							hostPath := filepath.Join(hostRoot, fields[3], "test", rel)
-							return hostPath
-						}
-					}
-				}
-			}
-		}
+	if ws := os.Getenv("WORKSPACE"); ws != "" {
+		return filepath.Join(ws, "test", rel)
 	}
 	return rel
 }
