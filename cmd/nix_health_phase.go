@@ -99,6 +99,41 @@ func staleCellNudge(baseDir string, h runner.NixStoreHealth, probed, staleWarn b
 	return fmt.Errorf("launch aborted — update this cell with: cell build --update")
 }
 
+// CELL-418: detect whether the thin image's baked-in nix closure still
+// exists on the shared nix-store volume. A dead closure means the image
+// will boot silently broken — no nix-daemon, no shell setup, no tools.
+// Prompts for rebuild on TTY; auto-rebuilds on non-TTY.
+func closureCheckPhase(ctx context.Context, pr *ux.PhaseRunner, thin bool, imageTag string, rebuild func() error) error {
+	if !thin {
+		ux.Debugf("closure check: skipped (not thin mode)")
+		return nil
+	}
+	volume := runner.ThinStoreVolume()
+	ux.Debugf("closure check: volume=%s image=%s", volume, imageTag)
+
+	argv := runner.ClosureAliveArgv(volume, imageTag)
+	ux.Debugf("closure check: argv=%s", runner.DebugArgv(argv))
+
+	out, err := exec.CommandContext(ctx, argv[0], argv[1:]...).CombinedOutput()
+	resolved, alive := runner.ParseClosureAliveResult(string(out), err)
+	ux.Debugf("closure check: alive=%v resolved=%q err=%v", alive, resolved, err)
+
+	warning, dead := runner.ClosureDeadWarning(alive)
+	if !dead {
+		ux.Debugf("closure check: closure alive at %s", resolved)
+		return nil
+	}
+
+	isTTY := isatty.IsTerminal(os.Stdin.Fd())
+	ux.Debugf("closure check: dead closure detected (tty=%v)", isTTY)
+
+	if !runner.ConfirmProceed(os.Stdout, os.Stdin, isTTY, warning) {
+		return fmt.Errorf("launch aborted — rebuild with: cell build")
+	}
+
+	return rebuild()
+}
+
 // autoCleanupDetail runs the CELL-334 reaper without prompting — the
 // --auto-cleanup flag IS the consent. Failures degrade to a detail string;
 // a cell start must never break because hygiene did.

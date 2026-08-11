@@ -595,6 +595,15 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 		return err
 	}
 
+	// CELL-418: check that the thin image's baked-in nix closure is still
+	// alive on the shared volume. A dead closure means GC reaped the store
+	// paths — prompt for rebuild (auto-rebuild in non-TTY).
+	if err := closureCheckPhase(ctx, pr, thin, imageTag(), func() error {
+		return runBuildThin(c, "", "", false)
+	}); err != nil {
+		return err
+	}
+
 	_ = pr.Phase("Backup", func() error { return backup.Backup(c.CellHome, time.Now()) })
 
 	// Pin the container to the exact image ID so a concurrent `cell build`
