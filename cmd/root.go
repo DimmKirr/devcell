@@ -13,6 +13,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mattn/go-isatty"
+
 	"github.com/DimmKirr/devcell/internal/backup"
 	"github.com/DimmKirr/devcell/internal/cfg"
 	"github.com/DimmKirr/devcell/internal/config"
@@ -655,6 +657,27 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 		}
 	}
 
+	if binary == "codex" {
+		if err := pr.PhaseDetailed("System prompt", func() (string, error) {
+			flags, spErr := codexPromptFlags(c, cellCfg, runner.ResolveOpts{
+				AppendEnvFile:   os.Getenv("DEVCELL_APPEND_SYSTEM_PROMPT_FILE"),
+				AppendEnvInline: os.Getenv("DEVCELL_APPEND_SYSTEM_PROMPT"),
+				CellCfg:         cellCfg,
+				CfgBaseDir:      c.BaseDir,
+			})
+			if spErr != nil {
+				return "", spErr
+			}
+			defaultFlags = append(defaultFlags, flags...)
+			if cellCfg.LLM.SystemPrompt != "" || cellCfg.LLM.SystemPromptFile != "" {
+				ux.Warn("[llm].system_prompt is set but Codex has no way to replace its built-in prompt. This setting is ignored for cell codex. Only [llm].append_system_prompt is wired.")
+			}
+			return "developer_instructions", nil
+		}); err != nil {
+			return fmt.Errorf("system prompt: %w", err)
+		}
+	}
+
 	// Resolve git identity from host config — only when neither env nor TOML
 	// already provides it. Non-fatal; row is "not configured" when both
 	// `git config user.name` and `user.email` are absent.
@@ -780,6 +803,7 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 		InheritEnv:   inheritEnv,
 		ThinImage:    thin,
 		BootDir:      bootDirEnv,
+		TTY:          isatty.IsTerminal(os.Stdin.Fd()),
 	}
 	argv := runner.BuildArgv(spec, runner.OsFS, exec.LookPath)
 

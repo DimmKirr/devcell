@@ -103,8 +103,17 @@ func TestArgv_StartsWithDockerRunFlags(t *testing.T) {
 	if !hasArg(argv, "--rm") {
 		t.Error("missing --rm")
 	}
+}
+
+func TestArgv_TTY(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) { s.TTY = true })
 	if !hasArg(argv, "-it") {
-		t.Error("missing -it")
+		t.Error("TTY=true should produce -it")
+	}
+
+	argv = buildArgv(t)
+	if hasArg(argv, "-it") {
+		t.Error("TTY=false (default) should not produce -it")
 	}
 }
 

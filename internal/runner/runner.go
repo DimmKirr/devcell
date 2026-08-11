@@ -223,6 +223,7 @@ type RunSpec struct {
 	Getenv       func(string) string // env lookup; defaults to os.Getenv when nil
 	ThinImage    bool                // when true, mount devcell-nix-store volume for /nix
 	BootDir      string              // CELL-264: host-side boot dir for fsnotify sentinels; empty disables the bind-mount
+	TTY          bool                // allocate a pseudo-TTY (-it); set from isatty check on stdin
 }
 
 func (s RunSpec) getenv(key string) string {
@@ -244,7 +245,10 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 		argv = append(argv, "op", "run", "--")
 	}
 
-	dockerRunFlags := []string{"--rm", "-it", "--shm-size=1g", "--device=/dev/fuse"}
+	dockerRunFlags := []string{"--rm", "--shm-size=1g", "--device=/dev/fuse"}
+	if spec.TTY {
+		dockerRunFlags = append(dockerRunFlags, "-it")
+	}
 	// KVM passthrough for QEMU guests (Windows cells). Must be --device, not
 	// a -v bind-mount: the mount creates the node but the cgroup device
 	// controller still denies open(2) (EPERM). Requires nested virtualization
