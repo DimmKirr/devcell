@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DimmKirr/devcell/internal/testutil"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 	"golang.org/x/mod/semver"
@@ -1055,7 +1056,7 @@ func TestClaude_CodeVersion(t *testing.T) {
 	for _, stack := range stacks {
 		t.Run(stack, func(t *testing.T) {
 			// Persist artifacts for post-run inspection.
-			outDir := filepath.Join(testRunDir(), t.Name())
+			outDir := testutil.TestResultsDir(t, hostBaseDirFn)
 			projectDir := filepath.Join(outDir, "project")
 			homeDir := filepath.Join(outDir, "home")
 			for _, d := range []string{projectDir, homeDir, filepath.Join(homeDir, ".config", "devcell")} {

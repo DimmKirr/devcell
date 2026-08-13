@@ -28,8 +28,7 @@ in {
       flex
       bison
       libxslt # libxslt1-dev
-    ] ++ lib.optionals pkgs.stdenv.isx86_64 [
-      wimlib # WIM/ESD archive library — depends on syslinux (x86-only)
+      wimlib # WIM/ESD archive library (use: wimlib-imagex, libwim for CGO)
     ];
   };
 }

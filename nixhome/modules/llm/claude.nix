@@ -93,6 +93,7 @@ in {
       '';
       settings = {
         model = "claude-opus-4-6";
+        autoCompactWindow = 500000;
         hooks.PermissionRequest = [
           {
             matcher = "*";

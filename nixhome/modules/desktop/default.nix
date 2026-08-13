@@ -274,7 +274,9 @@ in
   # Mesa llvmpipe software rendering — headless container has no GPU.
   # Paths go through the profile symlink (stable across generations) rather
   # than hardcoded store hashes that break on rebuild.
-  home.sessionVariables.PKG_CONFIG_PATH = "${config.home.profileDirectory}/lib/pkgconfig:${config.home.profileDirectory}/share/pkgconfig";
+  home.sessionVariables.PKG_CONFIG_PATH = "$HOME/.local/lib/pkgconfig:${config.home.profileDirectory}/lib/pkgconfig:${config.home.profileDirectory}/share/pkgconfig";
+  home.sessionVariables.C_INCLUDE_PATH = "$HOME/.local/include";
+  home.sessionVariables.LIBRARY_PATH = "$HOME/.local/lib";
   home.sessionVariables.LIBGL_ALWAYS_SOFTWARE = "1";
   home.sessionVariables.GALLIUM_DRIVER = "llvmpipe";
   home.sessionVariables.LIBGL_DRIVERS_PATH = "${config.home.profileDirectory}/lib/dri";

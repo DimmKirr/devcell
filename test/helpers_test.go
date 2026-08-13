@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DimmKirr/devcell/internal/testutil"
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -614,16 +615,25 @@ const testdataDir = "testdata/devcell-config-simple/devcell"
 // Layout: test/results/<YYYYMMDD-HHMMSS>-<sha>/
 // When running inside a devcell container (Docker-in-Docker), the path is
 // resolved to the host filesystem so Docker on the host can mount it.
+//
+// Callers that have a *testing.T should prefer testutil.TestResultsDir(t, hostBaseDirFn)
+// for per-root-test grouping; testRunDir exists for non-test helpers (e.g. buildTestdataImage).
 func testRunDir() string {
 	runDirOnce.Do(func() {
-		ts := time.Now().Format("20060102-150405")
-		runDir = filepath.Join(hostProjectPath("results"), ts+"-"+shortSHA())
+		ts := testutil.RunTimestamp()
+		runDir = filepath.Join(hostProjectPath("results"), ts+"-"+testutil.ShortSHA())
 		if err := os.MkdirAll(runDir, 0755); err != nil {
 			panic(fmt.Sprintf("create run dir: %v", err))
 		}
 		log.Printf("Test run dir: %s", runDir)
 	})
 	return runDir
+}
+
+// hostBaseDirFn returns the base directory for test results, accounting for
+// Docker host path remapping. Pass to testutil.TestResultsDir as baseDirFn.
+func hostBaseDirFn() string {
+	return hostProjectPath("")
 }
 
 // hostProjectPath returns a path under the project's test/ directory that is

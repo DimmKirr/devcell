@@ -143,6 +143,33 @@ func (w *WIM) ReferenceResourceFilePaths(paths []string) error {
 	return nil
 }
 
+// ExtractPaths extracts specific paths from a WIM image into targetDir.
+// Each wimPath is an absolute path within the WIM (e.g. `\Windows\System32\config\SYSTEM`).
+// The extracted files land in targetDir preserving their directory structure.
+func (w *WIM) ExtractPaths(imageNum int, targetDir string, wimPaths []string) error {
+	cDir := C.CString(targetDir)
+	defer C.free(unsafe.Pointer(cDir))
+
+	cPaths := make([]*C.char, len(wimPaths))
+	for i, p := range wimPaths {
+		cPaths[i] = C.CString(p)
+	}
+	defer func() {
+		for _, cp := range cPaths {
+			C.free(unsafe.Pointer(cp))
+		}
+	}()
+
+	ret := C.wimlib_extract_paths(w.cPtr(), C.int(imageNum), cDir,
+		(**C.wimlib_tchar)(unsafe.Pointer(&cPaths[0])),
+		C.size_t(len(cPaths)), 0)
+	if ret != 0 {
+		return fmt.Errorf("wimlib_extract_paths(image %d, %v): %s",
+			imageNum, wimPaths, errStr(ret))
+	}
+	return nil
+}
+
 // UpdateImageAdd adds a file or directory from the filesystem into a WIM image.
 func (w *WIM) UpdateImageAdd(imageNum int, fsSourcePath, wimTargetPath string) error {
 	cSrc := C.CString(fsSourcePath)
@@ -272,6 +299,14 @@ func (w *WIM) Write(path string) error {
 	ret := C.wimlib_write(w.cPtr(), cPath, C.WIMLIB_ALL_IMAGES, 0, 0)
 	if ret != 0 {
 		return fmt.Errorf("wimlib_write(%s): %s", path, errStr(ret))
+	}
+	return nil
+}
+
+func (w *WIM) Overwrite() error {
+	ret := C.wimlib_overwrite(w.cPtr(), 0, 0)
+	if ret != 0 {
+		return fmt.Errorf("wimlib_overwrite(%s): %s", w.path, errStr(ret))
 	}
 	return nil
 }

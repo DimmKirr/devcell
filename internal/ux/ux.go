@@ -325,12 +325,13 @@ func CloseDebugLog() {
 func Debugf(format string, a ...any) {
 	if Verbose {
 		msg := fmt.Sprintf(format, a...)
-		fmt.Printf(" %s %s\n", prefix(StyleDebug, "DBG"), msg)
+		ts := time.Now().UTC().Format("2006-01-02T15:04:05Z")
+		fmt.Printf(" %s %s %s\n", prefix(StyleDebug, "DBG"), ts, msg)
 		debugLogMu.Lock()
 		f := debugLogFile
 		debugLogMu.Unlock()
 		if f != nil {
-			fmt.Fprintln(f, msg)
+			fmt.Fprintf(f, "%s %s\n", ts, msg)
 		}
 	}
 }

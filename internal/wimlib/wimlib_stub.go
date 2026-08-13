@@ -48,6 +48,14 @@ func (w *WIM) Write(path string) error {
 	return errNotAvailable
 }
 
+func (w *WIM) Overwrite() error {
+	return errNotAvailable
+}
+
+func (w *WIM) ExtractPaths(imageNum int, targetDir string, wimPaths []string) error {
+	return errNotAvailable
+}
+
 func (w *WIM) UpdateImageAdd(imageNum int, fsSourcePath, wimTargetPath string) error {
 	return errNotAvailable
 }

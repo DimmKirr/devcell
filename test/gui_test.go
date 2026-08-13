@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DimmKirr/devcell/internal/testutil"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
@@ -311,8 +312,7 @@ source /etc/devcell/entrypoint.d/50-gui.sh
 func saveScreenshot(t *testing.T) {
 	t.Helper()
 	t.Cleanup(func() {
-		name := strings.ReplaceAll(t.Name(), "/", "-")
-		dst := filepath.Join(testRunDir(), name+"-desktop.png")
+		dst := filepath.Join(testutil.TestResultsDir(t, hostBaseDirFn), "desktop.png")
 		data, err := os.ReadFile(screenshotPath)
 		if err == nil {
 			os.WriteFile(dst, data, 0644)

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/DimmKirr/devcell/internal/scaffold"
+	"github.com/DimmKirr/devcell/internal/testutil"
 	"github.com/creack/pty"
 )
 
@@ -323,7 +324,7 @@ func TestCell_Shell(t *testing.T) {
 
 	// Scaffold config directory (cell shell needs devcell.toml).
 	// Must be on a Docker-accessible path for bind mounts.
-	configDir, err := os.MkdirTemp(testRunDir(), "celltest-config-*")
+	configDir, err := os.MkdirTemp(testutil.TestResultsDir(t, hostBaseDirFn), "celltest-config-*")
 	if err != nil {
 		t.Fatalf("mkdtemp config: %v", err)
 	}
@@ -345,7 +346,7 @@ func TestCell_Shell(t *testing.T) {
 	// Use a Docker-accessible path for the project dir so cell shell can
 	// bind-mount it. hostProjectPath resolves to the host filesystem path
 	// when running inside a devcell container (Docker-in-Docker).
-	projectDir := filepath.Join(testRunDir(), "cell-shell-project")
+	projectDir := filepath.Join(testutil.TestResultsDir(t, hostBaseDirFn), "cell-shell-project")
 	if err := os.MkdirAll(projectDir, 0o755); err != nil {
 		t.Fatalf("mkdir projectDir: %v", err)
 	}
@@ -360,7 +361,7 @@ func TestCell_Shell(t *testing.T) {
 	// subdirectories that BuildArgv bind-mounts into the container.
 	cellShellHome := func(t *testing.T) string {
 		t.Helper()
-		home, err := os.MkdirTemp(testRunDir(), "celltest-home-*")
+		home, err := os.MkdirTemp(testutil.TestResultsDir(t, hostBaseDirFn), "celltest-home-*")
 		if err != nil {
 			t.Fatalf("mkdtemp: %v", err)
 		}
@@ -422,7 +423,7 @@ func TestCell_Shell(t *testing.T) {
 	// hostname syscall at shell startup) and `hostname` (the binary, reads
 	// /etc/hostname / uname()) inside the cell match the configured value.
 	t.Run("hostname_from_toml", func(t *testing.T) {
-		hostProjectDir := filepath.Join(testRunDir(), "cell-hostname-project")
+		hostProjectDir := filepath.Join(testutil.TestResultsDir(t, hostBaseDirFn), "cell-hostname-project")
 		if err := os.MkdirAll(hostProjectDir, 0o755); err != nil {
 			t.Fatalf("mkdir hostProjectDir: %v", err)
 		}

@@ -1,35 +1,19 @@
 package scaffold_test
 
 import (
-	"fmt"
 	"os"
-	osexec "os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
-	"time"
 
 	"github.com/DimmKirr/devcell/internal/scaffold"
+	"github.com/DimmKirr/devcell/internal/testutil"
 )
 
-// shortSHA returns the abbreviated commit hash of HEAD.
-func shortSHA() string {
-	cmd := osexec.Command("git", "rev-parse", "--short", "HEAD")
-	cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1")
-	out, err := cmd.Output()
-	if err != nil {
-		return fmt.Sprintf("dev%s", time.Now().Format("150405"))
-	}
-	return strings.TrimSpace(string(out))
-}
-
 // TestGenerateTestdata writes generated flake.nix and Dockerfile variants to
-// test/results/<YYYYMMDD-HHMMSS>-<sha>/generate-testdata/ for manual and LLM-assisted review.
+// test/results/<timestamp>-TestGenerateTestdata/ for manual and LLM-assisted review.
 // Run with: go test ./internal/scaffold/ -run TestGenerateTestdata -v
 func TestGenerateTestdata(t *testing.T) {
-	ts := time.Now().Format("20060102-150405")
-	runDir := filepath.Join("..", "..", "test", "results", fmt.Sprintf("%s-%s", ts, shortSHA()))
-	baseDir := filepath.Join(runDir, "generate-testdata")
+	baseDir := testutil.TestResultsDir(t, nil)
 
 	cases := []struct {
 		name        string

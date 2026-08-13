@@ -16,7 +16,7 @@ import (
 //
 // Devices that libvirt cannot express natively (guest NVMe controller —
 // required by Windows ARM64, CELL-359 — ramfb, xhci port config, hostfwd
-// user-net, pci-serial progress port) ride <qemu:commandline>, keeping exact
+// user-net, virtio-serial progress port) ride <qemu:commandline>, keeping exact
 // parity with BuildRunCommand.
 
 func xmlSpec() qemu.Spec {
@@ -195,8 +195,8 @@ func TestSpecToDomainXML_GuestProgressChardev(t *testing.T) {
 	if !strings.Contains(args, "file,id=guestprog,path=/Users/u/.devcell/inst/guest-progress.log") {
 		t.Errorf("commandline must carry the guest-progress chardev, got: %s", args)
 	}
-	if !strings.Contains(args, "pci-serial,chardev=guestprog") {
-		t.Errorf("commandline must carry the pci-serial device, got: %s", args)
+	if !strings.Contains(args, "virtserialport,bus=virtio-serial0.0,chardev=guestprog,name="+qemu.ProgressPortName) {
+		t.Errorf("commandline must carry the virtserialport progress device, got: %s", args)
 	}
 }
 
