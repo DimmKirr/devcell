@@ -508,6 +508,52 @@ func CreateFATImage(imgPath string, files map[string][]byte) error {
 	return nil
 }
 
+// CreateFATImageSized works like CreateFATImage but enforces a minimum disk
+// size. Use this when the guest needs free space beyond the initial content
+// (e.g. a builder WinPE that writes results back to the volume).
+func CreateFATImageSized(imgPath string, files map[string][]byte, minSize int64) error {
+	if len(files) == 0 {
+		return fmt.Errorf("no files to add to FAT image")
+	}
+
+	var totalSize int64
+	for _, data := range files {
+		totalSize += int64(len(data))
+	}
+	diskSize := totalSize + 10*1024*1024
+	if diskSize < minSize {
+		diskSize = minSize
+	}
+	if diskSize < 64*1024*1024 {
+		diskSize = 64 * 1024 * 1024
+	}
+
+	os.Remove(imgPath)
+	d, err := diskfs.Create(imgPath, diskSize, diskfs.SectorSizeDefault)
+	if err != nil {
+		return fmt.Errorf("creating FAT disk image: %w", err)
+	}
+
+	fspec := disk.FilesystemSpec{
+		Partition:   0,
+		FSType:      filesystem.TypeFat32,
+		VolumeLabel: "UEFIBOOT",
+	}
+	fs, err := d.CreateFilesystem(fspec)
+	if err != nil {
+		return fmt.Errorf("creating FAT32 filesystem: %w", err)
+	}
+
+	if err := addFilesToFAT(fs, files); err != nil {
+		return err
+	}
+
+	if err := d.Close(); err != nil {
+		return fmt.Errorf("finalizing FAT image: %w", err)
+	}
+	return nil
+}
+
 // ReadFileFromFAT reads a file from a FAT32 disk image and returns its content.
 func ReadFileFromFAT(imgPath, filePath string) ([]byte, error) {
 	d, err := diskfs.Open(imgPath)
