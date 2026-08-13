@@ -1,6 +1,7 @@
 package qemu
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -101,6 +102,68 @@ const SyncExceptionMarker = "Synchronous Exception at"
 // otherwise sit silently until the test's overall deadline.
 func WatchSerialForSyncException(path string, stop <-chan struct{}) <-chan string {
 	return WatchSerialFor(path, SyncExceptionMarker, stop)
+}
+
+// WindowsBootManagerMarker is the firmware log line when bootmgfw.efi loads.
+const WindowsBootManagerMarker = `"Windows Boot Manager"`
+
+// WatchSerialForDesktopBoot tails the serial log and fires when the firmware
+// boots "Windows Boot Manager" for the Nth time. The first boot is the
+// specialize pass (installs drivers, then reboots); the second is the final
+// boot where OOBE runs, the user logs in, and the bootstrap script fires.
+// Set n=2 for "desktop boot detected".
+func WatchSerialForDesktopBoot(path string, n int, stop <-chan struct{}) <-chan string {
+	ch := make(chan string, 1)
+	go func() {
+		defer close(ch)
+		var f *os.File
+		ticker := time.NewTicker(500 * time.Millisecond)
+		defer ticker.Stop()
+
+		var buf strings.Builder
+		count := 0
+		lastPos := 0
+		for {
+			select {
+			case <-stop:
+				if f != nil {
+					f.Close()
+				}
+				return
+			case <-ticker.C:
+				if f == nil {
+					var err error
+					f, err = os.Open(path)
+					if err != nil {
+						continue
+					}
+				}
+				tmp := make([]byte, 4096)
+				nr, err := f.Read(tmp)
+				if nr > 0 {
+					buf.Write(tmp[:nr])
+					s := buf.String()
+					for {
+						idx := strings.Index(s[lastPos:], WindowsBootManagerMarker)
+						if idx < 0 {
+							break
+						}
+						count++
+						lastPos += idx + len(WindowsBootManagerMarker)
+						if count >= n {
+							ch <- fmt.Sprintf("Windows Boot Manager boot #%d detected", count)
+							f.Close()
+							return
+						}
+					}
+				}
+				if err != nil && err != io.EOF {
+					continue
+				}
+			}
+		}
+	}()
+	return ch
 }
 
 func stripANSI(s string) string {

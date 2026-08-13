@@ -129,6 +129,65 @@ Press ESC in 5 seconds to skip startup.nsh
 	close(stop)
 }
 
+func TestWatchSerialForDesktopBoot_FiresOnNthBoot(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "serial.log")
+
+	stop := make(chan struct{})
+	defer close(stop)
+	ch := WatchSerialForDesktopBoot(path, 2, stop)
+
+	// First Windows Boot Manager boot (specialize pass).
+	serial := `UEFI firmware (version edk2-stable202408)
+BdsDxe: starting Boot0006 "Windows Boot Manager" from HD(1,GPT,...)
+`
+	require.NoError(t, os.WriteFile(path, []byte(serial), 0644))
+
+	select {
+	case msg := <-ch:
+		t.Fatalf("should not fire on first boot, got: %s", msg)
+	case <-time.After(2 * time.Second):
+		// Expected — need 2nd boot.
+	}
+
+	// Second Windows Boot Manager boot (desktop/OOBE boot).
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
+	require.NoError(t, err)
+	_, err = f.WriteString(`UEFI firmware (version edk2-stable202408)
+BdsDxe: starting Boot0006 "Windows Boot Manager" from HD(1,GPT,...)
+`)
+	require.NoError(t, err)
+	f.Close()
+
+	select {
+	case msg := <-ch:
+		assert.Contains(t, msg, "#2")
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for 2nd boot detection")
+	}
+}
+
+func TestWatchSerialForDesktopBoot_SingleBootDoesNotFire(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "serial.log")
+
+	stop := make(chan struct{})
+	ch := WatchSerialForDesktopBoot(path, 2, stop)
+
+	serial := `UEFI firmware (version edk2-stable202408)
+BdsDxe: starting Boot0006 "Windows Boot Manager" from HD(1,GPT,...)
+`
+	require.NoError(t, os.WriteFile(path, []byte(serial), 0644))
+
+	select {
+	case msg := <-ch:
+		t.Fatalf("should not fire on single boot, got: %s", msg)
+	case <-time.After(2 * time.Second):
+		// Expected.
+	}
+	close(stop)
+}
+
 func TestStripANSI(t *testing.T) {
 	assert.Equal(t, "hello world", stripANSI("\x1b[2Jhello \x1b[01;01Hworld"))
 	assert.Equal(t, "plain", stripANSI("plain"))
