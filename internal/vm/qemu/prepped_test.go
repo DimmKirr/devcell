@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -12,8 +13,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestWindowsPreppedDiskBoot_TCG boots the installed Windows disk asset left
-// behind by a successful TestWindowsUnattendedInstall_TCG run and exercises
+// TestWindowsPreppedDiskBoot boots the installed Windows disk asset left
+// behind by a successful TestWindowsUnattendedInstall run and exercises
 // the full FAT answer-volume lifecycle against that live VM: build the image,
 // verify the host can read every file back, boot with it attached, and — when
 // the guest is reachable over SSH — have the guest write its diagnostics to
@@ -25,10 +26,28 @@ import (
 //
 // Long test. Skips unless the disk asset exists:
 //
-//	go test -run TestWindowsPreppedDiskBoot_TCG -timeout 1h ./internal/vm/qemu/
-func TestWindowsPreppedDiskBoot_TCG(t *testing.T) {
+//	go test -run TestWindowsPreppedDiskBoot/tcg -timeout 1h ./internal/vm/qemu/
+//	go test -run TestWindowsPreppedDiskBoot/hvf -timeout 1h ./internal/vm/qemu/
+func TestWindowsPreppedDiskBoot(t *testing.T) {
 	if testing.Short() {
-		t.Skip("long: boots installed Windows under TCG (~minutes)")
+		t.Skip("long: boots installed Windows (~minutes)")
+	}
+
+	for _, accel := range []string{"tcg", "hvf"} {
+		t.Run(accel, func(t *testing.T) {
+			if accel == "hvf" && runtime.GOOS != "darwin" {
+				t.Skip("hvf requires macOS")
+			}
+			testWindowsPreppedDiskBoot(t, accel)
+		})
+	}
+}
+
+func testWindowsPreppedDiskBoot(t *testing.T, accel string) {
+	t.Helper()
+	qemuAccel := "tcg,thread=multi,tb-size=512"
+	if accel == "hvf" {
+		qemuAccel = "hvf"
 	}
 
 	qemuBin := requireQEMUBin(t)
@@ -78,7 +97,7 @@ func TestWindowsPreppedDiskBoot_TCG(t *testing.T) {
 		VarsPath:             varsPath,
 		QMPSocketDir:         tmpDir,
 		DisplayType:          "none",
-		Accel:                "tcg,thread=multi,tb-size=512",
+		Accel:                qemuAccel,
 		SerialLogPath:        serialLog,
 		GuestProgressLogPath: guestProgressLog,
 		SSHPort:              freePort(t),
@@ -113,6 +132,7 @@ func TestWindowsPreppedDiskBoot_TCG(t *testing.T) {
 
 	qmpSock := QMPSocketPath(spec)
 	waitForSocket(t, qmpSock, 60*time.Second, resultsDir)
+	assertAccel(t, qmpSock, accel, resultsDir)
 
 	// --- test ---
 
@@ -210,6 +230,6 @@ func requirePreppedDisk(t *testing.T) string {
 		return asset
 	}
 	t.Skipf("no installed Windows disk at %s — run DEVCELL_TEST_INSTALL=1 "+
-		"go test -run TestWindowsUnattendedInstall_TCG first (a successful run saves its disk there)", asset)
+		"go test -run TestWindowsUnattendedInstall first (a successful run saves its disk there)", asset)
 	return ""
 }

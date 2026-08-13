@@ -61,6 +61,33 @@ func TestParseQEMUVersion_Invalid(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestParseMajorVersion(t *testing.T) {
+	tests := []struct {
+		ver   string
+		major int
+		ok    bool
+	}{
+		{"9.2.2", 9, true},
+		{"10.0.2", 10, true},
+		{"11.0.93", 11, true},
+		{"11.1.0-rc3", 11, true},
+		{"8.2.0", 8, true},
+		{"", 0, false},
+		{"garbage", 0, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.ver, func(t *testing.T) {
+			major, err := ParseMajorVersion(tt.ver)
+			if tt.ok {
+				require.NoError(t, err)
+				assert.Equal(t, tt.major, major)
+			} else {
+				assert.Error(t, err)
+			}
+		})
+	}
+}
+
 func TestAccelerator_Darwin(t *testing.T) {
 	assert.Equal(t, "hvf", accelerator("darwin"))
 }

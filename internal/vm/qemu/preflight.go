@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 )
 
@@ -67,6 +68,24 @@ func ParseQEMUVersion(output string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("cannot parse QEMU version from output: %s", output)
+}
+
+// ParseMajorVersion extracts the major version number from a QEMU version
+// string like "11.0.93" or "10.0.2".
+func ParseMajorVersion(ver string) (int, error) {
+	if ver == "" {
+		return 0, fmt.Errorf("empty version string")
+	}
+	dot := strings.IndexByte(ver, '.')
+	s := ver
+	if dot > 0 {
+		s = ver[:dot]
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		return 0, fmt.Errorf("cannot parse major version from %q: %w", ver, err)
+	}
+	return n, nil
 }
 
 // Accelerator returns the appropriate QEMU accelerator for the current platform.

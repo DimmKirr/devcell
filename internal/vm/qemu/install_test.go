@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -15,12 +16,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestWindowsUnattendedInstall_TCG drives a full unattended Windows install
-// under software emulation and asserts it completes by connecting over SSH.
+// TestWindowsUnattendedInstall drives a full unattended Windows install and
+// asserts it completes by connecting over SSH.
 //
 // Long test — a TCG install takes hours. Run explicitly:
 //
-//	DEVCELL_TEST_INSTALL=1 go test -run TestWindowsUnattendedInstall_TCG -timeout 8h ./internal/vm/qemu/
+//	DEVCELL_TEST_INSTALL=1 go test -run TestWindowsUnattendedInstall/tcg -timeout 8h ./internal/vm/qemu/
+//	DEVCELL_TEST_INSTALL=1 go test -run TestWindowsUnattendedInstall/hvf -timeout 8h ./internal/vm/qemu/
 //
 // Progress telemetry (disk writes, screen ratios, vCPU PC) is logged every
 // poll, and Windows Setup's Panther logs are pulled off the disk image at the
@@ -33,9 +35,9 @@ import (
 // whether the product works.
 //
 // Both are gated so they never contend for the same ports and disk asset.
-func TestWindowsUnattendedInstall_TCG(t *testing.T) {
+func TestWindowsUnattendedInstall(t *testing.T) {
 	if testing.Short() {
-		t.Skip("long: full unattended Windows install under TCG (hours)")
+		t.Skip("long: full unattended Windows install (hours)")
 	}
 	if os.Getenv("DEVCELL_TEST_INSTALL") == "" {
 		t.Skip("set DEVCELL_TEST_INSTALL=1 to run the multi-hour unattended install")
@@ -43,6 +45,23 @@ func TestWindowsUnattendedInstall_TCG(t *testing.T) {
 	if os.Getenv("DEVCELL_TEST_LIBRARY_INSTALL") == "" {
 		t.Skip("library-level install harness: set DEVCELL_TEST_LIBRARY_INSTALL=1 " +
 			"(the CLI-driven TestCellBuildWindows_QEMU is the default install test)")
+	}
+
+	for _, accel := range []string{"tcg", "hvf"} {
+		t.Run(accel, func(t *testing.T) {
+			if accel == "hvf" && runtime.GOOS != "darwin" {
+				t.Skip("hvf requires macOS")
+			}
+			testWindowsUnattendedInstall(t, accel)
+		})
+	}
+}
+
+func testWindowsUnattendedInstall(t *testing.T, accel string) {
+	t.Helper()
+	qemuAccel := "tcg,thread=multi,tb-size=512"
+	if accel == "hvf" {
+		qemuAccel = "hvf"
 	}
 
 	qemuBin := requireQEMUBin(t)
@@ -109,9 +128,7 @@ func TestWindowsUnattendedInstall_TCG(t *testing.T) {
 		VarsPath:     varsPath,
 		QMPSocketDir: tmpDir,
 		DisplayType:  "none",
-		// tb-size bumps the TCG translation-block cache from the 32MB default;
-		// Windows has a large code footprint and re-translation is pure waste.
-		Accel: "tcg,thread=multi,tb-size=512",
+		Accel: qemuAccel,
 		// Throwaway VM: skip guest flushes, which are expensive under TCG.
 		DiskCacheMode: "unsafe",
 		VirtioISO:     virtioISO,
@@ -172,6 +189,7 @@ func TestWindowsUnattendedInstall_TCG(t *testing.T) {
 	}()
 
 	waitForSocket(t, qmpSock, 60*time.Second, resultsDir)
+	assertAccel(t, qmpSock, accel, resultsDir)
 
 	stats, err := QMPBlockStats(qmpSock)
 	require.NoError(t, err, "query-blockstats after VM start")
@@ -717,11 +735,11 @@ func verifyBootstrapRan(t *testing.T, answerImg, guestProgressLog string) {
 		}
 	}
 
-	// The live channel: the script echoes every step to the pci-serial port.
-	// Soft check — COM delivery has more failure modes than the transcript,
+	// The live channel: the script echoes every step to the virtio-serial port.
+	// Soft check — delivery has more failure modes than the transcript,
 	// and the transcript is the authoritative record.
 	if data, err := os.ReadFile(guestProgressLog); err == nil && strings.Contains(string(data), "devcell-bootstrap:") {
-		t.Logf("bootstrap progress also arrived live over pci-serial (%d bytes)", len(data))
+		t.Logf("bootstrap progress also arrived live over virtio-serial (%d bytes)", len(data))
 	} else {
 		t.Logf("WARNING: no bootstrap markers in %s — live progress channel silent (transcript is authoritative)", guestProgressLog)
 	}

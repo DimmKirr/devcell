@@ -56,6 +56,31 @@ func TestFirmwareCandidates_StillPrefersSystemPackages(t *testing.T) {
 	assert.Contains(t, got, "/home/bob/.local/state/nix/profiles/profile/share/qemu/edk2-aarch64-code.fd")
 }
 
+func TestFirmwareFromBinary_FindsFirmwareNextToQemu(t *testing.T) {
+	// Build a fake qemu-system-aarch64 install tree with the firmware file.
+	root := t.TempDir()
+	binDir := filepath.Join(root, "bin")
+	shareDir := filepath.Join(root, "share", "qemu")
+	require.NoError(t, os.MkdirAll(binDir, 0755))
+	require.NoError(t, os.MkdirAll(shareDir, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(shareDir, "edk2-aarch64-code.fd"), []byte("fw"), 0644))
+
+	fakeBin := filepath.Join(binDir, "qemu-system-aarch64")
+	require.NoError(t, os.WriteFile(fakeBin, []byte("#!/bin/sh\n"), 0755))
+
+	// Put our fake bin first on PATH.
+	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
+
+	got := firmwareFromBinary()
+	assert.NotEmpty(t, got, "should find firmware relative to binary")
+	assert.FileExists(t, got)
+}
+
+func TestFirmwareFromBinary_ReturnsEmptyWhenNoBinary(t *testing.T) {
+	t.Setenv("PATH", t.TempDir()) // empty dir — no qemu binary
+	assert.Empty(t, firmwareFromBinary())
+}
+
 func TestFirmwareCandidates_OmitsHomePathWhenHomeUnknown(t *testing.T) {
 	for _, p := range firmwareCandidates("") {
 		assert.False(t, strings.HasPrefix(p, "/.local"),

@@ -49,7 +49,7 @@ func TestQemuBuildSSHUser_FallsBackToTheDefaultSessionUser(t *testing.T) {
 // "Start boot option". A build that does not capture it leaves the one class of
 // failure it cannot otherwise explain completely invisible.
 //
-// The guest's own progress channel (pci-serial) is the matching outbound path:
+// The guest's own progress channel (virtio-serial) is the matching outbound path:
 // it is the only way a guest with no network reports on itself while installing.
 func TestQemuDiagnosticPaths_CaptureSerialAndGuestProgress(t *testing.T) {
 	serial, guestProgress := qemuDiagnosticPaths("/project/.context/debug")

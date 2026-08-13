@@ -36,14 +36,20 @@ func TestGeneratedArtifacts_AreByteStable(t *testing.T) {
 		got  []byte
 		want string // sha256 of the rendered bytes
 	}{
+		// autounattend.xml hash updated 2026-08-12: the agent launcher's
+		// <Order> now comes from AgentLauncherOrder (contiguity is
+		// computed, not hand-written — run 20260812T132820 shipped a gap
+		// and Setup rejected the file with 0x8007000D), and windowsPE
+		// gained the comment recording why PnpCustomizationsWinPE is
+		// deliberately absent.
 		{"autounattend.xml", GenerateAutounattendXML(cfg),
-			"99c4d697f9f5035ea5a2d07b639573fd3d3ab3837b75ba732d2374d3176efe79"},
+			"6e30bea9d21629c3a0c672698b5d598bb1bb37954b15e583f8e6092395e9b78d"},
 		{"devcell-bootstrap.ps1", GenerateBootstrapScript(cfg),
 			"efbdd3841df8cf03994d428b64c34555b81f410f8e3f7a8eba17fb2e10288286"},
 		{"devcell-diag.ps1", GenerateGuestDiagnosticsScript(),
 			"5c2fcf79c427964caee95d6a02dba67c20b72369dd9dfafe32bc3baa3eb9eb6a"},
 		{"winpe-agent", GenerateWinPEAgent(WinPEPayloadConfig{}),
-			"0b2cb262e534efb38a72dc76ae81e7c4e0958eb89a0008d5e700f8d370f7671b"},
+			"9362f5c2d9eb6cfa27520dccc212b424e2af738779611623e2c8a878169e86aa"},
 	} {
 		sum := hex.EncodeToString(func() []byte { h := sha256.Sum256(tc.got); return h[:] }())
 		require.Equal(t, tc.want, sum,

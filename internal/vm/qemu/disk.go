@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 )
 
 // DefaultDiskSizeGB is the default Windows VM disk size.
@@ -77,10 +76,29 @@ func firmwareCandidates(home string) []string {
 	return append(candidates, filepath.Join("/opt/devcell", nixRelative))
 }
 
+// firmwareFromBinary resolves the EDK2 firmware path relative to the
+// qemu-system-aarch64 binary: <prefix>/share/qemu/edk2-aarch64-code.fd.
+// Works for Homebrew, Nix, distro packages — any standard install layout.
+func firmwareFromBinary() string {
+	bin, err := exec.LookPath("qemu-system-aarch64")
+	if err != nil {
+		return ""
+	}
+	real, err := filepath.EvalSymlinks(bin)
+	if err != nil {
+		return ""
+	}
+	p := filepath.Join(filepath.Dir(real), "..", "share", "qemu", "edk2-aarch64-code.fd")
+	if _, err := os.Stat(p); err != nil {
+		return ""
+	}
+	return p
+}
+
 // FirmwarePath returns the path to the EDK2 UEFI firmware for ARM64.
 func FirmwarePath() string {
-	if runtime.GOOS == "darwin" {
-		return "/opt/homebrew/share/qemu/edk2-aarch64-code.fd"
+	if p := firmwareFromBinary(); p != "" {
+		return p
 	}
 	home, _ := os.UserHomeDir()
 	for _, p := range firmwareCandidates(home) {

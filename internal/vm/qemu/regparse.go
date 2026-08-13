@@ -2,7 +2,7 @@ package qemu
 
 import "strings"
 
-// extractRegister pulls a register value out of QEMU's "info registers" text.
+// ExtractRegister pulls a register value out of QEMU's "info registers" text.
 //
 // name must include the trailing '=' (e.g. "PC=", "X30="). Matching is anchored
 // to a token boundary so "PC=" cannot be found inside "FPCR=" — a looser match
@@ -11,7 +11,7 @@ import "strings"
 // than nothing.
 //
 // Returns "" when the register is absent.
-func extractRegister(regs, name string) string {
+func ExtractRegister(regs, name string) string {
 	for i := 0; ; {
 		j := strings.Index(regs[i:], name)
 		if j < 0 {

@@ -12,10 +12,10 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
+	"github.com/DimmKirr/devcell/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -178,24 +178,35 @@ var windowsBootConfigs = map[string]windowsBootConfig{
 	"KVM":       {accel: "kvm", expect: expectSetup},
 }
 
-// TestWindowsISOBoot_TCG boots a Windows installer ISO in QEMU with software
-// emulation (TCG) and asserts the installer starts by detecting the Setup UI
-// in a screenshot.
+// TestWindowsISOBoot boots a Windows installer ISO in QEMU and asserts the
+// installer starts by detecting the Setup UI in a screenshot.
 //
 // Long test: requires QEMU, UEFI firmware, and a Windows ISO (or ESD to
 // assemble one). Run with:
 //
-//	go test -tags wimlib -run TestWindowsISOBoot_TCG -timeout 30m ./internal/vm/qemu/
+//	go test -tags wimlib -run TestWindowsISOBoot/tcg -timeout 30m ./internal/vm/qemu/
+//	go test -tags wimlib -run TestWindowsISOBoot/hvf -timeout 30m ./internal/vm/qemu/
 //
 // The ISO is resolved from (in priority order):
 //  1. DEVCELL_TEST_WINDOWS_ISO env var (pre-built ISO)
 //  2. Cached ISO at ~/.devcell/cache/qemu/windows-arm64-en-us.iso
 //  3. DEVCELL_TEST_ESD_PATH env var → assembled on the fly (needs -tags wimlib)
-func TestWindowsISOBoot_TCG(t *testing.T) {
+func TestWindowsISOBoot(t *testing.T) {
 	if testing.Short() {
-		t.Skip("long: boots Windows ISO in QEMU with TCG (~5 min)")
+		t.Skip("long: boots Windows ISO in QEMU (~5 min)")
 	}
-	bootWindowsISO(t, windowsBootConfigs["TCG"])
+	for _, accel := range []string{"tcg", "hvf"} {
+		t.Run(accel, func(t *testing.T) {
+			if accel == "hvf" && runtime.GOOS != "darwin" {
+				t.Skip("hvf requires macOS")
+			}
+			cfg := windowsBootConfigs["TCG"]
+			if accel == "hvf" {
+				cfg.accel = "hvf"
+			}
+			bootWindowsISO(t, cfg)
+		})
+	}
 }
 
 // TestWindowsISOBoot_TCG_NoPMU is the promoted form of the 2026-07-30 ad-hoc
@@ -327,34 +338,15 @@ func bootWindowsISO(t *testing.T, cfg windowsBootConfig) {
 
 	waitForSocket(t, qmpSock, 30*time.Second, resultsDir)
 
-	// Assert the host actually attached both block devices — a missing disk
-	// is otherwise invisible until Windows Setup's "no drives" screen.
-	// Prove the accelerator from inside the running VM, and record it. A run
-	// directory that holds 40 frames but nothing identifying the accelerator
-	// cannot be attributed afterwards.
-	kvmEnabled, kvmPresent, kvmErr := QMPQueryKVM(qmpSock)
-	if kvmErr != nil {
-		t.Logf("WARNING: query-kvm failed: %v", kvmErr)
-	} else {
-		t.Logf("query-kvm: enabled=%v present=%v", kvmEnabled, kvmPresent)
-		appendRunInfo(t, resultsDir, fmt.Sprintf("query-kvm: enabled=%v present=%v\n", kvmEnabled, kvmPresent))
-		if kvmEnabled {
-			// What can this host's KVM actually give the guest? PMUv3 is the
-			// H1 discriminator for the firmware hang: bootmgr reads PMCR_EL0,
-			// and a vCPU without a PMU takes an UNDEF right there.
-			if caps, err := QueryKVMHostCaps(KVMDevice); err == nil {
-				t.Logf("kvm host caps: %s", caps.Summary())
-				appendRunInfo(t, resultsDir, "kvm-caps: "+caps.Summary()+"\n")
-			} else {
-				t.Logf("WARNING: kvm host caps query failed: %v", err)
-			}
-		}
-		if strings.HasPrefix(accel, "kvm") {
-			require.True(t, kvmEnabled,
-				"asked for -accel kvm but the VM reports KVM disabled (present=%v) — this run is not what it claims", kvmPresent)
+	assertAccel(t, qmpSock, accel, resultsDir)
+
+	// KVM-specific: what can this host's KVM actually give the guest?
+	if kvmEnabled, _, err := QMPQueryKVM(qmpSock); err == nil && kvmEnabled {
+		if caps, err := QueryKVMHostCaps(KVMDevice); err == nil {
+			t.Logf("kvm host caps: %s", caps.Summary())
+			appendRunInfo(t, resultsDir, "kvm-caps: "+caps.Summary()+"\n")
 		} else {
-			require.False(t, kvmEnabled,
-				"asked for -accel %s but the VM reports KVM enabled", accel)
+			t.Logf("WARNING: kvm host caps query failed: %v", err)
 		}
 	}
 
@@ -614,6 +606,13 @@ func requireQEMUBin(t *testing.T) string {
 
 func requireFirmware(t *testing.T) string {
 	t.Helper()
+	if override := os.Getenv("QEMU_FIRMWARE_OVERRIDE"); override != "" {
+		if _, err := os.Stat(override); err != nil {
+			t.Fatalf("QEMU_FIRMWARE_OVERRIDE=%s: %v", override, err)
+		}
+		t.Logf("using firmware override: %s", override)
+		return override
+	}
 	fw := FirmwarePath()
 	if _, err := os.Stat(fw); err != nil {
 		t.Skipf("UEFI firmware not found at %s — install QEMU", fw)
@@ -656,48 +655,13 @@ func requireWindowsISO(t *testing.T) string {
 	return ""
 }
 
-func repoRoot(t *testing.T) string {
-	t.Helper()
-	_, file, _, _ := runtime.Caller(0)
-	root := filepath.Dir(file)
-	for {
-		if _, err := os.Stat(filepath.Join(root, "go.mod")); err == nil {
-			return root
-		}
-		parent := filepath.Dir(root)
-		if parent == root {
-			t.Fatalf("could not find project root (go.mod) from %s", file)
-		}
-		root = parent
-	}
+func repoRoot(_ *testing.T) string {
+	return testutil.RepoRoot()
 }
-
-// resultsDirs memoizes one directory per test.
-//
-// testResultsDir used to stamp time.Now() on every call, so it returned a *new*
-// directory each time rather than the run's directory. Two calls a second apart
-// split one run's artifacts across 20260731T140208-… and 20260731T140210-…,
-// which is unreadable: the screenshots and the log that explains them ended up
-// in different places. Fixing the callers is not enough — the next second
-// caller brings it straight back — so the answer belongs here.
-var (
-	resultsDirsMu sync.Mutex
-	resultsDirs   = map[string]string{}
-)
 
 func testResultsDir(t *testing.T) string {
 	t.Helper()
-	resultsDirsMu.Lock()
-	defer resultsDirsMu.Unlock()
-	if dir, ok := resultsDirs[t.Name()]; ok {
-		return dir
-	}
-	stamp := time.Now().Format("20060102T150405")
-	dir := filepath.Join(repoRoot(t), "test", "results", stamp+"-"+t.Name())
-	require.NoError(t, os.MkdirAll(dir, 0o755))
-	t.Logf("test results: %s", dir)
-	resultsDirs[t.Name()] = dir
-	return dir
+	return testutil.TestResultsDir(t, nil)
 }
 
 func waitForSocket(t *testing.T, sockPath string, timeout time.Duration, resultsDir string) {
@@ -782,6 +746,34 @@ func appendRunInfo(t *testing.T, resultsDir, text string) {
 	}
 }
 
+// assertAccel proves via QMP that the running VM uses the expected accelerator.
+// query-kvm only reports KVM state — HVF returns enabled=false because it is
+// a separate accelerator. For HVF we verify KVM is NOT enabled (QEMU exits if
+// the requested accelerator is unavailable, so a live VM is sufficient proof).
+func assertAccel(t *testing.T, qmpSock, requestedAccel, resultsDir string) {
+	t.Helper()
+	kvmEnabled, kvmPresent, err := QMPQueryKVM(qmpSock)
+	if err != nil {
+		t.Logf("WARNING: query-kvm failed: %v", err)
+		return
+	}
+	t.Logf("query-kvm: enabled=%v present=%v (requested %s)", kvmEnabled, kvmPresent, requestedAccel)
+	appendRunInfo(t, resultsDir, fmt.Sprintf("query-kvm: enabled=%v present=%v\n", kvmEnabled, kvmPresent))
+
+	switch {
+	case strings.HasPrefix(requestedAccel, "kvm"):
+		require.True(t, kvmEnabled,
+			"asked for -accel kvm but query-kvm reports enabled=false (present=%v)", kvmPresent)
+	case requestedAccel == "hvf":
+		require.False(t, kvmEnabled,
+			"asked for -accel hvf but query-kvm reports enabled=true — unexpected KVM when HVF was requested")
+		t.Logf("HVF active — query-kvm correctly reports enabled=false (HVF is not KVM)")
+	default:
+		require.False(t, kvmEnabled,
+			"asked for -accel %s but query-kvm reports enabled=true — expected TCG (software emulation)", requestedAccel)
+	}
+}
+
 // captureStallDiagnostics dumps everything the live VM can still tell us at the
 // moment of the hang, and returns a one-line interpretation for the failure
 // message.
@@ -811,10 +803,10 @@ func captureStallDiagnostics(t *testing.T, qmpSock, resultsDir string, spec Spec
 	}
 
 	interp := "PSTATE unavailable — cannot tell a dead loop from a WFI idle"
-	pc := extractRegister(regs, "PC=")
-	lr := extractRegister(regs, "X30=")
+	pc := ExtractRegister(regs, "PC=")
+	lr := ExtractRegister(regs, "X30=")
 	pcVal, pcValErr := strconv.ParseUint(pc, 16, 64)
-	if ps := extractRegister(regs, "PSTATE="); ps != "" {
+	if ps := ExtractRegister(regs, "PSTATE="); ps != "" {
 		if decoded, err := DecodePSTATE(ps); err == nil {
 			interp = decoded.Summary()
 			// A masked-DAIF park at a vector-shaped offset names the
