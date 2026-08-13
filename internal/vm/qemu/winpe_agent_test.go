@@ -16,6 +16,10 @@ func TestGenerateWinPEShellINI_RunsBootstrapBeforeSetup(t *testing.T) {
 	assert.Positive(t, bootstrapIdx, "bootstrap must be listed")
 	assert.Positive(t, setupIdx, "setup.exe must still run")
 	assert.Less(t, bootstrapIdx, setupIdx, "bootstrap must run before setup.exe")
+
+	assert.Contains(t, out, "cmd.exe, /c "+WinPEBootstrapPath,
+		"winpeshl.exe uses CreateProcess — .cmd files need cmd.exe /c prefix")
+	assert.NotContains(t, out, "\n[", "must use CRLF line endings for Windows INI parser")
 }
 
 func TestGenerateWinPEBootstrap_NoDriversByDefault(t *testing.T) {
@@ -33,10 +37,11 @@ func TestGenerateWinPEBootstrap_LoadsRequestedDrivers(t *testing.T) {
 }
 
 func TestGenerateWinPEBootstrap_ReportsProgressToSerial(t *testing.T) {
-	// The PCI 16550 from CELL-360 shows up as a COM port; writing to it is
-	// how the guest reports progress the host can read as text.
-	out := string(GenerateWinPEBootstrap(WinPEPayloadConfig{ProgressPort: "COM1"}))
-	assert.Contains(t, out, ">COM1")
+	// The guest writes progress to a virtio-serial port (CELL-430); the host
+	// reads it as text from GuestProgressLogPath.
+	port := `\\.\Global\` + ProgressPortName
+	out := string(GenerateWinPEBootstrap(WinPEPayloadConfig{ProgressPort: port}))
+	assert.Contains(t, out, ">"+port)
 	assert.Contains(t, out, "devcell:")
 }
 
@@ -45,6 +50,14 @@ func TestGenerateWinPEBootstrap_StartsAgentDetached(t *testing.T) {
 	// winpeshl runs entries synchronously — the agent must not block setup.exe
 	assert.Contains(t, out, "start ")
 	assert.Contains(t, out, WinPEAgentPath)
+}
+
+func TestGenerateWinPEBootstrap_SyncAgentBlocksBootstrap(t *testing.T) {
+	out := string(GenerateWinPEBootstrap(WinPEPayloadConfig{SyncAgent: true}))
+	assert.Contains(t, out, "call "+WinPEAgentPath,
+		"SyncAgent must use 'call' so bootstrap blocks on the agent")
+	assert.NotContains(t, out, "start ",
+		"SyncAgent must not detach the agent")
 }
 
 func TestGenerateWinPEAgent_PollsCommandFileAndWritesResult(t *testing.T) {
@@ -78,12 +91,113 @@ func TestGenerateWinPEAgent_SnapshotsSetupLogsEveryPoll(t *testing.T) {
 	out := string(GenerateWinPEAgent(WinPEPayloadConfig{}))
 	assert.Contains(t, out, `X:\Windows\Panther\setupact.log`)
 	assert.Contains(t, out, `X:\Windows\Panther\setuperr.log`)
+	// setup.exe switches its logging to X:\$windows.~bt\Sources\Panther once
+	// it takes over — run 20260812T144140 snapshotted nothing because only
+	// the early path was copied. The later path is copied second so it wins
+	// when both exist.
+	assert.Contains(t, out, `X:\$windows.~bt\Sources\Panther\setupact.log`)
+	assert.Contains(t, out, `X:\$windows.~bt\Sources\Panther\setuperr.log`)
 	assert.Contains(t, out, SetupActSnapshotName)
 	assert.Contains(t, out, SetupErrSnapshotName)
 
 	snapIdx := strings.Index(out, SetupActSnapshotName)
 	loopIdx := strings.Index(out, ":loop")
 	assert.Greater(t, snapIdx, loopIdx, "snapshots happen inside the poll loop, not once")
+}
+
+func TestGenerateWinPEHyperVDiagScript_StructuredOutput(t *testing.T) {
+	progPort := `\\.\Global\` + ProgressPortName
+	out := string(GenerateWinPEHyperVDiagScript(progPort))
+
+	assert.Contains(t, out, "DEVCELL HYPERV DIAGNOSTICS", "must have a recognisable header")
+	assert.Contains(t, out, "DEVCELL HYPERV DIAGNOSTICS COMPLETE", "must have a completion marker")
+
+	// System info
+	assert.Contains(t, out, "SYSTEM INFO", "must report system info")
+	assert.Contains(t, out, "PROCESSOR_ARCHITECTURE", "must report CPU architecture")
+
+	// BCD
+	assert.Contains(t, out, "bcdedit", "must query BCD for hypervisor launch config")
+	assert.Contains(t, out, "hypervisorsettings", "must query BCD hypervisor settings")
+	assert.Contains(t, out, "bcdedit /enum ALL", "must dump full BCD store")
+
+	// Binaries
+	assert.Contains(t, out, "hvaa64.exe", "must verify hypervisor binary is present")
+	assert.Contains(t, out, "hvloader.dll", "must verify hypervisor loader is present")
+	assert.Contains(t, out, "hvservice.sys", "must verify hypervisor service driver is present")
+	assert.Contains(t, out, "winhv.sys", "must verify WinHV platform driver is present")
+	assert.Contains(t, out, "vmms.exe", "must check for vmms binary")
+
+	// Driver registry details
+	assert.Contains(t, out, "DRIVER REGISTRY DETAILS", "must dump full driver registry keys")
+
+	// DISM
+	assert.Contains(t, out, "dism", "must query DISM for installed packages")
+	assert.Contains(t, out, "Get-Features", "must query DISM features")
+	assert.Contains(t, out, "Hyper-V", "must reference Hyper-V")
+
+	// Service state
+	assert.Contains(t, out, "HYPERV SERVICE STATE", "must report Hyper-V service state")
+	assert.Contains(t, out, "WSL SERVICE STATE", "must report WSL2 service state")
+	assert.Contains(t, out, "vmms", "must check the Hyper-V VMMS service")
+	assert.Contains(t, out, "DependOnService", "must query driver dependencies")
+
+	// Hypervisor detection
+	assert.Contains(t, out, "HYPERVISOR DETECTION", "must probe for hypervisor presence")
+	assert.Contains(t, out, "DeviceGuard", "must check VBS/Device Guard state")
+	assert.Contains(t, out, "CentralProcessor", "must dump processor info from registry")
+
+	// Start services
+	assert.Contains(t, out, "START HYPERV SERVICES", "must attempt to start services")
+
+	// Event logs
+	assert.Contains(t, out, "EVENT LOGS", "must collect event logs")
+	assert.Contains(t, out, "Hyper-V-Hypervisor-Operational", "must check hypervisor operational log")
+
+	// SetupAPI
+	assert.Contains(t, out, "SETUPAPI LOGS", "must check driver setup logs")
+	assert.Contains(t, out, "setupapi.dev.log", "must dump setupapi device log")
+
+	// Final status
+	assert.Contains(t, out, "FINAL DRIVER STATUS", "must report final driver status")
+	assert.Contains(t, out, "POST-MORTEM SUMMARY", "must include post-mortem summary")
+	assert.Contains(t, out, "net start 2>&1", "must list all running services")
+
+	// Progress markers
+	assert.Contains(t, out, ">"+progPort, "must echo progress to virtio-serial port for live monitoring")
+	assert.Contains(t, out, "hyperv-diag-start", "must report start to serial")
+	assert.Contains(t, out, "hyperv-diag-complete", "must report completion to serial")
+
+	noSerial := string(GenerateWinPEHyperVDiagScript(""))
+	assert.NotContains(t, noSerial, "devcell:", "no serial output when progressPort is empty")
+}
+
+func TestWinPEHyperVDiagScriptCommand_InvokesScript(t *testing.T) {
+	cmd := WinPEHyperVDiagScriptCommand()
+	assert.Contains(t, cmd, WinPEHyperVDiagScriptName, "must reference the script name")
+	assert.Contains(t, cmd, "%DEVCELL_VOL%", "must use percent-expansion volume ref")
+}
+
+func TestGenerateWinPEShellINI_NoSetup_RunsOnlyBootstrap(t *testing.T) {
+	out := string(GenerateWinPEShellINI_NoSetup())
+	assert.Contains(t, out, "[LaunchApps]")
+	assert.Contains(t, out, WinPEBootstrapPath, "must launch bootstrap")
+	assert.NotContains(t, out, "setup.exe", "must NOT launch setup.exe")
+	assert.Contains(t, out, "cmd.exe, /c "+WinPEBootstrapPath,
+		"winpeshl.exe uses CreateProcess — .cmd files need cmd.exe /c prefix")
+}
+
+func TestGenerateWinPEBootstrap_WPEInit(t *testing.T) {
+	out := string(GenerateWinPEBootstrap(WinPEPayloadConfig{WPEInit: true, ProgressPort: `\\.\Global\` + ProgressPortName}))
+	wpeinitIdx := strings.Index(out, "wpeinit")
+	bootstrapIdx := strings.Index(out, "devcell:")
+	assert.Positive(t, wpeinitIdx, "must call wpeinit")
+	assert.Less(t, wpeinitIdx, bootstrapIdx, "wpeinit must run before any progress output")
+}
+
+func TestGenerateWinPEBootstrap_NoWPEInitByDefault(t *testing.T) {
+	out := string(GenerateWinPEBootstrap(WinPEPayloadConfig{}))
+	assert.NotContains(t, out, "wpeinit", "default bootstrap must not call wpeinit")
 }
 
 func TestGenerateWinPEAgentLauncher_CannotFailAndFindsTheAgent(t *testing.T) {
@@ -97,4 +211,38 @@ func TestGenerateWinPEAgentLauncher_CannotFailAndFindsTheAgent(t *testing.T) {
 	assert.Contains(t, cmd, AgentScriptName)
 	assert.Contains(t, cmd, "start ")
 	assert.True(t, strings.HasSuffix(cmd, "exit /b 0"), "must force exit 0: %s", cmd)
+}
+
+func TestGenerateWinPEEchoProbeScript_ProbesCOM1Through4(t *testing.T) {
+	out := string(GenerateWinPEEchoProbeScript("devcell-logs"))
+	assert.Contains(t, out, "COM PORT PROBE")
+	for i := 1; i <= 4; i++ {
+		marker := "DEVCELL_COM_ECHO_COM" + string(rune('0'+i))
+		assert.Contains(t, out, marker, "must echo marker for COM%d", i)
+	}
+	assert.Contains(t, out, "COM PROBE DONE")
+}
+
+func TestGenerateWinPEEchoProbeScript_LoadsViofsDriver(t *testing.T) {
+	out := string(GenerateWinPEEchoProbeScript("devcell-logs"))
+	assert.Contains(t, out, "drvload")
+	assert.Contains(t, out, "viofs.inf")
+}
+
+func TestGenerateWinPEEchoProbeScript_MountsVirtiofs(t *testing.T) {
+	out := string(GenerateWinPEEchoProbeScript("my-tag"))
+	assert.Contains(t, out, "virtiofs.exe mount -t my-tag V:")
+	assert.Contains(t, out, "DEVCELL_VIOFS_HELLO")
+	assert.Contains(t, out, "viofs-probe.txt")
+}
+
+func TestGenerateWinPEEchoProbeScript_RunsToCompletion(t *testing.T) {
+	out := string(GenerateWinPEEchoProbeScript("devcell-logs"))
+	assert.Contains(t, out, "DEVCELL ECHO PROBE COMPLETE")
+}
+
+func TestWinPEEchoProbeScriptCommand_InvokesOnAnswerVolume(t *testing.T) {
+	cmd := WinPEEchoProbeScriptCommand()
+	assert.Contains(t, cmd, WinPEEchoProbeScriptName)
+	assert.Contains(t, cmd, "%DEVCELL_VOL%")
 }

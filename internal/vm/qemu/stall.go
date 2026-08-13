@@ -7,16 +7,13 @@ import (
 
 // Guest-stall detection.
 //
-// A hung guest and a booting one look identical on screen: Windows blanks the
-// display after ~8 idle minutes, and the display also stops updating at
-// ExitBootServices. So blackness — or any display-only rule — cannot decide it,
-// and a detector built on frame content will eventually fail a healthy boot.
-//
-// What separates them is the conjunction of three signals: the frame is
-// unchanged, no bytes were read, AND the vCPU program counter has not moved.
-// The last term is the strongest: a live guest cannot hold one PC across polls
-// seconds apart, idle or not. Observed in the real KVM failure — rd frozen at
-// 1081344 and PC pinned at 000000013c347200 for 40 consecutive polls.
+// A stalled guest shows two frozen signals: identical screen hash and zero disk
+// progress across consecutive polls. PC (program counter) is NOT part of the
+// conjunction — firmware spin-loops jitter between a handful of addresses,
+// resetting a PC-based counter even though the guest is clearly stuck (screen
+// and disk frozen for 10+ minutes, observed in the HVF/EL2 failure at
+// 20260813T044502). A live guest making real progress always changes at least
+// one of screen or disk within a few polls.
 
 // StallSignal is one poll's worth of liveness evidence.
 type StallSignal struct {
@@ -55,8 +52,7 @@ func (s *StallTracker) Observe(sig StallSignal) int {
 		return 0
 	}
 	unchanged := prev.ScreenHash == sig.ScreenHash &&
-		prev.ReadBytes == sig.ReadBytes &&
-		prev.PC == sig.PC
+		prev.ReadBytes == sig.ReadBytes
 	if unchanged {
 		s.consec++
 	} else {

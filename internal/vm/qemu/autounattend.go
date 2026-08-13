@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"path"
+	"sort"
 	"strings"
 	"text/template"
 
@@ -52,6 +54,96 @@ type AutounattendConfig struct {
 	// ARM64 media carries three (Home, Home Single Language, Pro); without a
 	// choice Setup stops to ask. Defaults to "Windows 11 Pro".
 	ImageName string
+	// EFIBootLoader is the raw bytes of the Windows EFI bootloader
+	// (BOOTAA64.EFI), extracted from the installer ISO at build time. When
+	// set, BuildAnswerVolume writes it to /EFI/BOOT/BOOTAA64.EFI on the
+	// answer FAT volume. This lets startup.nsh chainload the installer from
+	// the USB volume (FS0) instead of the CD (FS1), working around QEMU
+	// 11/HVF where the firmware can enumerate CD files but cannot execute
+	// PE binaries from them (CELL-427).
+	EFIBootLoader []byte
+	// AnswerDrivers are driver files BuildAnswerVolume ships on the answer
+	// volume, keyed by volume path (see LoadWinPEStorageDrivers). Every
+	// .inf among them gets a windowsPE RunSynchronous drvload command —
+	// see WinPEDriverLoads — which runs just before Modern Setup searches
+	// for install media. ARM64 WinPE has no inbox vioscsi, so without this
+	// the virtio-scsi installer CD is invisible and Setup stops at "a media
+	// driver your computer needs is missing" (CELL-429).
+	//
+	// The files ship byte-exact, not padForFAT-padded: Setup's driver
+	// import validates them against the catalog's hashes.
+	AnswerDrivers map[string][]byte
+	// AgentCommand, when WinPEAgent is set, is pre-baked into the agent's
+	// command file (AgentCommandFile) so the agent executes it on its first
+	// poll and writes the combined output to devcell-out.txt — a one-shot
+	// diagnostic channel into WinPE, which has no network and no QGA.
+	AgentCommand string
+}
+
+// winPEFixedSyncCommands is how many RunSynchronousCommand entries the
+// windowsPE template always emits (the LabConfig bypasses). Optional
+// commands are numbered from here. <Order> values must be contiguous from
+// 1: run 20260812T132820 shipped 1,2,3,4,5,7 — the agent launcher at 6 was
+// gated off while a driver loader at 7 was gated on — and Setup rejected
+// the whole answer file with 0x8007000D (ERROR_INVALID_DATA) before
+// executing anything. TestGenerateAutounattendXML_WindowsPEOrdersAreContiguous
+// guards this constant against drift.
+const winPEFixedSyncCommands = 5
+
+// AgentLauncherOrder is the <Order> of the agent launcher command.
+func (c AutounattendConfig) AgentLauncherOrder() int {
+	return winPEFixedSyncCommands + 1
+}
+
+// WinPEDriverLoad is one drvload RunSynchronousCommand.
+type WinPEDriverLoad struct {
+	Order       int
+	Path        string
+	Description string
+}
+
+// WinPEDriverLoads returns one drvload command per .inf in AnswerDrivers,
+// numbered contiguously after the fixed commands and the agent launcher.
+// One command per INF keeps each identical to the shape Setup is known to
+// accept — see WinPEDriverLoadCommand.
+func (c AutounattendConfig) WinPEDriverLoads() []WinPEDriverLoad {
+	infs := c.winPEDriverINFs()
+	if len(infs) == 0 {
+		return nil
+	}
+	next := winPEFixedSyncCommands + 1
+	if c.WinPEAgent {
+		next++
+	}
+	loads := make([]WinPEDriverLoad, 0, len(infs))
+	for i, inf := range infs {
+		loads = append(loads, WinPEDriverLoad{
+			Order:       next + i,
+			Path:        escapeXMLAmp(WinPEDriverLoadCommand(inf)),
+			Description: "Load " + inf + " so Setup can see the installer media",
+		})
+	}
+	return loads
+}
+
+// winPEDriverINFs returns the volume-relative backslash paths of the .inf
+// files in AnswerDrivers, sorted for deterministic rendering.
+func (c AutounattendConfig) winPEDriverINFs() []string {
+	var infs []string
+	for p := range c.AnswerDrivers {
+		if !strings.EqualFold(path.Ext(p), ".inf") {
+			continue
+		}
+		infs = append(infs, strings.ReplaceAll(strings.TrimPrefix(p, "/"), "/", `\`))
+	}
+	sort.Strings(infs)
+	return infs
+}
+
+// escapeXMLAmp makes a command line safe to drop into an XML element. Only
+// & can appear in the commands we generate; text/template does not escape.
+func escapeXMLAmp(s string) string {
+	return strings.ReplaceAll(s, "&", "&amp;")
 }
 
 // VirtIODriver describes a driver to install during Windows setup.
@@ -146,6 +238,13 @@ const autounattendTmplStr = `<?xml version="1.0" encoding="utf-8"?>
 <unattend xmlns="urn:schemas-microsoft-com:unattend">
 
   <settings pass="windowsPE">
+    <!-- No PnpCustomizationsWinPE/DriverPaths component here: Modern Setup
+         (MOUPG) parses it and then ignores it — run 20260812T150644 logged
+         "SetupManager: Drivers Path: []" with the component present and a
+         resolvable %configsetroot% path. Since every element in this pass
+         is a potential Setup-abort (an unresolved DriverPaths is exactly
+         how run 20260729T172019 died), a proven no-op does not earn its
+         place. Drivers load through the RunSynchronous commands below. -->
     <component name="Microsoft-Windows-International-Core-WinPE"
                processorArchitecture="arm64" publicKeyToken="31bf3856ad364e35"
                language="neutral" versionScope="nonSxS"
@@ -195,9 +294,23 @@ const autounattendTmplStr = `<?xml version="1.0" encoding="utf-8"?>
              (cannot fail), starts the agent detached, force-exits 0 — so it
              can never abort Setup the way an unresolved DriverPaths did. -->
         <RunSynchronousCommand wcm:action="add">
-          <Order>6</Order>
+          <Order>{{.AgentLauncherOrder}}</Order>
           <Path>{{agentLauncher}}</Path>
           <Description>Start the devcell WinPE agent from the answer volume</Description>
+        </RunSynchronousCommand>
+{{- end}}
+{{- range .WinPEDriverLoads}}
+        <!-- ARM64 WinPE has no inbox vioscsi, so the virtio-scsi installer
+             CD is invisible and Modern Setup parks on "media driver
+             missing" (CELL-429). This runs in the last window before that
+             search: WinPEInitialization executes these commands, then
+             EarlyF6DriverInstall looks for media one second later (run
+             20260812T150644). Same cannot-fail shape as the launcher
+             above, which that log shows exiting 0x00000000. -->
+        <RunSynchronousCommand wcm:action="add">
+          <Order>{{.Order}}</Order>
+          <Path>{{.Path}}</Path>
+          <Description>{{.Description}}</Description>
         </RunSynchronousCommand>
 {{- end}}
         <!-- Nothing but "reg add" (and the vetted agent launcher above) may
@@ -454,13 +567,17 @@ map -r
 // install volumes — it also ships the first-logon bootstrap the XML launcher
 // expects; this raw-XML variant exists for validation tests.
 func WriteAutounattendImage(xmlBytes []byte, destPath string) error {
-	return writeAnswerImage(xmlBytes, nil, destPath)
+	return writeAnswerImage(xmlBytes, nil, nil, destPath)
 }
 
 // writeAnswerImage validates the answer file and writes it, the shared base
-// files, and any extra files to a FAT image. Every payload is padded — see
-// padForFAT — and CreateFATImage verifies each round-trip.
-func writeAnswerImage(xmlBytes []byte, extra map[string][]byte, destPath string) error {
+// files, and any extra files to a FAT image. Every payload in extra is
+// padded — see padForFAT — and CreateFATImage verifies each round-trip.
+// Files in exact are written byte-identical: driver payloads must match
+// their catalog hashes, so they cannot carry padding (CreateFATImage's
+// verification still catches the go-diskfs boundary bug loudly if one of
+// them ever lands on it).
+func writeAnswerImage(xmlBytes []byte, extra, exact map[string][]byte, destPath string) error {
 	// A misplaced setting is ignored silently by Windows Setup, so a bad
 	// answer file only shows up hours later as an unexplained install
 	// failure. Refuse to write one.
@@ -478,6 +595,9 @@ func writeAnswerImage(xmlBytes []byte, extra map[string][]byte, destPath string)
 	}
 	for name, data := range extra {
 		files[name] = padForFAT(data)
+	}
+	for name, data := range exact {
+		files[name] = data
 	}
 	return isokit.CreateFATImage(destPath, files)
 }
@@ -499,8 +619,18 @@ func BuildAnswerVolume(cfg AutounattendConfig, destPath string) error {
 	if cfg.WinPEAgent {
 		extra["/"+AgentScriptName] = GenerateWinPEAgent(WinPEPayloadConfig{})
 		extra["/"+AgentVolumeMarker] = []byte("devcell agent volume\r\n")
+		extra["/"+WinPEDiagScriptName] = GenerateWinPEDiagScript()
+		extra["/"+WinPEHyperVDiagScriptName] = GenerateWinPEHyperVDiagScript("")
+		if cfg.AgentCommand != "" {
+			// set /p reads the first line only, so padding after the
+			// newline is harmless.
+			extra["/"+AgentCommandFile] = []byte(cfg.AgentCommand + "\r\n")
+		}
 	}
-	return writeAnswerImage(GenerateAutounattendXML(cfg), extra, destPath)
+	if len(cfg.EFIBootLoader) > 0 {
+		extra["/EFI/BOOT/BOOTAA64.EFI"] = cfg.EFIBootLoader
+	}
+	return writeAnswerImage(GenerateAutounattendXML(cfg), extra, cfg.AnswerDrivers, destPath)
 }
 
 // fatClusterSize is the cluster geometry of the small images CreateFATImage

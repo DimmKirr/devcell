@@ -60,7 +60,7 @@ func TestGenerateBootstrap_DisablesDisplayBlankingBeforeTheSlowSteps(t *testing.
 func TestGenerateBootstrapScript_ReportsFailuresToSerialAndTranscript(t *testing.T) {
 	// A silent failure costs a multi-hour run to notice. Every step must be
 	// individually guarded, failures must name the step and the error, and
-	// output must reach both channels the host can read: the pci-serial port
+	// output must reach both channels the host can read: the virtio-serial port
 	// (guest-progress.log, live) and a transcript on the answer volume.
 	ps1 := string(GenerateBootstrapScript(DefaultAutounattendConfig()))
 

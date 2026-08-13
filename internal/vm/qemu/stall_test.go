@@ -34,13 +34,14 @@ func TestStallTracker_ResetsOnDiskProgress(t *testing.T) {
 	assert.Equal(t, 0, s.Observe(sig(1, 2000, "PC=A")), "a read means the guest is alive")
 }
 
-func TestStallTracker_ResetsOnPCMovement(t *testing.T) {
-	// The strongest liveness term: a running guest cannot hold one PC across
-	// polls, even while idle with no disk I/O.
+func TestStallTracker_PCMovementAloneDoesNotReset(t *testing.T) {
+	// Firmware spin-loops jitter PC between addresses while screen and disk
+	// stay frozen — PC movement must NOT reset the counter (CELL-429).
 	var s StallTracker
 	s.Observe(sig(1, 1000, "PC=A"))
 	s.Observe(sig(1, 1000, "PC=A"))
-	assert.Equal(t, 0, s.Observe(sig(1, 1000, "PC=B")))
+	assert.Equal(t, 2, s.Observe(sig(1, 1000, "PC=B")),
+		"PC change with frozen screen+disk must not reset")
 }
 
 func TestStallTracker_ResetsOnScreenChange(t *testing.T) {
@@ -60,13 +61,15 @@ func TestStallTracker_IgnoresPollsBeforeFirstRead(t *testing.T) {
 	}
 }
 
-// A blanked display on a live guest must not trip the detector — this is the
-// Windows idle-blanking case that a naive black-screen rule would fail.
-func TestStallTracker_BlankedDisplayWithLiveGuestIsNotAStall(t *testing.T) {
+// A blanked display with frozen disk reads IS a stall, even when PC moves.
+// The done-marker check in the poll loop exits before the threshold is
+// reached for a healthy post-install idle; the stall detector's job is to
+// catch firmware dead-loops where PC jitters but nothing else moves.
+func TestStallTracker_FrozenScreenAndDiskCountsEvenWithPCMovement(t *testing.T) {
 	var s StallTracker
 	s.Observe(sig(99, 5_000_000, "PC=fffff80401b6e80c"))
-	s.Observe(sig(99, 5_000_000, "PC=fffff80401ab6770")) // same frame, PC moved
-	assert.Equal(t, 0, s.Observe(sig(99, 5_000_000, "PC=fffff80401e25428")))
+	assert.Equal(t, 1, s.Observe(sig(99, 5_000_000, "PC=fffff80401ab6770")))
+	assert.Equal(t, 2, s.Observe(sig(99, 5_000_000, "PC=fffff80401e25428")))
 }
 
 func TestStallTracker_StalledAtThreshold(t *testing.T) {
@@ -118,17 +121,17 @@ func TestExtractRegister(t *testing.T) {
 		"X29=00000000476867c0 X30=000000013c3fb5d4  SP=00000000476867c0\n" +
 		"PSTATE=600003c5 -ZC- EL1h  BTYPE=0\n"
 
-	assert.Equal(t, "000000013c347200", extractRegister(regs, "PC="))
-	assert.Equal(t, "000000013c3fb5d4", extractRegister(regs, "X30="))
-	assert.Equal(t, "00000000476867c0", extractRegister(regs, "SP="))
-	assert.Equal(t, "", extractRegister(regs, "X99="), "a missing register yields empty, not a panic")
+	assert.Equal(t, "000000013c347200", ExtractRegister(regs, "PC="))
+	assert.Equal(t, "000000013c3fb5d4", ExtractRegister(regs, "X30="))
+	assert.Equal(t, "00000000476867c0", ExtractRegister(regs, "SP="))
+	assert.Equal(t, "", ExtractRegister(regs, "X99="), "a missing register yields empty, not a panic")
 }
 
 // "PC=" must not be matched inside another token — the naive strings.Index
 // approach would find "PC=" in "FPCR=" style neighbours if the needle were
 // looser.
 func TestExtractRegister_DoesNotMatchSubstringOfAnotherRegister(t *testing.T) {
-	assert.Equal(t, "", extractRegister("FPCR=00000000 FPSR=00000000", "PC="),
+	assert.Equal(t, "", ExtractRegister("FPCR=00000000 FPSR=00000000", "PC="),
 		"FPCR= must not be read as PC=")
 }
 

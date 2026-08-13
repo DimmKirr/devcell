@@ -17,7 +17,7 @@ import (
 // each cost a multi-hour run to notice.
 //
 // Failure reporting goes to two host-readable channels:
-//   - every serial port (the pci-serial device lands in
+//   - the virtio-serial progress port (lands in
 //     Spec.GuestProgressLogPath on the host, live)
 //   - a Start-Transcript log on the answer volume, read back with
 //     isokit.ReadFileFromFAT after the run

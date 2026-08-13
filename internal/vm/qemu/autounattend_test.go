@@ -5,6 +5,8 @@ import (
 	"encoding/xml"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -70,6 +72,165 @@ func TestGenerateAutounattendXML_OmitsDriverPathsWhenNoDrivers(t *testing.T) {
 	// entirely rather than emitting a dangling path to a missing drive.
 	out := string(GenerateAutounattendXML(DefaultAutounattendConfig()))
 	assert.NotContains(t, out, "<DriverPaths>")
+}
+
+// --- CELL-429: WinPE storage drivers via DriverPaths + %configsetroot% ---
+
+// ARM64 WinPE has no inbox vioscsi, so with CDs on virtio-scsi Setup stops
+// at "a media driver your computer needs is missing". The drivers travel
+// under \drivers\vioscsi on the answer volume and load through Setup's own
+// PnpCustomizationsWinPE/DriverPaths, pointed at %configsetroot% — the
+// volume the answer file itself was read from, so the path always resolves.
+// Every alternative is disproven by a run: RunSynchronous drvload aborts
+// 0x8007000D (20260812T132820); $WinPEDriver$ never loads — no vioscsi
+// service, no CD volumes (20260812T144140); DriverPaths at the virtio CD
+// aborts 0x80070001 because the CD is exactly what's invisible
+// (20260729T172019).
+// DriverPaths is dead weight on this media and must not be emitted: run
+// 20260812T150644 logged "SetupManager: Drivers Path: []" with the
+// component present and a resolvable %configsetroot% path — Modern Setup
+// parses it and ignores it. Every element in windowsPE is a potential
+// Setup-abort (an unresolved DriverPaths is how run 20260729T172019 died),
+// so a proven no-op is pure risk.
+func TestGenerateAutounattendXML_NeverEmitsDriverPaths(t *testing.T) {
+	withDrivers := DefaultAutounattendConfig()
+	withDrivers.AnswerDrivers = map[string][]byte{
+		"/drivers/vioscsi/vioscsi.inf": []byte("inf"),
+		"/drivers/vioscsi/vioscsi.sys": []byte("sys"),
+	}
+	for name, cfg := range map[string]AutounattendConfig{
+		"no drivers":   DefaultAutounattendConfig(),
+		"with drivers": withDrivers,
+	} {
+		t.Run(name, func(t *testing.T) {
+			xmlBytes := GenerateAutounattendXML(cfg)
+			// Markup, not prose: the template comment explains why the
+			// component is absent and necessarily names it.
+			assert.NotContains(t, string(xmlBytes), `name="Microsoft-Windows-PnpCustomizationsWinPE"`)
+			assert.NotContains(t, string(xmlBytes), "<DriverPaths>")
+			assert.Empty(t, ValidateUnattend(xmlBytes))
+		})
+	}
+}
+
+// windowsPE RunSynchronousCommand <Order> values must be contiguous from 1.
+// Run 20260812T132820 shipped orders 1,2,3,4,5,7 — the agent launcher at 6
+// was gated off while the driver loader at 7 was gated on — and Setup died
+// with 0x8007000D (ERROR_INVALID_DATA) before executing anything. The
+// 20260812T150644 log shows the healthy shape: "Parsing
+// RunSynchronousCommand: 6 entries", commands 0..5, all exit 0.
+func TestGenerateAutounattendXML_WindowsPEOrdersAreContiguous(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cfg  AutounattendConfig
+	}{
+		{"bare", DefaultAutounattendConfig()},
+		{"agent only", func() AutounattendConfig {
+			c := DefaultAutounattendConfig()
+			c.WinPEAgent = true
+			return c
+		}()},
+		{"drivers only", func() AutounattendConfig {
+			c := DefaultAutounattendConfig()
+			c.AnswerDrivers = map[string][]byte{"/drivers/vioscsi/vioscsi.inf": []byte("inf")}
+			return c
+		}()},
+		{"agent and drivers", func() AutounattendConfig {
+			c := DefaultAutounattendConfig()
+			c.WinPEAgent = true
+			c.AnswerDrivers = map[string][]byte{"/drivers/vioscsi/vioscsi.inf": []byte("inf")}
+			return c
+		}()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			winPE, _, found := strings.Cut(string(GenerateAutounattendXML(tc.cfg)), `<settings pass="specialize">`)
+			require.True(t, found, "windowsPE section must be delimited")
+			// Scope to RunSynchronous: DiskConfiguration carries its own
+			// independent <Order> sequences for partitions.
+			_, afterOpen, found := strings.Cut(winPE, "<RunSynchronous>")
+			require.True(t, found, "windowsPE must have a RunSynchronous block")
+			runSync, _, found := strings.Cut(afterOpen, "</RunSynchronous>")
+			require.True(t, found, "RunSynchronous block must be closed")
+
+			orders := regexp.MustCompile(`<Order>(\d+)</Order>`).FindAllStringSubmatch(runSync, -1)
+			require.NotEmpty(t, orders, "windowsPE always carries the LabConfig bypass commands")
+			for i, m := range orders {
+				assert.Equal(t, strconv.Itoa(i+1), m[1],
+					"order %d of %d is %q — gaps abort Setup with 0x8007000D (run 20260812T132820)",
+					i+1, len(orders), m[1])
+			}
+		})
+	}
+}
+
+// The vioscsi drvload must run as a windowsPE RunSynchronous command: that
+// is the last hook before Modern Setup's media search
+// (WinPEInitialization Leaving Execute → EarlyF6DriverInstall Entering
+// Execute, one second apart in run 20260812T150644). The agent's poll loop
+// is ~4s too late — its drvload landed after the media search had already
+// failed and left Setup at 0x80070103 (run 20260812T143146).
+func TestGenerateAutounattendXML_AnswerDriversDrvloadBeforeMediaSearch(t *testing.T) {
+	cfg := DefaultAutounattendConfig()
+	cfg.AnswerDrivers = map[string][]byte{
+		"/drivers/vioscsi/vioscsi.inf": []byte("inf"),
+		"/drivers/vioscsi/vioscsi.sys": []byte("sys"),
+	}
+	xmlBytes := GenerateAutounattendXML(cfg)
+	s := string(xmlBytes)
+
+	assert.Contains(t, s, `drvload %l:\drivers\vioscsi\vioscsi.inf`,
+		"the INF must be drvloaded, letter-probed like the agent launcher")
+	assert.Contains(t, s, "exit /b 0",
+		"must force success — a non-zero exit in windowsPE aborts Setup")
+	assert.NotContains(t, s, `drvload %l:\drivers\vioscsi\vioscsi.sys`,
+		"only .inf files are drvloaded")
+	assert.Empty(t, ValidateUnattend(xmlBytes))
+}
+
+func TestBuildAnswerVolume_ShipsAnswerDriversByteExact(t *testing.T) {
+	cfg := DefaultAutounattendConfig()
+	cfg.AnswerDrivers = map[string][]byte{
+		"/drivers/vioscsi/vioscsi.inf": []byte("[Version]\r\nSignature=\"$WINDOWS NT$\"\r\n"),
+		"/drivers/vioscsi/vioscsi.sys": {0x4D, 0x5A, 0x90, 0x00},
+	}
+	dest := filepath.Join(t.TempDir(), "answer.img")
+	require.NoError(t, BuildAnswerVolume(cfg, dest))
+
+	// Byte-exact, NOT padded: Setup's driver import validates the files
+	// against the catalog's hashes, and padForFAT's trailing newlines break
+	// them (run 20260812T141319).
+	inf, err := isokit.ReadFileFromFAT(dest, "/drivers/vioscsi/vioscsi.inf")
+	require.NoError(t, err)
+	assert.Equal(t, cfg.AnswerDrivers["/drivers/vioscsi/vioscsi.inf"], inf, "INF must ship byte-exact")
+	sys, err := isokit.ReadFileFromFAT(dest, "/drivers/vioscsi/vioscsi.sys")
+	require.NoError(t, err)
+	assert.Equal(t, cfg.AnswerDrivers["/drivers/vioscsi/vioscsi.sys"], sys, "driver binary must ship byte-exact")
+}
+
+// The agent can execute one pre-baked command and write its output to
+// devcell-out.txt — the only way to see drvload's actual error text and
+// diskpart's volume list inside a WinPE that has no network and no QGA.
+func TestBuildAnswerVolume_ShipsAgentCommand(t *testing.T) {
+	cfg := DefaultAutounattendConfig()
+	cfg.WinPEAgent = true
+	cfg.AgentCommand = `drvload %DEVCELL_VOL%\$WinPEDriver$\vioscsi\vioscsi.inf & echo DRVLOAD_RC=%errorlevel%`
+	dest := filepath.Join(t.TempDir(), "answer.img")
+	require.NoError(t, BuildAnswerVolume(cfg, dest))
+
+	cmdFile, err := isokit.ReadFileFromFAT(dest, "/"+AgentCommandFile)
+	require.NoError(t, err)
+	firstLine, _, _ := strings.Cut(string(cmdFile), "\n")
+	assert.Equal(t, cfg.AgentCommand, strings.TrimRight(firstLine, "\r "),
+		"the agent reads the first line with set /p — it must be the command verbatim")
+}
+
+func TestBuildAnswerVolume_NoAgentCommandFileWithoutCommand(t *testing.T) {
+	cfg := DefaultAutounattendConfig()
+	cfg.WinPEAgent = true
+	dest := filepath.Join(t.TempDir(), "answer.img")
+	require.NoError(t, BuildAnswerVolume(cfg, dest))
+	_, err := isokit.ReadFileFromFAT(dest, "/"+AgentCommandFile)
+	assert.Error(t, err, "no command file unless a command was configured")
 }
 
 func TestGenerateAutounattendXML_ContainsUserCreation(t *testing.T) {
@@ -514,7 +675,9 @@ func TestGenerateAutounattendXML_NoWinPEDriverInjection(t *testing.T) {
 	cfg.VirtIODrivers = NetKVMDriverPaths()
 	out := string(GenerateAutounattendXML(cfg))
 
-	assert.NotContains(t, out, "PnpCustomizationsWinPE")
+	// Assert on markup: the template comment explaining the component's
+	// absence necessarily names it.
+	assert.NotContains(t, out, `name="Microsoft-Windows-PnpCustomizationsWinPE"`)
 	assert.NotContains(t, out, "<DriverPaths>")
 }
 
@@ -670,6 +833,40 @@ func TestReadGuestDiagnostics_MissingLogIsAnError(t *testing.T) {
 // server hands FreeRDP's credentials to the Windows logon UI and waits for
 // a human to press Enter — run 20260802T112212 spent an entire run
 // screenshotting that prompt.
+func TestBuildAnswerVolume_EmbedsEFIBootloader(t *testing.T) {
+	cfg := DefaultAutounattendConfig()
+	cfg.EFIBootLoader = peARM64BootloaderStub()
+
+	imgPath := filepath.Join(t.TempDir(), "autounattend.img")
+	require.NoError(t, BuildAnswerVolume(cfg, imgPath))
+
+	got, err := isokit.ReadFileFromFAT(imgPath, "/EFI/BOOT/BOOTAA64.EFI")
+	require.NoError(t, err, "BOOTAA64.EFI must be on the answer volume")
+	assert.True(t, bytes.HasPrefix(got, []byte("MZ")), "must start with MZ PE header")
+}
+
+func TestBuildAnswerVolume_NoBootloaderWhenNotSet(t *testing.T) {
+	cfg := DefaultAutounattendConfig()
+
+	imgPath := filepath.Join(t.TempDir(), "autounattend.img")
+	require.NoError(t, BuildAnswerVolume(cfg, imgPath))
+
+	_, err := isokit.ReadFileFromFAT(imgPath, "/EFI/BOOT/BOOTAA64.EFI")
+	assert.Error(t, err, "BOOTAA64.EFI should not be on the volume when EFIBootLoader is empty")
+}
+
+// peARM64BootloaderStub returns a minimal PE binary with aarch64 machine type,
+// used by tests that need a realistic bootloader on the answer volume.
+func peARM64BootloaderStub() []byte {
+	pe := make([]byte, 256)
+	pe[0], pe[1] = 'M', 'Z'
+	pe[0x3C] = 0x80
+	pe[0x80], pe[0x81], pe[0x82], pe[0x83] = 'P', 'E', 0, 0
+	pe[0x84] = 0x64 // 0xAA64 little-endian
+	pe[0x85] = 0xAA
+	return pe
+}
+
 func TestAutounattend_RDPUsesNetworkLevelAuthentication(t *testing.T) {
 	cfg := DefaultAutounattendConfig()
 	cfg.EnableRDP = true
