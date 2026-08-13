@@ -27,7 +27,7 @@ const installStallWindow = 20 * time.Minute
 
 // qemuDiagnosticPaths returns where the build records the two channels a guest
 // can talk on before it has a network: the firmware's serial console and the
-// guest's own pci-serial progress port.
+// guest's own virtio-serial progress port.
 //
 // Both live beside the screenshots in the project's debug directory, so
 // everything about a failed build is in one place.
@@ -162,7 +162,11 @@ const (
 // quotes hardware numbers while running emulated fails at the SSH wait with no
 // hint that the deadline, not the guest, was wrong.
 func qemuBuildBudget(cellCfg cfg.CellSection) qemuBuildResources {
-	accel, reason := qemu.ResolveAccel("", cellCfg.ResolvedKVM(), runtimeGOOS, qemu.ProbeKVM)
+	explicit := os.Getenv("DEVCELL_QEMU_ACCEL")
+	if explicit != "" {
+		ux.Debugf("DEVCELL_QEMU_ACCEL=%s — overriding auto-detected accelerator", explicit)
+	}
+	accel, reason := qemu.ResolveAccel(explicit, cellCfg.ResolvedKVM(), runtimeGOOS, qemu.ProbeKVM)
 	r := qemuBuildResources{
 		Accel:       accel,
 		AccelReason: reason,

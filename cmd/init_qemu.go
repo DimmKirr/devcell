@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/DimmKirr/devcell/internal/ux"
 	"github.com/DimmKirr/devcell/internal/vm/qemu"
@@ -140,12 +139,8 @@ type phaseObserver struct {
 	runner *ux.PhaseRunner
 }
 
-// Stamped: build logs are read alongside guest stage logs, QEMU stderr and
-// the screenshot series, all of which carry ISO-8601 UTC instants. A
-// relative or bare line cannot be correlated with them.
 func (o *phaseObserver) Logf(format string, args ...any) {
-	o.logf("%s "+format,
-		append([]any{time.Now().UTC().Format("2006-01-02T15:04:05Z")}, args...)...)
+	o.logf(format, args...)
 }
 func (o *phaseObserver) Progress(_ float64, msg string) {
 	if o.runner != nil {

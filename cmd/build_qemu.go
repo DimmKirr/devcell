@@ -15,6 +15,7 @@ import (
 
 	"github.com/DimmKirr/devcell/internal/cfg"
 	"github.com/DimmKirr/devcell/internal/config"
+	"github.com/DimmKirr/devcell/internal/isokit"
 	"github.com/DimmKirr/devcell/internal/ux"
 	"github.com/DimmKirr/devcell/internal/vm/qemu"
 )
@@ -163,6 +164,7 @@ func runBuildQemu(cellName, hostHome, baseDir, stack string, force, noCache, dry
 	}
 
 	// --- Phase 5: Preflight check ---
+	var qemuVersion string
 	if err := pr.PhaseDetailed("QEMU preflight check", func() (string, error) {
 		if err := qemu.PreflightCheckHost(); err != nil {
 			return "", err
@@ -171,9 +173,17 @@ func runBuildQemu(cellName, hostHome, baseDir, stack string, force, noCache, dry
 		if err != nil {
 			return "", err
 		}
-		ver, _ := qemu.QEMUVersion(binPath)
+		qemuVersion, _ = qemu.QEMUVersion(binPath)
 		accel := qemu.Accelerator()
-		return fmt.Sprintf("QEMU %s (%s)", ver, accel), nil
+
+		if info, err := qemu.ISOPreflight(windowsISO); err != nil {
+			ux.Debugf("ISO preflight: %v", err)
+		} else {
+			ux.Debugf("ISO preflight: format=%s size=%d hasBootEFI=%v", info.Format, info.Size, info.HasBootEFI)
+		}
+		ux.Debugf("ISO diagnosis:\n%s", isokit.DiagnoseISO(windowsISO))
+
+		return fmt.Sprintf("QEMU %s (%s)", qemuVersion, accel), nil
 	}); err != nil {
 		return err
 	}
@@ -227,6 +237,36 @@ func runBuildQemu(cellName, hostHome, baseDir, stack string, force, noCache, dry
 			cfg.OpenSSHPayloadSize = len(opensshPayload)
 		}
 
+		// ARM64 WinPE has no inbox vioscsi, so Setup cannot see the
+		// virtio-scsi installer CD without this drvload payload — the
+		// install would burn its full cycle at "media driver missing"
+		// (CELL-429). Hard error: there is no fallback bus (ahci: no EDK2
+		// boot option; usb-bot: kills USB on QEMU 11/HVF; usb-storage
+		// mirror: cdboot crash).
+		drivers, err := qemu.LoadWinPEStorageDrivers(virtioISO)
+		if err != nil {
+			return "", fmt.Errorf("extracting WinPE storage drivers: %w", err)
+		}
+		cfg.AnswerDrivers = drivers
+
+		if winpeAgentDebugEnabled(os.Getenv) {
+			cfg.WinPEAgent = true
+			cfg.AgentCommand = qemu.WinPEDiagCommand
+			ux.Debugf("DEVCELL_QEMU_WINPE_AGENT=1: shipping WinPE agent + one-shot read-only diagnostic")
+		}
+
+		bootloader, err := qemu.InstallerBootloader(windowsISO)
+		if err != nil {
+			ux.Debugf("could not extract BOOTAA64.EFI from ISO (startup.nsh fallback will rely on CD reads): %v", err)
+		} else if blInfo, err := qemu.ValidateBootloaderPE(bootloader); err != nil {
+			ux.Debugf("extracted BOOTAA64.EFI but it failed validation: %v", err)
+		} else {
+			cfg.EFIBootLoader = bootloader
+			major, _ := qemu.ParseMajorVersion(qemuVersion)
+			ux.Debugf("embedded BOOTAA64.EFI (%d bytes, arch=%s) on answer volume — QEMU %s (v%d), needed for v11+ HVF CD-ROM workaround",
+				blInfo.Size, blInfo.Arch, qemuVersion, major)
+		}
+
 		imgPath := filepath.Join(templateDir, "autounattend.img")
 		if err := qemu.BuildAnswerVolume(cfg, imgPath); err != nil {
 			return "", fmt.Errorf("writing autounattend image: %w", err)
@@ -277,6 +317,11 @@ func runBuildQemu(cellName, hostHome, baseDir, stack string, force, noCache, dry
 		FirmwarePath: firmwarePath,
 		VarsPath:     varsPath,
 		VirtioISO:    virtioISO,
+		// QEMU 11 on HVF: the firmware cannot boot USB CD-ROMs (CELL-429).
+		// SCSI CDs on a dedicated virtio-scsi-pci controller work — the
+		// answer volume's BOOTAA64.EFI chainloads the installer, and
+		// vioscsi drvload gives WinPE access to the SCSI CDs.
+		CDBus:        "scsi",
 		SSHPort:      buildPorts.SSHPort,
 		VNCPort:      buildPorts.VNCPort,
 		RDPPort:      buildPorts.RDPPort,
@@ -352,14 +397,122 @@ func runBuildQemu(cellName, hostHome, baseDir, stack string, force, noCache, dry
 		}
 	}()
 
-	// Fail fast on a guest that never starts installing. Without this the
-	// build waits out its whole deadline: a VM that booted the wrong device sat
-	// at the UEFI prompt for five hours before the SSH wait gave up, with the
-	// evidence — zero bytes written — available from the first minute.
+	// Fail fast on a guest that never starts installing. Three detectors:
+	//
+	//  1. Serial log watcher: tails the firmware serial output for the
+	//     "EFI Internal Shell" marker. Fires within ~1 s of the firmware
+	//     giving up on all boot entries. This is the fastest path.
+	//
+	//  2. StallTracker (QMP: disk reads + PC) polls every 5 s with a 15 s
+	//     budget. Fallback when serial is unavailable or the failure mode
+	//     doesn't hit the shell (e.g. firmware dead-loop).
+	//
+	//  3. WriteProgressTracker (QMP: cumulative writes) polls every 60 s
+	//     with a 20-minute window. Catches a VM that booted the installer
+	//     but stopped making progress.
+	// Watch for the EFI shell (informational) and startup.nsh failure (fatal).
+	// The answer volume carries startup.nsh, which chainloads BOOTAA64.EFI if
+	// the firmware's own boot manager can't (CELL-427: QEMU 11/HVF regression).
+	// Killing on the shell marker alone would abort before startup.nsh runs.
+	efiShellCh := qemu.WatchSerialForEFIShell(serialLog, screenshotStop)
+	nshFailCh := qemu.WatchSerialForStartupNSHFail(serialLog, screenshotStop)
+	go func() {
+		select {
+		case <-screenshotStop:
+			return
+		case reason, ok := <-efiShellCh:
+			if !ok {
+				return
+			}
+			ux.Debugf("serial: EFI shell appeared, waiting for startup.nsh recovery: %s", reason)
+			// Don't kill — startup.nsh will attempt to chainload BOOTAA64.EFI.
+			// If it also fails, nshFailCh fires below.
+		}
+	}()
+	go func() {
+		select {
+		case <-screenshotStop:
+			return
+		case reason, ok := <-nshFailCh:
+			if !ok {
+				return
+			}
+			ux.Debugf("serial: startup.nsh could not find BOOTAA64.EFI: %s", reason)
+			fmt.Printf("\n%s\n%s\n",
+				ux.StyleSection.Render(" Boot failed"),
+				"Firmware dropped to EFI shell and startup.nsh could not find BOOTAA64.EFI.\n"+
+					"The installer ISO was not recognized by the firmware.")
+			vm.ForceStop()
+		}
+	}()
+
+	qmpSock := vm.QMPSockPath()
+	go func() {
+		const (
+			stallPoll   = 5 * time.Second
+			stallBudget = 15 // seconds
+		)
+		stallLimit := qemu.StallPollsFor(stallBudget, int(stallPoll.Seconds()))
+		var stall qemu.StallTracker
+		var qmpFails int
+		ticker := time.NewTicker(stallPoll)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-screenshotStop:
+				return
+			case <-ticker.C:
+				if vm.State() == qemu.StateStopped || vm.State() == qemu.StateError {
+					ux.Debugf("stall-detect: VM exited (state=%s)", vm.State())
+					fmt.Printf("\n%s\n%s\n",
+						ux.StyleSection.Render(" VM exited"),
+						"QEMU process terminated unexpectedly — check debug logs")
+					return
+				}
+				var sig qemu.StallSignal
+				var gotQMP bool
+				if stats, err := qemu.QMPBlockStats(qmpSock); err == nil {
+					gotQMP = true
+					for _, s := range stats {
+						sig.ReadBytes += s.ReadBytes
+					}
+				}
+				if regs, err := qemu.QMPHumanMonitor(qmpSock, "info registers"); err == nil {
+					gotQMP = true
+					sig.PC = qemu.ExtractRegister(regs, "PC=")
+				}
+				if !gotQMP {
+					qmpFails++
+					ux.Debugf("stall-detect: QMP unreachable (%d consecutive)", qmpFails)
+					if qmpFails >= stallLimit {
+						ux.Debugf("stall-detect: QMP failed %d times — VM likely crashed", qmpFails)
+						fmt.Printf("\n%s\n%s\n",
+							ux.StyleSection.Render(" VM exited"),
+							"QEMU process is unreachable — it may have crashed")
+						vm.ForceStop()
+						return
+					}
+					continue
+				}
+				qmpFails = 0
+				n := stall.Observe(sig)
+				ux.Debugf("stall-detect: rd=%d PC=%s consec=%d/%d",
+					sig.ReadBytes, sig.PC, n, stallLimit)
+				if stall.Stalled(stallLimit) {
+					ux.Debugf("boot stall detected: %d consecutive unchanged polls (%ds each)",
+						stall.Consecutive(), int(stallPoll.Seconds()))
+					fmt.Printf("\n%s\n%s\n",
+						ux.StyleSection.Render(" Boot stalled"),
+						"VM stuck at UEFI shell — the installer ISO was not recognized as bootable")
+					vm.ForceStop()
+					return
+				}
+			}
+		}
+	}()
 	go func() {
 		ticker := time.NewTicker(time.Minute)
 		defer ticker.Stop()
-		qmpSock := vm.QMPSockPath()
 		start := time.Now()
 		progress := &qemu.WriteProgressTracker{Window: installStallWindow}
 		for {
@@ -369,7 +522,7 @@ func runBuildQemu(cellName, hostHome, baseDir, stack string, force, noCache, dry
 			case <-ticker.C:
 				stats, err := qemu.QMPBlockStats(qmpSock)
 				if err != nil {
-					continue // the socket is not up yet, or the VM is gone
+					continue
 				}
 				var written int64
 				for _, s := range stats {
@@ -609,4 +762,11 @@ func runQemuDevEnvFinalize(ctx context.Context, pr *ux.PhaseRunner, obs qemu.Obs
 		return err
 	}
 	return nil
+}
+
+// winpeAgentDebugEnabled reports whether the debug WinPE agent should ship
+// on the answer volume (DEVCELL_QEMU_WINPE_AGENT=1, set by
+// `task debug:autobuild`).
+func winpeAgentDebugEnabled(getenv func(string) string) bool {
+	return getenv("DEVCELL_QEMU_WINPE_AGENT") == "1"
 }

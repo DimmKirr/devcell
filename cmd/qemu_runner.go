@@ -154,13 +154,25 @@ func runQemuAgent(
 			}
 		}
 
-		_, diskErr := os.Stat(instanceDisk)
-		_, tplErr := os.Stat(templateDisk)
+		diskInfo, diskErr := os.Stat(instanceDisk)
+		tplInfo, tplErr := os.Stat(templateDisk)
+		var diskSize, tplSize int64
+		if diskErr == nil {
+			diskSize = diskInfo.Size()
+		}
+		if tplErr == nil {
+			tplSize = tplInfo.Size()
+		}
+		marker := qemu.ProvisionedMarker(hostHome, stack, cellCfg.Cell.Modules)
+		_, markerErr := os.Stat(marker)
 		actions := qemu.DecideLaunchActions(qemu.LaunchInputs{
-			ExplicitBuild:  force,
-			DiskExists:     diskErr == nil,
-			TemplateExists: tplErr == nil,
-			VMRunning:      vmRunning,
+			ExplicitBuild:     force,
+			DiskExists:        diskErr == nil,
+			DiskSizeBytes:     diskSize,
+			TemplateExists:    tplErr == nil,
+			TemplateSizeBytes: tplSize,
+			VMRunning:         vmRunning,
+			Provisioned:       markerErr == nil,
 		})
 		logf("launch actions: %v", actions)
 
@@ -172,8 +184,20 @@ func runQemuAgent(
 				attachMode = true
 
 			case qemu.ActionBuild:
-				logf("auto-build: template not found — running build with stack=%q", stack)
-				if err := runBuildQemu(cellName, hostHome, baseDir, stack, force, false, false, cellCfg.Cell); err != nil {
+				logf("auto-build: template missing or corrupt — running build with stack=%q", stack)
+				if !force {
+					fmt.Printf("VM template is missing or corrupt — a full rebuild is required (stack %q).\n", stack)
+					ok, err := ux.GetConfirmation("Rebuild now?")
+					if err != nil {
+						return fmt.Errorf("prompt: %w", err)
+					}
+					if !ok {
+						return fmt.Errorf("rebuild declined — run `cell build --engine=qemu` manually")
+					}
+				}
+				os.Remove(templateDisk)
+				os.Remove(instanceDisk)
+				if err := runBuildQemu(cellName, hostHome, baseDir, stack, false, false, false, cellCfg.Cell); err != nil {
 					return fmt.Errorf("auto-build failed: %w", err)
 				}
 				if err := os.MkdirAll(instanceDir, 0755); err != nil {
@@ -212,11 +236,6 @@ func runQemuAgent(
 		}
 
 		if !attachMode {
-			// Check provisioned marker
-			marker := qemu.ProvisionedMarker(hostHome, stack, cellCfg.Cell.Modules)
-			if _, err := os.Stat(marker); err != nil {
-				return fmt.Errorf("VM template not provisioned — run `cell build --engine=qemu`")
-			}
 			logf("provisioned marker verified: %s", marker)
 
 			// Boot VM
