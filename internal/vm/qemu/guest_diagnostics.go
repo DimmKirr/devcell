@@ -60,12 +60,28 @@ Write-Output "=== PROBLEM DEVICES ==="
 Get-PnpDevice | Where-Object { $_.Status -ne 'OK' } |
     Format-Table Status, Class, FriendlyName -AutoSize | Out-String
 
+Write-Output "=== IP CONFIGURATION ==="
+Get-NetIPConfiguration -ErrorAction SilentlyContinue | Out-String
+
 Write-Output "=== IP ADDRESSES ==="
 Get-NetIPAddress -AddressFamily IPv4 | Format-Table InterfaceAlias, IPAddress -AutoSize | Out-String
 
+Write-Output "=== ROUTING TABLE ==="
+Get-NetRoute -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+    Where-Object { $_.DestinationPrefix -eq '0.0.0.0/0' -or $_.DestinationPrefix -match '^10\.' } |
+    Format-Table DestinationPrefix, NextHop, InterfaceAlias -AutoSize | Out-String
+
+Write-Output "=== QEMU HOST REACHABLE (10.0.2.2) ==="
+Test-NetConnection -ComputerName 10.0.2.2 -WarningAction SilentlyContinue | Out-String
+
+Write-Output "=== DNS RESOLUTION ==="
+try {
+    Resolve-DnsName -Name dns.msftncsi.com -Type A -DnsOnly -ErrorAction Stop | Out-String
+} catch {
+    "DNS FAILED: " + $_.Exception.Message
+}
+
 Write-Output "=== INTERNET REACHABLE ==="
-# Add-WindowsCapability pulls OpenSSH from Windows Update, so this decides
-# whether the SSH setup below could have worked at all.
 (Test-NetConnection -ComputerName 8.8.8.8 -Port 53 -WarningAction SilentlyContinue).TcpTestSucceeded
 
 Write-Output "=== OPENSSH CAPABILITY ==="

@@ -311,6 +311,26 @@ func TestGenerateBootstrapScript_AllowsUnattendedElevation(t *testing.T) {
 		"disabling UAC entirely is a bigger hammer than this needs (mentioning it in a comment is fine)")
 }
 
+// The "check network connectivity" step must do more than existence checks: it
+// must produce enough output to diagnose a broken network from the host without
+// SSH — i.e., from guest-progress.log and the bootstrap transcript alone. Every
+// piece of data we've ever needed to diagnose a network failure must appear.
+func TestGenerateBootstrapScript_NetworkCheckIsComprehensive(t *testing.T) {
+	ps1 := string(GenerateBootstrapScript(DefaultAutounattendConfig()))
+
+	for _, probe := range []string{
+		"Get-NetAdapter",        // did NetKVM bind?
+		"Get-NetIPAddress",      // did DHCP assign an IP?
+		"Get-NetRoute",          // is there a default gateway?
+		"Test-Connection",       // can we reach the gateway?
+		"Resolve-DnsName",       // does DNS work?
+		"Get-NetIPConfiguration", // DHCP server, DNS server, full picture
+		"10.0.2.2",              // QEMU user-mode gateway — proves the NAT works
+	} {
+		assert.Contains(t, ps1, probe, "network check must probe: %s", probe)
+	}
+}
+
 // The Chocolatey openssh package is deprecated by its own maintainers: "The
 // primary Microsoft distribution mechanism for OpenSSH is through Windows.
 // This package is no longer tested with all the original scenarios it was

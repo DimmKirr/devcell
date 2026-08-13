@@ -89,6 +89,53 @@ Invoke-Step 'keep the console logged in and unlocked' {
     Set-ItemProperty -Path $pers -Name NoLockScreen -Value 1 -Type DWord
 }
 
+Invoke-Step 'check network connectivity' {
+    $adapters = Get-NetAdapter | Select-Object Name, Status, LinkSpeed, MacAddress, InterfaceDescription
+    Send-Progress ("adapters: " + ($adapters | Out-String).Trim())
+
+    $ipCfg = Get-NetIPConfiguration -ErrorAction SilentlyContinue
+    Send-Progress ("ip-config: " + ($ipCfg | Out-String).Trim())
+
+    $ips = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+        Where-Object { $_.IPAddress -ne '127.0.0.1' } |
+        Select-Object InterfaceAlias, IPAddress, PrefixLength
+    Send-Progress ("ipv4: " + ($ips | Out-String).Trim())
+
+    $routes = Get-NetRoute -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+        Where-Object { $_.DestinationPrefix -eq '0.0.0.0/0' }
+    Send-Progress ("default-routes: " + ($routes | Out-String).Trim())
+
+    $gw = ($routes | Select-Object -First 1).NextHop
+    if ($gw) {
+        Send-Progress "gateway: $gw"
+        $ping = Test-Connection -ComputerName $gw -Count 1 -Quiet -ErrorAction SilentlyContinue
+        Send-Progress "ping gateway: $ping"
+    } else {
+        Send-Progress "WARNING: no default gateway"
+    }
+
+    $qemuHost = Test-Connection -ComputerName 10.0.2.2 -Count 1 -Quiet -ErrorAction SilentlyContinue
+    Send-Progress "ping QEMU host (10.0.2.2): $qemuHost"
+
+    try {
+        $dns = Resolve-DnsName -Name dns.msftncsi.com -Type A -DnsOnly -ErrorAction Stop
+        Send-Progress ("dns: resolved dns.msftncsi.com -> " + ($dns.IPAddress -join ', '))
+    } catch {
+        Send-Progress ("dns: FAILED to resolve dns.msftncsi.com -- " + $_.Exception.Message)
+    }
+
+    $netOk = ($adapters | Where-Object { $_.Status -eq 'Up' }).Count -gt 0 -and $ips.Count -gt 0
+    Send-Progress "network verdict: $(if ($netOk) { 'OK' } else { 'FAILED' })"
+}
+
+Invoke-Step 'suppress Start menu auto-open on login' {
+    # Windows 11 opens the Start menu on the first interactive sign-in.
+    # On cloned templates this fires again because the profile is fresh.
+    $explorer = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
+    if (-not (Test-Path $explorer)) { New-Item -Path $explorer -Force | Out-Null }
+    Set-ItemProperty -Path $explorer -Name StartShownOnUpgrade -Value 1 -Type DWord
+}
+
 Invoke-Step 'allow unattended elevation' {
     # Provisioning runs over SSH, and a network logon hands even an
     # Administrators member a UAC-filtered token — so anything needing real

@@ -36,18 +36,20 @@ func TestGeneratedArtifacts_AreByteStable(t *testing.T) {
 		got  []byte
 		want string // sha256 of the rendered bytes
 	}{
-		// autounattend.xml hash updated 2026-08-12: the agent launcher's
-		// <Order> now comes from AgentLauncherOrder (contiguity is
-		// computed, not hand-written — run 20260812T132820 shipped a gap
-		// and Setup rejected the file with 0x8007000D), and windowsPE
-		// gained the comment recording why PnpCustomizationsWinPE is
-		// deliberately absent.
+		// autounattend.xml hash updated 2026-08-13: specialize copies
+		// bootstrap to C:\ and FirstLogonCommands tries the fixed path
+		// first (CELL-418 bootstrap-never-ran fix).
 		{"autounattend.xml", GenerateAutounattendXML(cfg),
-			"6e30bea9d21629c3a0c672698b5d598bb1bb37954b15e583f8e6092395e9b78d"},
+			"c65a3d32b36d81c6ddc6f3c3e808e3bc95099cd9e66970246da2a6c0e3cd1295"},
+		// bootstrap hash updated 2026-08-13: network check now includes
+		// Get-NetIPConfiguration, routing table, QEMU host ping, DNS
+		// resolution, and a verdict line.
 		{"devcell-bootstrap.ps1", GenerateBootstrapScript(cfg),
-			"efbdd3841df8cf03994d428b64c34555b81f410f8e3f7a8eba17fb2e10288286"},
+			"1b22dc6cff2cd20a7548067cc90c0e2ddec30299433b67c9ff9554c7ba4839f9"},
+		// diag hash updated 2026-08-13: added routing table, QEMU host
+		// connectivity, DNS resolution, and Get-NetIPConfiguration.
 		{"devcell-diag.ps1", GenerateGuestDiagnosticsScript(),
-			"5c2fcf79c427964caee95d6a02dba67c20b72369dd9dfafe32bc3baa3eb9eb6a"},
+			"c9414853b704ca0414de91ad507904dc04a2fad68963fcffe11eb55768a132fa"},
 		{"winpe-agent", GenerateWinPEAgent(WinPEPayloadConfig{}),
 			"9362f5c2d9eb6cfa27520dccc212b424e2af738779611623e2c8a878169e86aa"},
 	} {

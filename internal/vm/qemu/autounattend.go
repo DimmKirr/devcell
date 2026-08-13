@@ -177,6 +177,14 @@ func NetKVMDriverPaths() []VirtIODriver {
 	}}
 }
 
+// SpecializeBootstrapCopyOrder returns the <Order> for the specialize command
+// that copies the bootstrap script from the answer volume to C:\. It runs
+// after all VirtIODriver installs.
+func (c AutounattendConfig) SpecializeBootstrapCopyOrder() int {
+	base := 3 // 1=BypassNRO, 2=firewall (always reserved)
+	return base + len(c.VirtIODrivers)
+}
+
 // DefaultSessionUser is used when the host provides no $USER.
 const DefaultSessionUser = "devcell"
 
@@ -425,6 +433,16 @@ const autounattendTmplStr = `<?xml version="1.0" encoding="utf-8"?>
           <Description>{{$d.Description}}</Description>
         </RunSynchronousCommand>
 {{- end}}
+        <!-- The answer volume's drive letter is unpredictable after the
+             OOBE reboot — USB automount may not assign one. Copy the
+             bootstrap script to C:\ now, while specialize still has
+             letters assigned, so FirstLogonCommands can launch it from
+             a fixed path. Same cannot-fail pattern as the driver probe. -->
+        <RunSynchronousCommand wcm:action="add">
+          <Order>{{.SpecializeBootstrapCopyOrder}}</Order>
+          <Path>cmd /c (for %l in (C D E F G H I J K L) do @if exist %l:\devcell-bootstrap.ps1 copy /Y %l:\devcell-bootstrap.ps1 C:\devcell-bootstrap.ps1) &amp; exit /b 0</Path>
+          <Description>Copy bootstrap script to C:\ for reliable first-logon discovery</Description>
+        </RunSynchronousCommand>
       </RunSynchronous>
       <ExtendOSPartition>
         <Extend>true</Extend>
@@ -520,14 +538,13 @@ const autounattendTmplStr = `<?xml version="1.0" encoding="utf-8"?>
       </AutoLogon>
 
       <FirstLogonCommands>
-        <!-- One launcher, nothing else: all first-logon work lives in the
-             generated devcell-bootstrap.ps1 on the answer volume, where it is
-             testable, quoting-safe, and reports its own failures to the
-             serial port and a transcript. The launcher finds the volume by
-             content because drive letters are assigned dynamically. -->
+        <!-- The specialize pass copies the bootstrap to C:\ because the
+             USB answer volume may lose its drive letter after the OOBE
+             reboot. Try the fixed path first; fall back to a volume
+             scan in case specialize's copy didn't find the source. -->
         <SynchronousCommand wcm:action="add">
           <Order>1</Order>
-          <CommandLine>powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-Volume | Where-Object DriveLetter | ForEach-Object { $s = ($_.DriveLetter + ':\devcell-bootstrap.ps1'); if (Test-Path $s) { &amp; $s } }"</CommandLine>
+          <CommandLine>powershell -NoProfile -ExecutionPolicy Bypass -Command "if (Test-Path C:\devcell-bootstrap.ps1) { &amp; C:\devcell-bootstrap.ps1 } else { Get-Volume | Where-Object DriveLetter | ForEach-Object { $s = ($_.DriveLetter + ':\devcell-bootstrap.ps1'); if (Test-Path $s) { &amp; $s } } }"</CommandLine>
           <Description>Run the devcell bootstrap from the answer volume</Description>
         </SynchronousCommand>
       </FirstLogonCommands>

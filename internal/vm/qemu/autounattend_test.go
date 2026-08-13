@@ -703,6 +703,45 @@ func TestGenerateAutounattendXML_InstallsDriversInSpecialize(t *testing.T) {
 		"driver install must sit in Deployment RunSynchronous")
 }
 
+func TestGenerateAutounattendXML_SpecializeCopiesBootstrapToC(t *testing.T) {
+	cfg := DefaultAutounattendConfig()
+	cfg.VirtIODrivers = NetKVMDriverPaths()
+	out := string(GenerateAutounattendXML(cfg))
+
+	specialize := out[strings.Index(out, `pass="specialize"`):strings.Index(out, `pass="oobeSystem"`)]
+	assert.Contains(t, specialize, `devcell-bootstrap.ps1`)
+	assert.Contains(t, specialize, `copy /Y`)
+	assert.Contains(t, specialize, `C:\devcell-bootstrap.ps1`)
+	assert.Contains(t, specialize, "exit /b 0",
+		"bootstrap copy must not abort the install if the source is missing")
+}
+
+func TestGenerateAutounattendXML_FirstLogonTriesFixedPathFirst(t *testing.T) {
+	cfg := DefaultAutounattendConfig()
+	out := string(GenerateAutounattendXML(cfg))
+
+	oobe := out[strings.Index(out, `pass="oobeSystem"`):]
+	assert.Contains(t, oobe, `C:\devcell-bootstrap.ps1`,
+		"FirstLogonCommands must try the fixed C:\\ copy before scanning volumes")
+	assert.Contains(t, oobe, "Get-Volume",
+		"FirstLogonCommands must still fall back to volume scan")
+}
+
+func TestGenerateAutounattendXML_SpecializeBootstrapOrderFollsDrivers(t *testing.T) {
+	cfg := DefaultAutounattendConfig()
+	cfg.VirtIODrivers = NetKVMDriverPaths()
+	out := string(GenerateAutounattendXML(cfg))
+
+	specialize := out[strings.Index(out, `pass="specialize"`):strings.Index(out, `pass="oobeSystem"`)]
+
+	driverIdx := strings.Index(specialize, "pnputil")
+	copyIdx := strings.Index(specialize, `copy /Y`)
+	require.Positive(t, driverIdx)
+	require.Positive(t, copyIdx)
+	assert.Greater(t, copyIdx, driverIdx,
+		"bootstrap copy must run after driver installs")
+}
+
 func TestGenerateAutounattendXML_WinPERunsOnlyRegCommands(t *testing.T) {
 	// Three separate multi-hour runs died on windowsPE content that fails
 	// silently or fatally (misplaced elements, unresolved DriverPaths, wmic
@@ -780,6 +819,20 @@ func TestGenerateGuestDiagnosticsScript_CollectsWhatWeCannotSeeFromTheHost(t *te
 		assert.Contains(t, ps1, probe, "diagnostics must probe %s", probe)
 	}
 	assert.Contains(t, ps1, "Start-Transcript", "must capture output, including failures")
+}
+
+func TestGenerateGuestDiagnosticsScript_NetworkDiagnosticsAreComprehensive(t *testing.T) {
+	ps1 := string(GenerateGuestDiagnosticsScript())
+
+	for _, probe := range []string{
+		"Get-NetIPConfiguration", // full adapter+IP+DNS+gateway picture
+		"Get-NetRoute",           // routing table — is there a default route?
+		"Resolve-DnsName",        // does DNS resolution work?
+		"10.0.2.2",               // QEMU user-mode host — proves NAT works
+		"Test-NetConnection",     // TCP connectivity test
+	} {
+		assert.Contains(t, ps1, probe, "diagnostics must include network probe: %s", probe)
+	}
 }
 
 func TestWriteAutounattendImage_ShipsTheDiagnosticsScript(t *testing.T) {
