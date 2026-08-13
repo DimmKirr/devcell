@@ -51,11 +51,21 @@ func DownloadWindowsISO(ctx context.Context, home, language string, noCache bool
 
 	if hasDownloadMarker(dest) {
 		if _, err := os.Stat(dest); err == nil {
-			obs.Logf("Windows ISO cache hit: %s", dest)
-			return dest, nil
+			// A cached image that firmware cannot boot (e.g. pure UDF with no
+			// El Torito, what hdiutil used to master) would burn a 20–40 min
+			// install cycle before failing at the EFI shell. Re-master instead.
+			if err := WindowsISOBootable(dest); err != nil {
+				obs.Logf("cached Windows ISO is unusable (%v) — re-mastering", err)
+				os.Remove(dest)
+				os.Remove(dest + ".done")
+			} else {
+				obs.Logf("Windows ISO cache hit: %s", dest)
+				return dest, nil
+			}
+		} else {
+			obs.Logf("Windows ISO .done marker found but file missing — re-downloading")
+			os.Remove(dest + ".done")
 		}
-		obs.Logf("Windows ISO .done marker found but file missing — re-downloading")
-		os.Remove(dest + ".done")
 	}
 
 	var dlStart time.Time
@@ -294,8 +304,10 @@ func ResolveWindowsISO(envISO, configISO, home string) (string, error) {
 	return path, nil
 }
 
-// ValidateISO checks that a file is a valid ISO 9660 image by reading the
-// magic bytes "CD001" at offset 0x8001.
+// ValidateISO checks that a file carries a recognised disc format by reading
+// the volume descriptor at sector 16 (offset 0x8001). Both ISO 9660 (CD001)
+// and UDF (BEA01/NSR02/NSR03) are accepted — Windows ARM64 ISOs built by UUP
+// dump are pure UDF.
 func ValidateISO(path string) error {
 	f, err := os.Open(path)
 	if err != nil {
@@ -307,10 +319,12 @@ func ValidateISO(path string) error {
 	if _, err := f.ReadAt(magic, 0x8001); err != nil {
 		return fmt.Errorf("cannot read ISO magic bytes: %w", err)
 	}
-	if string(magic) != "CD001" {
-		return fmt.Errorf("not an ISO 9660 image (expected CD001 at offset 0x8001, got %q)", magic)
+	switch string(magic) {
+	case "CD001", "BEA01", "NSR02", "NSR03":
+		return nil
+	default:
+		return fmt.Errorf("not a recognised disc image (expected CD001 or UDF descriptor at offset 0x8001, got %q)", magic)
 	}
-	return nil
 }
 
 // RemoveDownloadMarkers removes .done markers for all cached ISOs,

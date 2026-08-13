@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/DimmKirr/devcell/internal/isokit"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -50,7 +51,7 @@ func TestValidateISO_RejectsNonISO(t *testing.T) {
 
 	err := ValidateISO(path)
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "not an ISO 9660")
+	assert.Contains(t, err.Error(), "not a recognised disc image")
 }
 
 func TestValidateISO_RejectsSmallFile(t *testing.T) {
@@ -67,6 +68,16 @@ func TestValidateISO_AcceptsValidMagic(t *testing.T) {
 	path := filepath.Join(tmpDir, "valid.iso")
 	data := make([]byte, 0x9000)
 	copy(data[0x8001:], "CD001")
+	require.NoError(t, os.WriteFile(path, data, 0644))
+
+	assert.NoError(t, ValidateISO(path))
+}
+
+func TestValidateISO_AcceptsUDF(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "udf.iso")
+	data := make([]byte, 0x9000)
+	copy(data[0x8001:], "BEA01")
 	require.NoError(t, os.WriteFile(path, data, 0644))
 
 	assert.NoError(t, ValidateISO(path))
@@ -161,12 +172,26 @@ func TestWindowsISOPath(t *testing.T) {
 	assert.Equal(t, "/home/user/.devcell/cache/qemu/windows-arm64-de-de.iso", path)
 }
 
+// writeBootableCachedISO plants a cache entry that passes the reuse check:
+// since run 20260812T081924 a cache hit requires firmware-bootable media
+// (El Torito EFI catalog), not just a .done marker.
+func writeBootableCachedISO(t *testing.T, cached string) {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(filepath.Dir(cached), 0755))
+	img := make([]byte, 64*2048)
+	for sector, magic := range map[int]string{16: "BEA01", 17: "NSR02", 18: "TEA01"} {
+		copy(img[sector*2048+1:], magic)
+		img[sector*2048+6] = 0x01
+	}
+	require.NoError(t, os.WriteFile(cached, img, 0644))
+	require.NoError(t, isokit.AddElToritoEFIBoot(cached, []byte("boot-image")))
+	require.NoError(t, os.WriteFile(cached+".done", []byte("ok"), 0644))
+}
+
 func TestDownloadWindowsISO_CacheHit(t *testing.T) {
 	tmpDir := t.TempDir()
 	cached := WindowsISOPath(tmpDir, "en-us")
-	require.NoError(t, os.MkdirAll(filepath.Dir(cached), 0755))
-	require.NoError(t, os.WriteFile(cached, []byte("cached-iso"), 0644))
-	require.NoError(t, os.WriteFile(cached+".done", []byte("ok"), 0644))
+	writeBootableCachedISO(t, cached)
 
 	path, err := DownloadWindowsISO(nil, tmpDir, "en-us", false, NopObserver{})
 	require.NoError(t, err)
@@ -176,9 +201,7 @@ func TestDownloadWindowsISO_CacheHit(t *testing.T) {
 func TestDownloadWindowsISO_DefaultLanguage(t *testing.T) {
 	tmpDir := t.TempDir()
 	cached := WindowsISOPath(tmpDir, "en-us")
-	require.NoError(t, os.MkdirAll(filepath.Dir(cached), 0755))
-	require.NoError(t, os.WriteFile(cached, []byte("cached-iso"), 0644))
-	require.NoError(t, os.WriteFile(cached+".done", []byte("ok"), 0644))
+	writeBootableCachedISO(t, cached)
 
 	path, err := DownloadWindowsISO(nil, tmpDir, "", false, NopObserver{})
 	require.NoError(t, err)

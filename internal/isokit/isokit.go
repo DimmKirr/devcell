@@ -186,13 +186,20 @@ func InspectElTorito(isoPath string) (*ElToritoInfo, error) {
 	const sectorSize = 2048
 
 	// Scan volume descriptors from sector 16 for the Boot Record (type 0).
+	// UDF recognition-sequence descriptors (BEA01/NSR/TEA01) are skipped, not
+	// treated as the end of the area: on UDF media the BRVD sits among them
+	// at sector 17, the LBA the El Torito specification fixes.
 	var brvd []byte
 	buf := make([]byte, sectorSize)
-	for sector := int64(16); ; sector++ {
+	for sector := int64(16); sector < 64; sector++ {
 		if _, err := f.ReadAt(buf, sector*sectorSize); err != nil {
 			return nil, fmt.Errorf("reading volume descriptor at sector %d: %w", sector, err)
 		}
-		if string(buf[1:6]) != "CD001" {
+		magic := string(buf[1:6])
+		if magic != "CD001" {
+			if isUDFRecognitionMagic(magic) {
+				continue
+			}
 			break
 		}
 		if buf[0] == 0 && strings.HasPrefix(string(buf[7:39]), "EL TORITO SPECIFICATION") {
@@ -259,11 +266,15 @@ func CreateWindowsISO(isoPath, stageDir, volumeLabel string) error {
 		return err
 	}
 
+	// Not fatal: the sidecar is a fallback source for the answer-volume
+	// bootloader, and ReadFileFromISO still works on genisoimage output.
+	_ = writeBootloaderSidecar(isoPath, stageDir)
+
 	os.Remove(isoPath)
 
 	if runtime.GOOS == "darwin" {
 		if p, err := exec.LookPath("hdiutil"); err == nil {
-			return createWindowsISOHdiutil(p, isoPath, stageDir, volumeLabel)
+			return createWindowsISOHdiutil(p, isoPath, stageDir, efiBootFile, volumeLabel)
 		}
 	}
 
@@ -276,6 +287,30 @@ func CreateWindowsISO(isoPath, stageDir, volumeLabel string) error {
 		return err
 	}
 	return createWindowsISOGeniso(geniso, isoPath, stageDir, efiBootFile, volumeLabel)
+}
+
+// BootloaderSidecarPath is where mastering exports the installer's
+// BOOTAA64.EFI next to the ISO. Pure-UDF media (the macOS hdiutil path) is
+// unreadable to the Go-native ISO readers, so the bootloader the answer
+// volume needs is saved while the staged tree still exists as plain files.
+func BootloaderSidecarPath(isoPath string) string {
+	return isoPath + ".bootaa64.efi"
+}
+
+// writeBootloaderSidecar copies the ARM64 EFI bootloader out of the staged
+// installer tree to BootloaderSidecarPath.
+func writeBootloaderSidecar(isoPath, stageDir string) error {
+	for _, rel := range []string{
+		filepath.Join("efi", "boot", "bootaa64.efi"),
+		filepath.Join("EFI", "BOOT", "BOOTAA64.EFI"),
+	} {
+		data, err := os.ReadFile(filepath.Join(stageDir, rel))
+		if err != nil {
+			continue
+		}
+		return os.WriteFile(BootloaderSidecarPath(isoPath), data, 0644)
+	}
+	return fmt.Errorf("no efi/boot/bootaa64.efi in stage dir %s", stageDir)
 }
 
 func createWindowsISOGeniso(geniso, isoPath, stageDir, efiBootFile, volumeLabel string) error {
@@ -298,7 +333,15 @@ func createWindowsISOGeniso(geniso, isoPath, stageDir, efiBootFile, volumeLabel 
 	return nil
 }
 
-func createWindowsISOHdiutil(hdiutil, isoPath, stageDir, volumeLabel string) error {
+// createWindowsISOHdiutil masters with hdiutil and injects El Torito after
+// the fact. hdiutil stays on -udf alone: install.wim exceeds the ISO 9660
+// 4 GiB single-extent limit and hdiutil has no level-3 multi-extent support,
+// so an ISO 9660 bridge is not an option. But a pure-UDF image carries no
+// El Torito catalog, and EDK2 gives such a disc no FSn: mapping — the
+// firmware drops to the EFI shell (run 20260812T081924). AddElToritoEFIBoot
+// bolts the catalog on, pointing at the efisys boot image from the stage
+// tree, which is the layout stock Microsoft media uses.
+func createWindowsISOHdiutil(hdiutil, isoPath, stageDir, efiBootFile, volumeLabel string) error {
 	// hdiutil appends .cdr to the output path — strip any extension we provide
 	// and rename afterwards.
 	base := strings.TrimSuffix(isoPath, filepath.Ext(isoPath))
@@ -319,10 +362,31 @@ func createWindowsISOHdiutil(hdiutil, isoPath, stageDir, volumeLabel string) err
 		return fmt.Errorf("hdiutil makehybrid failed: %w\n%s", err, stderr.String())
 	}
 
-	if cdrPath != isoPath {
-		if err := os.Rename(cdrPath, isoPath); err != nil {
-			return fmt.Errorf("renaming %s → %s: %w", cdrPath, isoPath, err)
+	// hdiutil picks the output extension itself, varying by format and macOS
+	// version (.cdr, .iso, ...). Run 20260812T090917: -udf output landed at
+	// base.iso, the .cdr rename failed, and the un-injected orphan got cached.
+	produced := ""
+	for _, cand := range []string{cdrPath, base + ".iso", base} {
+		if _, err := os.Stat(cand); err == nil {
+			produced = cand
+			break
 		}
+	}
+	if produced == "" {
+		return fmt.Errorf("hdiutil makehybrid succeeded but produced no image at %s.{cdr,iso}\n%s", base, stderr.String())
+	}
+	if produced != isoPath {
+		if err := os.Rename(produced, isoPath); err != nil {
+			return fmt.Errorf("renaming %s → %s: %w", produced, isoPath, err)
+		}
+	}
+
+	bootImage, err := os.ReadFile(filepath.Join(stageDir, efiBootFile))
+	if err != nil {
+		return fmt.Errorf("reading EFI boot image for El Torito injection: %w", err)
+	}
+	if err := AddElToritoEFIBoot(isoPath, bootImage); err != nil {
+		return fmt.Errorf("injecting El Torito boot catalog: %w", err)
 	}
 	return nil
 }
@@ -500,7 +564,27 @@ func readAllGuarded(r io.Reader) (data []byte, err error) {
 }
 
 // ReadFileFromISO reads a file from an ISO 9660 image and returns its content.
+// It tries three strategies in order:
+//  1. go-diskfs (handles simple ISOs created by CreateSimpleISO)
+//  2. raw ISO 9660 directory parsing (handles hybrid images)
+//  3. external tool (7z or bsdtar — handles pure UDF like Windows ARM64 media)
 func ReadFileFromISO(isoPath, filePath string) ([]byte, error) {
+	data, err := readFileFromISODiskfs(isoPath, filePath)
+	if err == nil {
+		return data, nil
+	}
+	data, err2 := readFileFromISORaw(isoPath, filePath)
+	if err2 == nil {
+		return data, nil
+	}
+	data, err3 := readFileFromISOExternal(isoPath, filePath)
+	if err3 == nil {
+		return data, nil
+	}
+	return nil, fmt.Errorf("all ISO readers failed: diskfs: %v; raw: %v; external: %v", err, err2, err3)
+}
+
+func readFileFromISODiskfs(isoPath, filePath string) ([]byte, error) {
 	d, err := diskfs.Open(isoPath)
 	if err != nil {
 		return nil, fmt.Errorf("opening ISO: %w", err)
@@ -533,6 +617,56 @@ func ReadFileFromISO(isoPath, filePath string) ([]byte, error) {
 		return nil, fmt.Errorf("reading %s: %w", filePath, err)
 	}
 	return data, nil
+}
+
+// readFileFromISORaw reads a file by parsing ISO 9660 directory records
+// directly, bypassing go-diskfs. Works on UDF/ISO9660 hybrid images where
+// go-diskfs fails to recognise the filesystem.
+func readFileFromISORaw(isoPath, filePath string) ([]byte, error) {
+	extent, size, err := FindFileExtent(isoPath, filePath)
+	if err != nil {
+		return nil, err
+	}
+
+	f, err := os.Open(isoPath)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	data := make([]byte, size)
+	if _, err := f.ReadAt(data, int64(extent)*isoSectorSize); err != nil {
+		return nil, fmt.Errorf("reading %s at sector %d: %w", filePath, extent, err)
+	}
+	return data, nil
+}
+
+// readFileFromISOExternal extracts a file using 7z or bsdtar, which both
+// handle UDF filesystems that our Go-only readers cannot parse.
+func readFileFromISOExternal(isoPath, filePath string) ([]byte, error) {
+	// Normalize: 7z uses backslash-separated paths without leading separator
+	sevenZPath := strings.TrimPrefix(filepath.ToSlash(filePath), "/")
+
+	if p, err := exec.LookPath("7z"); err == nil {
+		cmd := exec.Command(p, "e", "-so", isoPath, sevenZPath)
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+		if err := cmd.Run(); err == nil && stdout.Len() > 0 {
+			return stdout.Bytes(), nil
+		}
+	}
+
+	if p, err := exec.LookPath("bsdtar"); err == nil {
+		cmd := exec.Command(p, "-xf", isoPath, "-O", sevenZPath)
+		var stdout bytes.Buffer
+		cmd.Stdout = &stdout
+		if err := cmd.Run(); err == nil && stdout.Len() > 0 {
+			return stdout.Bytes(), nil
+		}
+	}
+
+	return nil, fmt.Errorf("no external ISO reader available (install 7z or bsdtar)")
 }
 
 // FindFileExtent returns the starting sector (2048-byte LBA) and size of a
@@ -570,6 +704,185 @@ func FindFileExtent(isoPath, filePath string) (uint32, int64, error) {
 		extent, size = e.extent, e.size
 	}
 	return 0, 0, fmt.Errorf("%s: %s not found in ISO", isoPath, filePath)
+}
+
+// isUDFRecognitionMagic reports whether a volume structure descriptor magic
+// belongs to the ECMA-167 volume recognition sequence.
+func isUDFRecognitionMagic(magic string) bool {
+	switch magic {
+	case "BEA01", "NSR02", "NSR03", "TEA01", "BOOT2":
+		return true
+	}
+	return false
+}
+
+// elToritoCatalogLBA is the sector claimed for an injected boot catalog. The
+// system area (sectors 0–15) is reserved for exactly this kind of boot data
+// and every mastering tool we consume leaves it zeroed.
+const elToritoCatalogLBA = 15
+
+// AddElToritoEFIBoot makes an ISO EFI-bootable by writing an El Torito Boot
+// Record Volume Descriptor at sector 17 (the LBA the El Torito specification
+// fixes and firmware reads directly), a boot catalog in the unused system
+// area, and the boot image itself appended to the end of the file. hdiutil
+// makehybrid cannot author El Torito EFI entries, so the macOS mastering
+// path bolts them on after the fact (run 20260812T081924: a pure-UDF image
+// with no catalog got no FSn: mapping from EDK2 and dropped to the EFI shell).
+//
+// Two starting layouts are handled:
+//   - pure UDF (hdiutil -udf): BEA01/NSR02/TEA01 at sectors 16–18. NSR and
+//     TEA shift down one sector to free sector 17. That stays valid UDF:
+//     ECMA-167 readers skip foreign CD001 descriptors while walking the
+//     recognition sequence, which is how stock Microsoft bridge media is
+//     laid out.
+//   - plain ISO 9660: the set terminator at sector 17 moves to 18 when that
+//     sector is free; otherwise it is dropped, which parsers tolerate — they
+//     stop at the first sector that is no valid descriptor.
+func AddElToritoEFIBoot(isoPath string, bootImage []byte) error {
+	if len(bootImage) == 0 {
+		return fmt.Errorf("empty El Torito boot image")
+	}
+
+	f, err := os.OpenFile(isoPath, os.O_RDWR, 0)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	stat, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	size := stat.Size()
+	if pad := size % isoSectorSize; pad != 0 {
+		size += isoSectorSize - pad
+	}
+
+	readSector := func(lba int64) ([]byte, error) {
+		buf := make([]byte, isoSectorSize)
+		if _, err := f.ReadAt(buf, lba*isoSectorSize); err != nil {
+			return nil, fmt.Errorf("reading sector %d: %w", lba, err)
+		}
+		return buf, nil
+	}
+	writeSector := func(lba int64, data []byte) error {
+		if _, err := f.WriteAt(data, lba*isoSectorSize); err != nil {
+			return fmt.Errorf("writing sector %d: %w", lba, err)
+		}
+		return nil
+	}
+
+	catSector, err := readSector(elToritoCatalogLBA)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(catSector, make([]byte, isoSectorSize)) {
+		return fmt.Errorf("sector %d is not free — cannot place the boot catalog in the system area", elToritoCatalogLBA)
+	}
+
+	s17, err := readSector(17)
+	if err != nil {
+		return err
+	}
+	switch magic := string(s17[1:6]); {
+	case magic == "NSR02" || magic == "NSR03":
+		// Pure UDF: shift NSR/TEA down one sector to free sector 17.
+		s18, err := readSector(18)
+		if err != nil {
+			return err
+		}
+		if string(s18[1:6]) != "TEA01" {
+			return fmt.Errorf("unexpected UDF layout: sector 18 is %q, expected TEA01", s18[1:6])
+		}
+		s19, err := readSector(19)
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(s19, make([]byte, isoSectorSize)) {
+			return fmt.Errorf("sector 19 is not free — cannot shift the UDF recognition sequence")
+		}
+		if err := writeSector(19, s18); err != nil {
+			return err
+		}
+		if err := writeSector(18, s17); err != nil {
+			return err
+		}
+	case magic == "CD001" && s17[0] == 0 && strings.HasPrefix(string(s17[7:39]), "EL TORITO SPECIFICATION"):
+		return fmt.Errorf("%s already has an El Torito boot record", isoPath)
+	case magic == "CD001" && s17[0] == 255:
+		// Plain ISO 9660: move the set terminator out of sector 17 when the
+		// next sector is free; otherwise drop it (tolerated by parsers).
+		s18, err := readSector(18)
+		if err != nil {
+			return err
+		}
+		if bytes.Equal(s18, make([]byte, isoSectorSize)) {
+			if err := writeSector(18, s17); err != nil {
+				return err
+			}
+		}
+	default:
+		return fmt.Errorf("unsupported layout: sector 17 holds %q (type 0x%02x)", s17[1:6], s17[0])
+	}
+
+	// Boot image, appended sector-aligned at the end of the file.
+	imageLBA := size / isoSectorSize
+	padded := make([]byte, (int64(len(bootImage))+isoSectorSize-1)/isoSectorSize*isoSectorSize)
+	copy(padded, bootImage)
+	if _, err := f.WriteAt(padded, size); err != nil {
+		return fmt.Errorf("appending boot image: %w", err)
+	}
+
+	// Boot catalog: validation entry + default entry.
+	cat := make([]byte, isoSectorSize)
+	cat[0] = 0x01 // header ID
+	cat[1] = 0xEF // platform: EFI
+	copy(cat[4:], "devcell")
+	cat[0x1E], cat[0x1F] = 0x55, 0xAA
+	var sum uint16
+	for i := 0; i < 32; i += 2 {
+		sum += binary.LittleEndian.Uint16(cat[i:])
+	}
+	binary.LittleEndian.PutUint16(cat[0x1C:], -sum) // words of the entry must sum to zero
+
+	virtualSectors := (int64(len(bootImage)) + 511) / 512
+	if virtualSectors > 0xFFFF {
+		virtualSectors = 0xFFFF
+	}
+	entry := cat[0x20:]
+	entry[0] = 0x88 // bootable
+	entry[1] = 0x00 // no emulation
+	binary.LittleEndian.PutUint16(entry[6:], uint16(virtualSectors))
+	binary.LittleEndian.PutUint32(entry[8:], uint32(imageLBA))
+	if err := writeSector(elToritoCatalogLBA, cat); err != nil {
+		return err
+	}
+
+	// Boot Record Volume Descriptor at the spec-mandated sector 17.
+	brvd := make([]byte, isoSectorSize)
+	brvd[0] = 0x00
+	copy(brvd[1:6], "CD001")
+	brvd[6] = 0x01
+	copy(brvd[7:], "EL TORITO SPECIFICATION")
+	binary.LittleEndian.PutUint32(brvd[0x47:], elToritoCatalogLBA)
+	return writeSector(17, brvd)
+}
+
+// RequireEFIBootable reports whether firmware can boot the ISO: it must
+// carry an El Torito boot catalog with a bootable EFI (0xEF) entry. Images
+// failing this (e.g. raw hdiutil -udf output) drop the VM to the EFI shell.
+func RequireEFIBootable(isoPath string) error {
+	info, err := InspectElTorito(isoPath)
+	if err != nil {
+		return fmt.Errorf("not firmware-bootable: %w", err)
+	}
+	if info.PlatformID != 0xEF {
+		return fmt.Errorf("not firmware-bootable: El Torito platform is 0x%02X, want EFI (0xEF)", info.PlatformID)
+	}
+	if !info.Bootable {
+		return fmt.Errorf("not firmware-bootable: default El Torito entry is not marked bootable")
+	}
+	return nil
 }
 
 // SetElToritoBootImage repoints an ISO's default El Torito boot entry at a
@@ -611,6 +924,81 @@ func SetElToritoBootImage(isoPath string, loadRBA uint32, sectorCount uint16) er
 }
 
 const isoSectorSize = 2048
+
+// DiagnoseISO returns a human-readable dump of the ISO's volume descriptor
+// chain and partition detection, for debugging why readers fail on some
+// platforms.
+func DiagnoseISO(isoPath string) string {
+	var b strings.Builder
+	f, err := os.Open(isoPath)
+	if err != nil {
+		fmt.Fprintf(&b, "open: %v\n", err)
+		return b.String()
+	}
+	defer f.Close()
+
+	stat, _ := f.Stat()
+	fmt.Fprintf(&b, "file: %s (%d bytes)\n", isoPath, stat.Size())
+
+	// Dump volume descriptors at sectors 16-31
+	buf := make([]byte, isoSectorSize)
+	for sector := int64(16); sector < 32; sector++ {
+		n, err := f.ReadAt(buf, sector*isoSectorSize)
+		if err != nil {
+			fmt.Fprintf(&b, "sector %d: read error (%d bytes): %v\n", sector, n, err)
+			break
+		}
+		magic := string(buf[1:6])
+		fmt.Fprintf(&b, "sector %d: type=0x%02x magic=%q first8=%02x\n", sector, buf[0], magic, buf[:8])
+		if magic != "CD001" && magic != "BEA01" && magic != "NSR02" && magic != "NSR03" && magic != "TEA01" {
+			break
+		}
+		if buf[0] == 1 && magic == "CD001" {
+			rootExtent := binary.LittleEndian.Uint32(buf[158:])
+			rootSize := binary.LittleEndian.Uint32(buf[166:])
+			fmt.Fprintf(&b, "  PVD root dir: extent=%d size=%d\n", rootExtent, rootSize)
+		}
+		if buf[0] == 255 {
+			break
+		}
+	}
+
+	// Try diskfs partition detection
+	d, err := diskfs.Open(isoPath)
+	if err != nil {
+		fmt.Fprintf(&b, "diskfs.Open: %v\n", err)
+	} else {
+		fmt.Fprintf(&b, "diskfs.Open: OK, LogicalBlocksize=%d\n", d.LogicalBlocksize)
+		if tbl, err := d.GetPartitionTable(); err != nil {
+			fmt.Fprintf(&b, "diskfs partition table: %v\n", err)
+		} else {
+			parts := tbl.GetPartitions()
+			fmt.Fprintf(&b, "diskfs partitions: %d\n", len(parts))
+			for i, p := range parts {
+				fmt.Fprintf(&b, "  partition %d: start=%d size=%d\n", i, p.GetStart(), p.GetSize())
+			}
+		}
+		fs0, err := d.GetFilesystem(0)
+		if err != nil {
+			fmt.Fprintf(&b, "diskfs filesystem(0): %v\n", err)
+		} else {
+			fmt.Fprintf(&b, "diskfs filesystem(0): %T\n", fs0)
+		}
+	}
+
+	// Scan for BOOTAA64.EFI string in first 4MB
+	needle := []byte("BOOTAA64.EFI")
+	scanBuf := make([]byte, 4*1024*1024)
+	n, _ := f.ReadAt(scanBuf, 0)
+	if bytes.Contains(scanBuf[:n], needle) {
+		idx := bytes.Index(scanBuf[:n], needle)
+		fmt.Fprintf(&b, "BOOTAA64.EFI string found at offset %d (0x%x)\n", idx, idx)
+	} else {
+		fmt.Fprintf(&b, "BOOTAA64.EFI string NOT found in first %d bytes\n", n)
+	}
+
+	return b.String()
+}
 
 type isoDirEntry struct {
 	extent uint32

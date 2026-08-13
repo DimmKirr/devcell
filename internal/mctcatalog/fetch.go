@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/DimmKirr/devcell/internal/isokit"
 )
 
 type FetchConfig struct {
@@ -51,8 +53,16 @@ func FetchWindowsISO(ctx context.Context, cfg FetchConfig) (string, error) {
 		strings.ReplaceAll(strings.ToLower(cfg.Language), " ", "-")))
 
 	if info, err := os.Stat(isoPath); err == nil && info.Size() > 0 {
-		cfg.logf("ISO already exists: %s (%d bytes)", isoPath, info.Size())
-		return isoPath, nil
+		// A mastering failure can orphan a non-bootable image here (run
+		// 20260812T090917: raw hdiutil -udf output with no El Torito). Only a
+		// firmware-bootable image is a valid cache hit.
+		if bootErr := isokit.RequireEFIBootable(isoPath); bootErr != nil {
+			cfg.logf("existing ISO is unusable (%v) — rebuilding", bootErr)
+			os.Remove(isoPath)
+		} else {
+			cfg.logf("ISO already exists: %s (%d bytes)", isoPath, info.Size())
+			return isoPath, nil
+		}
 	}
 
 	client := NewClient(WithLogFunc(cfg.LogFunc))

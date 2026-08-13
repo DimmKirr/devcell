@@ -138,8 +138,53 @@ func requireISOTool(t *testing.T) {
 	t.Skip("no ISO tool available (need hdiutil, genisoimage, or mkisofs)")
 }
 
-func TestCreateWindowsISO_HasISO9660Magic(t *testing.T) {
+func requireGenISOTool(t *testing.T) {
+	t.Helper()
+	for _, name := range []string{"genisoimage", "mkisofs"} {
+		if _, err := exec.LookPath(name); err == nil {
+			return
+		}
+	}
+	t.Skip("genisoimage/mkisofs not available")
+}
+
+// TestCreateWindowsISO_IsEFIBootable reproduces run 20260812T081924 ("Boot
+// failed ... startup.nsh could not find BOOTAA64.EFI") at its source. On
+// macOS CreateWindowsISO masters with `hdiutil makehybrid -udf`, which emits
+// a pure-UDF image: no ISO 9660 bridge and no El Torito boot catalog. EDK2
+// only assigns FSn: mappings to El Torito/FAT volumes, so the firmware drops
+// to the EFI shell and the install never starts. Every installer ISO we
+// master must carry a bootable EFI (0xEF) El Torito entry, whichever tool
+// produced it. Skips where no mastering tool exists; the genisoimage path
+// (Linux) passes; the hdiutil path (macOS) is RED today.
+func TestCreateWindowsISO_IsEFIBootable(t *testing.T) {
 	requireISOTool(t)
+
+	tmpDir := t.TempDir()
+	isoPath := filepath.Join(tmpDir, "win.iso")
+
+	stageDir := filepath.Join(tmpDir, "stage")
+	require.NoError(t, os.MkdirAll(filepath.Join(stageDir, "efi", "microsoft", "boot"), 0o755))
+	efiBin := make([]byte, 4096)
+	copy(efiBin, []byte("EFI-BOOT"))
+	require.NoError(t, os.WriteFile(filepath.Join(stageDir, "efi", "microsoft", "boot", "efisys_noprompt.bin"), efiBin, 0o644))
+
+	err := CreateWindowsISO(isoPath, stageDir, "TESTLABEL")
+	require.NoError(t, err)
+
+	info, err := InspectElTorito(isoPath)
+	require.NoError(t, err,
+		"mastered installer ISO has no El Torito boot catalog — UEFI firmware cannot boot it")
+	assert.Equal(t, byte(0xEF), info.PlatformID, "El Torito platform must be EFI (0xEF)")
+	assert.True(t, info.Bootable, "default El Torito entry must be marked bootable (0x88)")
+}
+
+// An ISO 9660 bridge is a genisoimage-only property: hdiutil has no level-3
+// multi-extent support, and install.wim exceeds ISO 9660's 4 GiB single-file
+// limit, so the macOS path masters UDF + injected El Torito instead (see
+// TestCreateWindowsISO_IsEFIBootable for the contract both paths share).
+func TestCreateWindowsISO_HasISO9660Magic(t *testing.T) {
+	requireGenISOTool(t)
 
 	tmpDir := t.TempDir()
 	isoPath := filepath.Join(tmpDir, "win.iso")
@@ -265,6 +310,187 @@ func TestCreateSimpleISO_HasISO9660Magic(t *testing.T) {
 	_, err = f.ReadAt(magic, 0x8001)
 	require.NoError(t, err)
 	assert.Equal(t, "CD001", string(magic))
+}
+
+// buildPureUDFISO writes the layout `hdiutil makehybrid -udf` masters (run
+// 20260812T081924): the ECMA-167 volume recognition sequence BEA01/NSR02/TEA01
+// at sectors 16–18, no CD001 descriptor anywhere, no El Torito.
+func buildPureUDFISO(t *testing.T) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "pure-udf.iso")
+	img := make([]byte, 64*2048)
+	writeVSD := func(sector int, magic string) {
+		copy(img[sector*2048+1:], magic)
+		img[sector*2048+6] = 0x01
+	}
+	writeVSD(16, "BEA01")
+	writeVSD(17, "NSR02")
+	writeVSD(18, "TEA01")
+	require.NoError(t, os.WriteFile(p, img, 0o644))
+	return p
+}
+
+func readSector(t *testing.T, isoPath string, sector int64) []byte {
+	t.Helper()
+	f, err := os.Open(isoPath)
+	require.NoError(t, err)
+	defer f.Close()
+	buf := make([]byte, 2048)
+	_, err = f.ReadAt(buf, sector*2048)
+	require.NoError(t, err)
+	return buf
+}
+
+// AddElToritoEFIBoot must turn a pure-UDF disc (what hdiutil masters on
+// macOS) into firmware-bootable media: El Torito BRVD at sector 17 — the
+// LBA the specification fixes and firmware reads directly — with the UDF
+// recognition sequence shifted down one sector, which stays valid because
+// UDF readers skip foreign CD001 descriptors while walking the sequence
+// (that is exactly how stock Microsoft bridge media is laid out).
+func TestAddElToritoEFIBoot_PureUDF(t *testing.T) {
+	isoPath := buildPureUDFISO(t)
+	bootImage := bytes.Repeat([]byte("FAT-boot-image!!"), 256) // 4096 bytes
+
+	require.NoError(t, AddElToritoEFIBoot(isoPath, bootImage))
+
+	info, err := InspectElTorito(isoPath)
+	require.NoError(t, err, "injected catalog must be visible to InspectElTorito")
+	assert.Equal(t, byte(0xEF), info.PlatformID)
+	assert.True(t, info.Bootable)
+	assert.Equal(t, uint16(8), info.SectorCount, "4096 bytes = 8 virtual 512-byte sectors")
+
+	// The boot image bytes must live at LoadRBA.
+	got := readSector(t, isoPath, int64(info.LoadRBA))
+	assert.Equal(t, bootImage[:2048], got)
+
+	// The UDF recognition sequence must survive, shifted past the BRVD.
+	assert.Equal(t, "BEA01", string(readSector(t, isoPath, 16)[1:6]))
+	assert.Equal(t, "CD001", string(readSector(t, isoPath, 17)[1:6]))
+	assert.Equal(t, "NSR02", string(readSector(t, isoPath, 18)[1:6]))
+	assert.Equal(t, "TEA01", string(readSector(t, isoPath, 19)[1:6]))
+}
+
+// The same injection must work on a plain ISO 9660 image (terminator at
+// sector 17), and existing file reads must keep working afterwards.
+func TestAddElToritoEFIBoot_PlainISO9660(t *testing.T) {
+	isoPath := filepath.Join(t.TempDir(), "plain.iso")
+	content := []byte("hello from inside the iso")
+	require.NoError(t, CreateSimpleISO(isoPath, map[string][]byte{"/hello.txt": content}))
+	bootImage := bytes.Repeat([]byte{0xAB}, 1024)
+
+	require.NoError(t, AddElToritoEFIBoot(isoPath, bootImage))
+
+	info, err := InspectElTorito(isoPath)
+	require.NoError(t, err)
+	assert.Equal(t, byte(0xEF), info.PlatformID)
+	assert.True(t, info.Bootable)
+
+	got, err := ReadFileFromISO(isoPath, "/hello.txt")
+	require.NoError(t, err, "file reads must survive the injection")
+	assert.Equal(t, content, got)
+}
+
+// The macOS mastering path must not ship what hdiutil emits verbatim:
+// `makehybrid -udf` output is pure UDF with no El Torito catalog, which
+// firmware cannot boot (run 20260812T081924). After mastering, the EFI boot
+// image from the stage tree must be injected. Verified with a fake hdiutil
+// that emits a canonical pure-UDF image, so this runs without macOS.
+func TestCreateWindowsISOHdiutil_InjectsElTorito(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	stageDir := filepath.Join(tmpDir, "stage")
+	bootDir := filepath.Join(stageDir, "efi", "microsoft", "boot")
+	require.NoError(t, os.MkdirAll(bootDir, 0o755))
+	efisys := bytes.Repeat([]byte("EFISYS-FAT-IMAGE"), 128) // 2048 bytes
+	require.NoError(t, os.WriteFile(filepath.Join(bootDir, "efisys_noprompt.bin"), efisys, 0o644))
+
+	canned := buildPureUDFISO(t)
+	fakeHdiutil := filepath.Join(tmpDir, "hdiutil")
+	script := "#!/bin/sh\nout=\"\"\nprev=\"\"\nfor a in \"$@\"; do\n  [ \"$prev\" = \"-o\" ] && out=\"$a\"\n  prev=\"$a\"\ndone\ncp \"" + canned + "\" \"$out.cdr\"\n"
+	require.NoError(t, os.WriteFile(fakeHdiutil, []byte(script), 0o755))
+
+	isoPath := filepath.Join(tmpDir, "win.iso")
+	efiBootFile := filepath.Join("efi", "microsoft", "boot", "efisys_noprompt.bin")
+	require.NoError(t, createWindowsISOHdiutil(fakeHdiutil, isoPath, stageDir, efiBootFile, "TESTLABEL"))
+
+	info, err := InspectElTorito(isoPath)
+	require.NoError(t, err, "hdiutil-mastered ISO must leave with an El Torito catalog")
+	assert.Equal(t, byte(0xEF), info.PlatformID)
+	assert.True(t, info.Bootable)
+	assert.Equal(t, efisys, readSector(t, isoPath, int64(info.LoadRBA)),
+		"boot entry must point at the efisys_noprompt.bin payload from the stage tree")
+}
+
+// Mastering must export the installer's BOOTAA64.EFI next to the ISO: on
+// pure-UDF media (macOS hdiutil path) no Go-native reader can extract it
+// afterwards, and without it the answer volume ships no bootloader for
+// startup.nsh — the QEMU v11+ HVF boot path (run 20260812T081924).
+func TestWriteBootloaderSidecar(t *testing.T) {
+	tmpDir := t.TempDir()
+	stageDir := filepath.Join(tmpDir, "stage")
+	bootDir := filepath.Join(stageDir, "efi", "boot")
+	require.NoError(t, os.MkdirAll(bootDir, 0o755))
+	loader := []byte("MZ-arm64-bootmgr")
+	require.NoError(t, os.WriteFile(filepath.Join(bootDir, "bootaa64.efi"), loader, 0o644))
+
+	isoPath := filepath.Join(tmpDir, "win.iso")
+	require.NoError(t, os.WriteFile(isoPath, []byte("iso"), 0o644))
+
+	require.NoError(t, writeBootloaderSidecar(isoPath, stageDir))
+
+	got, err := os.ReadFile(BootloaderSidecarPath(isoPath))
+	require.NoError(t, err)
+	assert.Equal(t, loader, got)
+}
+
+func TestWriteBootloaderSidecar_NoLoaderInStage(t *testing.T) {
+	tmpDir := t.TempDir()
+	isoPath := filepath.Join(tmpDir, "win.iso")
+	require.NoError(t, os.WriteFile(isoPath, []byte("iso"), 0o644))
+
+	err := writeBootloaderSidecar(isoPath, filepath.Join(tmpDir, "empty-stage"))
+	require.Error(t, err)
+	_, statErr := os.Stat(BootloaderSidecarPath(isoPath))
+	assert.True(t, os.IsNotExist(statErr), "no sidecar must be written when the stage has no loader")
+}
+
+// hdiutil chooses the output extension itself — run 20260812T090917 showed
+// makehybrid -udf appending ".iso", not the ".cdr" the code assumed. The
+// rename then failed, CreateWindowsISO errored before El Torito injection,
+// and the fetch fallback blessed the orphaned un-bootable image. Whatever
+// extension hdiutil picks, mastering must succeed and inject.
+func TestCreateWindowsISOHdiutil_OutputWithISOExtension(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	stageDir := filepath.Join(tmpDir, "stage")
+	bootDir := filepath.Join(stageDir, "efi", "microsoft", "boot")
+	require.NoError(t, os.MkdirAll(bootDir, 0o755))
+	efisys := bytes.Repeat([]byte("EFISYS-FAT-IMAGE"), 128)
+	require.NoError(t, os.WriteFile(filepath.Join(bootDir, "efisys_noprompt.bin"), efisys, 0o644))
+
+	canned := buildPureUDFISO(t)
+	fakeHdiutil := filepath.Join(tmpDir, "hdiutil")
+	script := "#!/bin/sh\nout=\"\"\nprev=\"\"\nfor a in \"$@\"; do\n  [ \"$prev\" = \"-o\" ] && out=\"$a\"\n  prev=\"$a\"\ndone\ncp \"" + canned + "\" \"$out.iso\"\n"
+	require.NoError(t, os.WriteFile(fakeHdiutil, []byte(script), 0o755))
+
+	isoPath := filepath.Join(tmpDir, "win.iso")
+	efiBootFile := filepath.Join("efi", "microsoft", "boot", "efisys_noprompt.bin")
+	require.NoError(t, createWindowsISOHdiutil(fakeHdiutil, isoPath, stageDir, efiBootFile, "TESTLABEL"))
+
+	require.NoError(t, RequireEFIBootable(isoPath))
+}
+
+func TestRequireEFIBootable_RejectsPureUDF(t *testing.T) {
+	iso := buildPureUDFISO(t)
+	err := RequireEFIBootable(iso)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "El Torito")
+}
+
+func TestRequireEFIBootable_AcceptsInjected(t *testing.T) {
+	iso := buildPureUDFISO(t)
+	require.NoError(t, AddElToritoEFIBoot(iso, []byte("boot")))
+	assert.NoError(t, RequireEFIBootable(iso))
 }
 
 // buildElToritoISO writes a minimal ISO image containing a Boot Record Volume
@@ -437,6 +663,18 @@ func TestFindFileExtent_MissingFile(t *testing.T) {
 
 	_, _, err := FindFileExtent(isoPath, "/nope.bin")
 	assert.Error(t, err)
+}
+
+func TestReadFileFromISO_RawFallbackReadsDeepPath(t *testing.T) {
+	payload := []byte("MZ-bootloader-stub")
+	isoPath := filepath.Join(t.TempDir(), "test.iso")
+	require.NoError(t, CreateSimpleISO(isoPath, map[string][]byte{
+		"/EFI/BOOT/BOOTAA64.EFI": payload,
+	}))
+
+	got, err := readFileFromISORaw(isoPath, "/EFI/BOOT/BOOTAA64.EFI")
+	require.NoError(t, err)
+	assert.Equal(t, payload, got)
 }
 
 func TestSetElToritoBootImage_UpdatesCatalog(t *testing.T) {
