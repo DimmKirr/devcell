@@ -562,6 +562,89 @@ tasks:
     env:
       DOCKER_HOST: '{{.DOCKER_SOCK}}'
 
+  # ── Full Windows install via QEMU (CELL-429) ──────────────────────────
+  # Usage:
+  #   task test:windows:build              # runs tcg subtest (default)
+  #   task test:windows:build ACCEL=hvf    # runs hvf subtest
+  #   task test:windows:build ACCEL=""     # runs all subtests
+  test:windows:build:
+    desc: "Run the full unattended Windows install through `cell build --engine=qemu`"
+    platforms: [darwin]
+    silent: true
+    vars:
+      ACCEL: tcg
+      DEBUG_DIR: '{{.TASKFILE_DIR}}/.context/debug'
+    cmds:
+      - mkdir -p {{.DEBUG_DIR}}
+      - |
+        set -euo pipefail
+        env_log="{{.DEBUG_DIR}}/environment.log"
+
+        # ── Resolve every path the VM boot uses ──
+        qemu_bin=$(which qemu-system-aarch64 2>/dev/null || true)
+        qemu_real=""
+        qemu_prefix=""
+        fw=""
+        if [ -n "$qemu_bin" ]; then
+          qemu_real=$(realpath "$qemu_bin" 2>/dev/null || readlink -f "$qemu_bin" 2>/dev/null || echo "$qemu_bin")
+          qemu_prefix=$(dirname "$qemu_real")/..
+          fw="${qemu_prefix}/share/qemu/edk2-aarch64-code.fd"
+        fi
+
+        cache_dir="${DEVCELL_QEMU_CACHE_DIR:-$HOME/.devcell/cache/qemu}"
+        win_iso="${DEVCELL_TEST_WINDOWS_ISO:-${cache_dir}/windows-arm64-en-us.iso}"
+        virtio_iso="${DEVCELL_TEST_VIRTIO_ISO:-${cache_dir}/virtio-win.iso}"
+
+        check_file() {
+          local label="$1" path="$2"
+          if [ -f "$path" ]; then
+            printf "  %-14s %-6s %s\n" "$label" "$(du -h "$path" 2>/dev/null | cut -f1)" "$path"
+          else
+            printf "  %-14s %-6s %s\n" "$label" "MISS" "$path"
+          fi
+        }
+
+        {
+          echo "=== test:windows:build $(date -u +%Y%m%dT%H%M%SZ) ==="
+
+          echo "--- qemu binary ---"
+          echo "  PATH lookup:  ${qemu_bin:-NOT FOUND}"
+          echo "  realpath:     ${qemu_real:-N/A}"
+          [ -n "$qemu_bin" ] && qemu-system-aarch64 --version 2>&1 | head -1 | sed 's/^/  version:      /'
+          echo ""
+
+          echo "--- VM boot file preflight ---"
+          check_file "firmware" "$fw"
+          check_file "windows-iso" "$win_iso"
+          check_file "virtio-iso" "$virtio_iso"
+          echo ""
+
+          echo "--- cache directory ---"
+          echo "  resolved: $cache_dir"
+          if [ -d "$cache_dir" ]; then
+            ls -lh "$cache_dir" 2>/dev/null | sed 's/^/  /'
+          else
+            echo "  DOES NOT EXIST"
+          fi
+          echo ""
+        } 2>&1 | tee "$env_log"
+
+        # ── Run the full Windows install test ──
+        accel="{{.ACCEL}}"
+        run_filter="TestCellBuildWindows_QEMU"
+        if [ -n "$accel" ]; then
+          run_filter="TestCellBuildWindows_QEMU/${accel}"
+        fi
+        log="{{.DEBUG_DIR}}/TestCellBuildWindows_QEMU.log"
+        echo "▸ ${run_filter} → ${log}"
+        build_env="DEVCELL_TEST_INSTALL=1 DEVCELL_TEST_REBUILD=1"
+        if env $build_env go test -run "${run_filter}" -timeout 8h -v -count=1 ./internal/vm/qemu/ 2>&1 | tee "${log}"; then
+          echo "  ✓ PASS"
+        else
+          echo "  ✗ FAIL"
+          exit 1
+        fi
+
   # ── Nix-store GHCR cache pipeline ──────────────────────────────────────
   # Stream the populated /nix volume to GHCR as a multi-layer cache image.
   # `cell nix-store push` splits the tar into ~1 GB chunks (CELL-297), each
@@ -599,6 +682,70 @@ tasks:
   debug:
     cmds:
       - task: debug:macos
+  # ── Forced QEMU Windows autobuild with full log capture (CELL-428/429) ─────
+  debug:autobuild:
+    desc: "Forced QEMU Windows template build with full log capture → .context/debug/autobuild.log"
+    platforms: [darwin]
+    deps: [install]
+    silent: true
+    env:
+      # CELL-429 iteration 2 instrument: ships the WinPE agent on the answer
+      # volume plus a pre-baked one-shot diagnostic (drvload vioscsi + diskpart
+      # volume list → devcell-out.txt).
+      #   H1 ($WinPEDriver$ sweep never ran): devcell-setupact.log snapshot
+      #      shows whether wpeinit processed the driver dir.
+      #   H2 (padForFAT broke the driver files): drivers now ship byte-exact,
+      #      and drvload's real output/exit code lands in devcell-out.txt.
+      #   H3 (any non-reg-add RunSynchronous aborts 0x8007000D): this run IS
+      #      the test — the agent launcher is the vetted %l pattern; if the
+      #      abort returns, H3 is confirmed and the agent design is dead.
+      DEVCELL_QEMU_WINPE_AGENT: "1"
+    vars:
+      LOG: '{{.TASKFILE_DIR}}/.context/debug/autobuild.log'
+      CACHE: '{{.HOME}}/.devcell/cache/qemu'
+    cmds:
+      - mkdir -p {{.TASKFILE_DIR}}/.context/debug
+      - |
+        {
+          echo "=== debug:autobuild $(date -u +%Y%m%dT%H%M%SZ) ==="
+          echo "--- cell version ---"
+          cell --version 2>&1 || true
+          echo "--- qemu ---"
+          command -v qemu-system-aarch64 2>&1 || true
+          qemu-system-aarch64 --version 2>&1 | head -1 || true
+          echo "--- media cache ---"
+          ls -la "{{.CACHE}}/" 2>&1 || true
+          echo "--- cached ISO volume descriptors (expect: catalog@15, BEA01@16, CD001 BRVD@17, NSR02@18, TEA01@19) ---"
+          for s in 15 16 17 18 19; do
+            printf "sector %s: " "$s"
+            dd if="{{.CACHE}}/windows-arm64-en-us.iso" bs=2048 skip=$s count=1 2>/dev/null | xxd -l 8 | head -1 || echo "unreadable"
+          done
+          echo "--- bootloader sidecar ---"
+          ls -la "{{.CACHE}}/windows-arm64-en-us.iso.bootaa64.efi" 2>&1 || echo "no sidecar (will re-master or fall back to ISO read)"
+          echo "--- template dir before ---"
+          ls -la "{{.HOME}}/.devcell/windows/ultimate/" 2>&1 || true
+          echo ""
+        } > {{.LOG}} 2>&1
+      - |
+        set -o pipefail
+        cell claude --engine=qemu --debug --force 2>&1 | tee -a {{.LOG}}
+        rc=$?
+        {
+          echo ""
+          echo "=== exit code: $rc ==="
+          echo "=== serial.log (tail 120) ==="
+          tail -120 "{{.TASKFILE_DIR}}/.context/debug/serial.log" 2>/dev/null || true
+          echo "=== guest-progress.log (tail 60) ==="
+          tail -60 "{{.TASKFILE_DIR}}/.context/debug/guest-progress.log" 2>/dev/null || true
+          echo "=== newest screenshots ==="
+          ls -t "{{.TASKFILE_DIR}}/.context/debug/screenshots/" 2>/dev/null | head -12 || true
+          echo "=== template dir after ==="
+          ls -la "{{.HOME}}/.devcell/windows/ultimate/" 2>/dev/null || true
+        } >> {{.LOG}} 2>&1
+        echo ""
+        echo "full log: {{.LOG}}"
+        exit $rc
+
   # ── Windows ISO debugging (UUP dump download + wimlib assembly) ─────
   debug:windows:
     desc: "Quick Windows QEMU smoke test: build → exec echo hello world"
@@ -784,6 +931,146 @@ tasks:
         _dump 2>&1 | tee "$LOG"
         echo ""
         echo "saved to: $LOG"
+
+  # ── CD bus × accelerator matrix (CELL-429) ──────────────────────────
+  debug:macos:disk:
+    desc: "Run WinPE CD visibility tests (scsi-cd × hvf × {el2,no-el2}) on macOS"
+    platforms: [darwin]
+    silent: true
+    vars:
+      DEBUG_DIR: '{{.TASKFILE_DIR}}/.context/debug'
+    cmds:
+      - mkdir -p {{.DEBUG_DIR}}
+      - |
+        set -euo pipefail
+        env_log="{{.DEBUG_DIR}}/environment.log"
+
+        # ── Resolve every path the VM boot uses ──
+        # These mirror the Go helpers: requireQEMUBin, FirmwarePath,
+        # requireWindowsISO, requireVirtioISO (boot_test.go / download.go).
+        qemu_bin=$(which qemu-system-aarch64 2>/dev/null || true)
+        qemu_real=""
+        qemu_prefix=""
+        fw=""
+        if [ -n "$qemu_bin" ]; then
+          qemu_real=$(realpath "$qemu_bin" 2>/dev/null || readlink -f "$qemu_bin" 2>/dev/null || echo "$qemu_bin")
+          qemu_prefix=$(dirname "$qemu_real")/..
+          fw="${qemu_prefix}/share/qemu/edk2-aarch64-code.fd"
+        fi
+
+        cache_dir="${DEVCELL_QEMU_CACHE_DIR:-$HOME/.devcell/cache/qemu}"
+        win_iso="${DEVCELL_TEST_WINDOWS_ISO:-${cache_dir}/windows-arm64-en-us.iso}"
+        virtio_iso="${DEVCELL_TEST_VIRTIO_ISO:-${cache_dir}/virtio-win.iso}"
+        fw_override="${QEMU_FIRMWARE_OVERRIDE:-}"
+
+        # Helper: print file info or MISSING
+        check_file() {
+          local label="$1" path="$2"
+          if [ -f "$path" ]; then
+            printf "  %-14s %-6s %s\n" "$label" "$(du -h "$path" 2>/dev/null | cut -f1)" "$path"
+          else
+            printf "  %-14s %-6s %s\n" "$label" "MISS" "$path"
+          fi
+        }
+
+        {
+          echo "=== debug:macos:disk $(date -u +%Y%m%dT%H%M%SZ) ==="
+
+          echo "--- qemu binary ---"
+          echo "  PATH lookup:  ${qemu_bin:-NOT FOUND}"
+          echo "  realpath:     ${qemu_real:-N/A}"
+          echo "  prefix:       ${qemu_prefix:-N/A}"
+          [ -n "$qemu_bin" ] && qemu-system-aarch64 --version 2>&1 | head -1 | sed 's/^/  version:      /'
+          echo ""
+
+          echo "--- VM boot file preflight ---"
+          echo "  (mirrors Go: FirmwarePath, requireWindowsISO, requireVirtioISO)"
+          check_file "firmware" "$fw"
+          check_file "windows-iso" "$win_iso"
+          check_file "virtio-iso" "$virtio_iso"
+          [ -n "$fw_override" ] && check_file "fw-override" "$fw_override"
+          echo ""
+
+          echo "--- firmware fingerprint ---"
+          if [ -f "$fw" ]; then
+            echo "  sha256: $(shasum -a 256 "$fw" | cut -d' ' -f1)"
+            strings "$fw" | grep -i 'edk2-stable\|build.*20[0-9][0-9]' | head -3 | sed 's/^/  build-tag: /' || true
+          fi
+          echo ""
+
+          echo "--- cache directory ---"
+          echo "  DEVCELL_QEMU_CACHE_DIR=${DEVCELL_QEMU_CACHE_DIR:-<unset>}"
+          echo "  resolved: $cache_dir"
+          if [ -d "$cache_dir" ]; then
+            ls -lh "$cache_dir" 2>/dev/null | sed 's/^/  /'
+          else
+            echo "  DOES NOT EXIST"
+          fi
+          echo ""
+
+          echo "--- env overrides ---"
+          echo "  DEVCELL_TEST_WINDOWS_ISO=${DEVCELL_TEST_WINDOWS_ISO:-<unset>}"
+          echo "  DEVCELL_TEST_VIRTIO_ISO=${DEVCELL_TEST_VIRTIO_ISO:-<unset>}"
+          echo "  QEMU_FIRMWARE_OVERRIDE=${QEMU_FIRMWARE_OVERRIDE:-<unset>}"
+          echo "  DEVCELL_QEMU_EFI_KERNEL=${DEVCELL_QEMU_EFI_KERNEL:-<unset>}"
+          echo ""
+
+          echo "--- qemu share directory ---"
+          if [ -n "$qemu_prefix" ] && [ -d "${qemu_prefix}/share/qemu" ]; then
+            echo "  ${qemu_prefix}/share/qemu:"
+            ls -1 "${qemu_prefix}/share/qemu/" | grep -iE 'edk2|efi|uefi|aarch64|arm' | sed 's/^/    /'
+          else
+            echo "  NOT FOUND"
+          fi
+          echo ""
+        } 2>&1 | tee "$env_log"
+
+        # ── Test matrix: scsi-cd × {tcg,hvf} × {el2,no-el2} ──
+        # usb-storage disabled: EDK2 can't enumerate the answer FAT
+        # volume when it falls to a USB 2.0 port (XHCI port exhaustion).
+        # All variants run in one go test binary so subtests share a single
+        # timestamped results directory.
+        log="{{.DEBUG_DIR}}/TestWinPECDVisibility.log"
+        echo "▸ TestWinPECDVisibility (all variants) → ${log}"
+        env_args=""
+        [ -n "$fw_override" ] && env_args="QEMU_FIRMWARE_OVERRIDE=$fw_override"
+        if env $env_args go test -run "TestWinPECDVisibility/scsi-cd/hvf" -timeout 60m -v ./internal/vm/qemu/ 2>&1 | tee "${log}"; then
+          echo "  ✓ PASS"
+        else
+          echo "  ✗ FAIL"
+          exit 1
+        fi
+
+  debug:macos:winpe:
+    desc: "Run WinPE Hyper-V/WSL2 injection test (tcg + hvf) on macOS"
+    platforms: [darwin]
+    silent: true
+    vars:
+      DEBUG_DIR: '{{.TASKFILE_DIR}}/.context/debug'
+    cmds:
+      - mkdir -p {{.DEBUG_DIR}}
+      - |
+        set -euo pipefail
+        fw_override="${QEMU_FIRMWARE_OVERRIDE:-}"
+
+        failed=0
+        for sub in "tcg" "hvf"; do
+          slug="TestWinPEHyperVInjection-${sub}"
+          log="{{.DEBUG_DIR}}/${slug}.log"
+          echo "▸ TestWinPEHyperVInjection/${sub} → ${log}"
+          env_args=""
+          [ -n "$fw_override" ] && env_args="QEMU_FIRMWARE_OVERRIDE=$fw_override"
+          if env $env_args go test -run "TestWinPEHyperVInjection/${sub}" -timeout 15m -v ./internal/vm/qemu/ 2>&1 | tee "${log}"; then
+            echo "  ✓ PASS"
+          else
+            echo "  ✗ FAIL"
+            failed=$((failed + 1))
+          fi
+          echo ""
+        done
+
+        echo "=== done — ${failed} failure(s) ==="
+        exit $failed
 
   # ── QEMU Windows debug VM (boot an existing debug disk) ─────────────
   debug:windows:start:
