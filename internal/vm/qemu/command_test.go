@@ -1,6 +1,7 @@
 package qemu
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -78,15 +79,17 @@ func TestBuildRunCommand_RamfbDisplay(t *testing.T) {
 }
 
 func TestBuildInstallCommand_CDIsRealCDROM(t *testing.T) {
-	// usb-bot + scsi-cd, NOT usb-storage: the legacy usb-storage device
-	// instantiates a scsi-DISK (EDK2 names it "USB HARDDRIVE", 512-byte
-	// blocks). Windows cdboot reads it as a 2048-byte CD and faults with a
-	// data abort. usb-bot lets us attach a genuine scsi-cd (CELL-359).
+	// The drive carries media=cdrom so QEMU presents optical media (2048-byte
+	// sectors) — that is what makes it a CD, not the device model. The device
+	// is usb-storage with removable=true, the wiring UTM ships for aarch64
+	// virt. An earlier note here claimed usb-storage "always instantiates a
+	// scsi-DISK" and blamed it for a cdboot data abort; that conflated it
+	// with usb-bot, and UTM ships this exact config at scale.
 	argv := BuildInstallCommand(testSpec(), "/tmp/win11.iso", "/tmp/autounattend.iso")
 	joined := strings.Join(argv, " ")
-	assert.Contains(t, joined, "usb-bot,id=bot0")
-	assert.Contains(t, joined, "scsi-cd,bus=bot0.0,drive=cdrom0,id=installer-cd,bootindex=1")
-	assert.NotContains(t, joined, "usb-storage,drive=cdrom0")
+	assert.Contains(t, joined, "file=/tmp/win11.iso,media=cdrom")
+	assert.Contains(t, joined, "usb-storage,drive=cdrom0,removable=true,bus=usb-bus.0,id=installer-cd,bootindex=1")
+	assert.NotContains(t, joined, "usb-bot")
 }
 
 func TestBuildInstallCommand_NVMeDisk(t *testing.T) {
@@ -119,14 +122,14 @@ func TestBuildInstallCommand_WindowsISO(t *testing.T) {
 	argv := BuildInstallCommand(testSpec(), "/tmp/win11.iso", "/tmp/autounattend.iso")
 	joined := strings.Join(argv, " ")
 	assert.Contains(t, joined, "file=/tmp/win11.iso,media=cdrom,if=none,id=cdrom0")
-	assert.Contains(t, joined, "scsi-cd,bus=bot0.0,drive=cdrom0,id=installer-cd,bootindex=1")
+	assert.Contains(t, joined, "usb-storage,drive=cdrom0,removable=true,bus=usb-bus.0,id=installer-cd,bootindex=1")
 }
 
 func TestBuildInstallCommand_VirtioISO(t *testing.T) {
 	argv := BuildInstallCommand(testSpec(), "/tmp/win11.iso", "/tmp/autounattend.iso")
 	joined := strings.Join(argv, " ")
 	assert.Contains(t, joined, "file=/tmp/virtio.iso,media=cdrom,if=none,id=cdrom1")
-	assert.Contains(t, joined, "scsi-cd,bus=bot1.0,drive=cdrom1,bootindex=2")
+	assert.Contains(t, joined, "usb-storage,drive=cdrom1,removable=true,bus=usb-bus.0,bootindex=2")
 }
 
 func TestBuildInstallCommand_BootIndex(t *testing.T) {
@@ -135,8 +138,8 @@ func TestBuildInstallCommand_BootIndex(t *testing.T) {
 	// Disk is bootindex=0 (empty on first boot ⇒ no UEFI entry ⇒ falls through
 	// to the CD); installer CD 1, VirtIO CD 2.
 	assert.Contains(t, joined, "nvme,drive=disk0,serial=devcell0,bootindex=0")
-	assert.Contains(t, joined, "drive=cdrom0,id=installer-cd,bootindex=1")
-	assert.Contains(t, joined, "drive=cdrom1,bootindex=2")
+	assert.Contains(t, joined, "drive=cdrom0,removable=true,bus=usb-bus.0,id=installer-cd,bootindex=1")
+	assert.Contains(t, joined, "drive=cdrom1,removable=true,bus=usb-bus.0,bootindex=2")
 }
 
 // Every bootable device must have an explicit bootindex, the answer volume
@@ -152,7 +155,7 @@ func TestBuildInstallCommand_BootIndex(t *testing.T) {
 func TestBuildInstallCommand_AnswerVolumeBootsLastNotByChance(t *testing.T) {
 	joined := strings.Join(BuildInstallCommand(testSpec(), "/tmp/win11.iso", "/tmp/autounattend.img"), " ")
 
-	assert.Contains(t, joined, "usb-storage,drive=usbfat0,removable=true,bootindex=3",
+	assert.Contains(t, joined, "usb-storage,drive=usbfat0,removable=true,bus=usb-bus.0,bootindex=3",
 		"the answer volume must be ordered explicitly, after the disk and both CDs")
 }
 
@@ -161,21 +164,22 @@ func TestBuildInstallCommand_BootIndex_NoVirtio(t *testing.T) {
 	s.VirtioISO = ""
 	argv := BuildInstallCommand(s, "/tmp/win11.iso", "/tmp/autounattend.img")
 	joined := strings.Join(argv, " ")
-	assert.Contains(t, joined, "drive=cdrom0,id=installer-cd,bootindex=1")
+	assert.Contains(t, joined, "drive=cdrom0,removable=true,bus=usb-bus.0,id=installer-cd,bootindex=1")
 	// The answer volume takes the slot the VirtIO CD would have had — it is
 	// ordered explicitly either way, so nothing is left to the firmware.
-	assert.Contains(t, joined, "usb-storage,drive=usbfat0,removable=true,bootindex=2")
+	assert.Contains(t, joined, "usb-storage,drive=usbfat0,removable=true,bus=usb-bus.0,bootindex=2")
 	count := strings.Count(joined, "bootindex=")
 	assert.Equal(t, 3, count, "disk, Windows ISO and answer volume — every bootable device ordered")
 }
 
 func TestBuildInstallCommand_RemovableMedia(t *testing.T) {
-	// scsi-cd is inherently removable media — the old `removable=true` flag
-	// was a usb-storage property and is not needed (nor valid) on scsi-cd.
+	// removable=true is required: Windows only mounts a partition-table-less
+	// volume, and only presents optical media correctly, from a removable
+	// device. media=cdrom on the drive is what makes it optical.
 	argv := BuildInstallCommand(testSpec(), "/tmp/win11.iso", "/tmp/autounattend.img")
 	joined := strings.Join(argv, " ")
 	assert.Contains(t, joined, "media=cdrom", "installer media must be presented as a CD-ROM for UEFI El Torito boot")
-	assert.Contains(t, joined, "scsi-cd,bus=bot0.0")
+	assert.Contains(t, joined, "usb-storage,drive=cdrom0,removable=true")
 }
 
 func TestBuildInstallCommand_AutounattendFAT(t *testing.T) {
@@ -222,7 +226,7 @@ func TestBuildRunCommand_InputDevices(t *testing.T) {
 func TestBaseCommand_XHCIPortCount(t *testing.T) {
 	argv := BuildRunCommand(testSpec())
 	joined := strings.Join(argv, " ")
-	assert.Contains(t, joined, "qemu-xhci,p2=8",
+	assert.Contains(t, joined, "qemu-xhci,id=usb-bus,p2=8",
 		"XHCI must have p2=8 USB 2.0 ports — default p2=4 causes hub spillover "+
 			"when install attaches kbd+tablet+3 storage devices, and UEFI can't mount "+
 			"FS on hub-connected devices (no FS alias → startup.nsh not found)")
@@ -345,20 +349,31 @@ func TestBuildInstallCommand_WithoutAutounattend(t *testing.T) {
 	// Boot-only validation: no autounattend image to attach.
 	argv := BuildInstallCommand(testSpec(), "/tmp/win11.iso", "")
 	joined := strings.Join(argv, " ")
-	assert.Contains(t, joined, "scsi-cd,bus=bot0.0,drive=cdrom0,id=installer-cd,bootindex=1")
+	assert.Contains(t, joined, "usb-storage,drive=cdrom0,removable=true,bus=usb-bus.0,id=installer-cd,bootindex=1")
 	assert.NotContains(t, joined, "usbfat0")
 }
 
-func TestBaseCommand_GuestProgressSerial(t *testing.T) {
-	// aarch64 virt's PL011 is a kernel-only debug port (ACPI SPCR) — Windows
-	// does not expose it as a user-mode COMx. A 16550 on PCI does show up as
-	// COM1, so scripts inside WinPE/Windows can `echo progress > COM1`
-	// (CELL-360).
+func TestBaseCommand_GuestProgressVirtioSerial(t *testing.T) {
+	// pci-serial (16550 on PCI) shows up as COM1 on x86 but NOT on ARM64 —
+	// guest-progress.log was always empty (CELL-430). virtio-serial with the
+	// vioserial driver exposes a named port the guest writes to via
+	// \\.\Global\<name>, which works on both architectures.
 	s := testSpec()
 	s.GuestProgressLogPath = "/tmp/guest-progress.log"
 	joined := strings.Join(BuildRunCommand(s), " ")
 	assert.Contains(t, joined, "-chardev file,id=guestprog,path=/tmp/guest-progress.log")
-	assert.Contains(t, joined, "-device pci-serial,chardev=guestprog")
+	assert.Contains(t, joined, "-device virtio-serial-pci")
+	assert.Contains(t, joined, "-device virtserialport,bus=virtio-serial0.0,chardev=guestprog,name="+ProgressPortName)
+	assert.NotContains(t, joined, "pci-serial")
+}
+
+func TestBaseCommand_GuestProgressSharesBusWithGuestAgent(t *testing.T) {
+	s := testSpec()
+	s.GuestProgressLogPath = "/tmp/guest-progress.log"
+	s.GuestAgentSocketPath = "/tmp/qga.sock"
+	joined := strings.Join(BuildRunCommand(s), " ")
+	// Only one virtio-serial-pci bus, shared by both ports.
+	assert.Equal(t, 1, strings.Count(joined, "virtio-serial-pci"))
 }
 
 func TestBaseCommand_NoGuestProgressByDefault(t *testing.T) {
@@ -386,8 +401,8 @@ func TestBuildInstallCommand_AutounattendISOAsCDROM(t *testing.T) {
 	argv := BuildInstallCommand(testSpec(), "/tmp/win11.iso", "/tmp/autounattend.iso")
 	joined := strings.Join(argv, " ")
 	assert.Contains(t, joined, "file=/tmp/autounattend.iso,media=cdrom,if=none,id=cdrom2")
-	assert.Contains(t, joined, "usb-bot,id=bot2")
-	assert.Contains(t, joined, "scsi-cd,bus=bot2.0,drive=cdrom2")
+	assert.NotContains(t, joined, "usb-bot")
+	assert.Contains(t, joined, "usb-storage,drive=cdrom2,removable=true,bus=usb-bus.0")
 	assert.NotContains(t, joined, "usbfat0")
 }
 
@@ -412,7 +427,7 @@ func TestBuildInstallCommand_BootOrderDiskBeforeCD(t *testing.T) {
 	joined := strings.Join(argv, " ")
 
 	assert.Contains(t, joined, "nvme,drive=disk0,serial=devcell0,bootindex=0")
-	assert.Contains(t, joined, "scsi-cd,bus=bot0.0,drive=cdrom0,id=installer-cd,bootindex=1")
+	assert.Contains(t, joined, "usb-storage,drive=cdrom0,removable=true,bus=usb-bus.0,id=installer-cd,bootindex=1")
 
 	diskIdx := strings.Index(joined, "bootindex=0")
 	cdIdx := strings.Index(joined, "bootindex=1")
@@ -463,7 +478,7 @@ func TestBuildRunCommand_GuestAgentChannel(t *testing.T) {
 
 	assert.Contains(t, joined, "-chardev socket,id=qga0,path=/tmp/qga.sock,server=on,wait=off")
 	assert.Contains(t, joined, "-device virtio-serial-pci")
-	assert.Contains(t, joined, "-device virtserialport,chardev=qga0,name=org.qemu.guest_agent.0")
+	assert.Contains(t, joined, "-device virtserialport,bus=virtio-serial0.0,chardev=qga0,name=org.qemu.guest_agent.0")
 }
 
 func TestBuildRunCommand_NoGuestAgentChannelByDefault(t *testing.T) {
@@ -499,7 +514,7 @@ func TestBuildRunCommand_AttachesVirtioISO(t *testing.T) {
 	joined := strings.Join(BuildRunCommand(testSpec()), " ")
 
 	assert.Contains(t, joined, "file=/tmp/virtio.iso,media=cdrom")
-	assert.Contains(t, joined, "scsi-cd")
+	assert.Contains(t, joined, "usb-storage,drive=cdrom1,removable=true,bus=usb-bus.0")
 }
 
 func TestBuildRunCommand_NoCDWithoutVirtioISO(t *testing.T) {
@@ -567,6 +582,119 @@ func TestMachineType_SecureWorldIsSeparateFromNestedVirt(t *testing.T) {
 // A controller with no drive bound to it is a machine with no disk. The scsi
 // path needs both devices; emitting only virtio-scsi-pci left drive=disk0
 // orphaned and the guest diskless.
+// --- CELL-427: CDBus selects the CD-ROM controller ---
+
+// --- CELL-429: CDs ride usb-storage, the way UTM does it ---
+//
+// UTM's ARM64 rule (UTMQemuConfigurationDrive.swift:125) sends every CD on
+// the `virt` machine to USB and only non-CDs to virtio, rendering
+// `usb-storage,removable=true,bus=usb-bus.0` on a `id=usb-bus` xhci
+// controller. That is the config a very large Windows-on-Apple-Silicon user
+// base runs, and both halves are already proven in our own logs: EDK2 on
+// QEMU 11/HVF boots usb-storage (the answer volume's BOOTAA64.EFI
+// chainloaded that way, run 20260812T091924) and ARM64 WinPE reads
+// usb-storage with inbox usbstor (the answer volume is the C: diskpart
+// lists and Setup evaluates as a media location, run 20260812T150644).
+//
+// This removes the vioscsi dependency entirely — no driver, no drvload, no
+// PnP-settle race against EarlyF6DriverInstall. Note usb-storage is NOT
+// usb-bot: usb-bot is what killed USB enumeration on QEMU 11/HVF (run
+// 20260812T122950).
+func TestBuildInstallCommand_CDsOnUSBStorage(t *testing.T) {
+	s := testSpec()
+	argv := BuildInstallCommand(s, "/tmp/win11.iso", "/tmp/autounattend.img")
+	joined := strings.Join(argv, " ")
+
+	assert.Contains(t, joined, "qemu-xhci,id=usb-bus",
+		"the xhci controller needs an id so drives can name their bus")
+	assert.Contains(t, joined, "file=/tmp/win11.iso,media=cdrom,if=none,id=cdrom0")
+	assert.Contains(t, joined,
+		fmt.Sprintf("usb-storage,drive=cdrom0,removable=true,bus=usb-bus.0,id=%s,bootindex=1", InstallerCDDeviceID))
+	assert.NotContains(t, joined, "usb-bot", "usb-bot is invisible to EDK2 on QEMU 11/HVF (CELL-427)")
+	assert.NotContains(t, joined, "virtio-scsi", "WinPE has no inbox vioscsi (CELL-429)")
+}
+
+func TestBuildInstallCommand_VirtioISOOnUSBStorage(t *testing.T) {
+	s := testSpec()
+	joined := strings.Join(BuildInstallCommand(s, "/tmp/win11.iso", "/tmp/autounattend.img"), " ")
+
+	assert.Contains(t, joined, "file=/tmp/virtio.iso,media=cdrom,if=none,id=cdrom1")
+	assert.Contains(t, joined, "usb-storage,drive=cdrom1,removable=true,bus=usb-bus.0,bootindex=2")
+	assert.Equal(t, 1, strings.Count(joined, "qemu-xhci"), "one USB controller for every device")
+}
+
+func TestBuildRunCommand_VirtioISOOnUSBStorage(t *testing.T) {
+	s := testSpec()
+	joined := strings.Join(BuildRunCommand(s), " ")
+
+	assert.Contains(t, joined, "usb-storage,drive=cdrom1,removable=true,bus=usb-bus.0")
+	assert.NotContains(t, joined, "usb-bot")
+	assert.NotContains(t, joined, "virtio-scsi")
+}
+
+func TestBuildInstallCommand_CDsOnSCSI(t *testing.T) {
+	s := testSpec()
+	s.CDBus = "scsi"
+	argv := BuildInstallCommand(s, "/tmp/win11.iso", "/tmp/autounattend.img")
+	joined := strings.Join(argv, " ")
+
+	assert.Contains(t, joined, fmt.Sprintf("virtio-scsi-pci,id=%s", CDBusID),
+		"scsi CDs need a dedicated virtio-scsi controller")
+	assert.Contains(t, joined, "file=/tmp/win11.iso,media=cdrom,if=none,id=cdrom0")
+	assert.Contains(t, joined,
+		fmt.Sprintf("scsi-cd,drive=cdrom0,bus=%s.0,id=%s,bootindex=1", CDBusID, InstallerCDDeviceID))
+	assert.Contains(t, joined,
+		fmt.Sprintf("scsi-cd,drive=cdrom1,bus=%s.0,bootindex=2", CDBusID),
+		"virtio ISO also on scsi-cd")
+	assert.Contains(t, joined, "usb-storage,drive=usbfat0",
+		"answer FAT image still on usb-storage regardless of CD bus")
+}
+
+// --- CELL-430: BuildWinPECommand — WinPE-only boot from custom ISO ---
+
+func TestBuildWinPECommand_BootsFromCustomISO(t *testing.T) {
+	s := testSpec()
+	s.VirtioISO = "" // WinPE-only, no virtio ISO
+	argv := BuildWinPECommand(s, "/tmp/winpe.iso", "/tmp/answer.img")
+	joined := strings.Join(argv, " ")
+
+	assert.Contains(t, joined, "file=/tmp/winpe.iso,media=cdrom,if=none,id=cdrom0")
+	assert.Contains(t, joined, "usb-storage,drive=cdrom0,removable=true,bus=usb-bus.0,id=installer-cd,bootindex=1")
+}
+
+func TestBuildWinPECommand_AnswerVolumeOnUSBStorage(t *testing.T) {
+	s := testSpec()
+	s.VirtioISO = ""
+	argv := BuildWinPECommand(s, "/tmp/winpe.iso", "/tmp/answer.img")
+	joined := strings.Join(argv, " ")
+
+	assert.Contains(t, joined, "file=/tmp/answer.img,format=raw,if=none,id=usbfat0")
+	assert.Contains(t, joined, "usb-storage,drive=usbfat0,removable=true,bus=usb-bus.0,bootindex=2")
+}
+
+func TestBuildWinPECommand_NoVirtioISO(t *testing.T) {
+	s := testSpec()
+	s.VirtioISO = ""
+	argv := BuildWinPECommand(s, "/tmp/winpe.iso", "/tmp/answer.img")
+	joined := strings.Join(argv, " ")
+
+	assert.NotContains(t, joined, "virtio.iso")
+	count := strings.Count(joined, "media=cdrom")
+	assert.Equal(t, 1, count, "only one CD: the custom WinPE ISO")
+}
+
+func TestBuildWinPECommand_HasBaseElements(t *testing.T) {
+	s := testSpec()
+	s.VirtioISO = ""
+	argv := BuildWinPECommand(s, "/tmp/winpe.iso", "/tmp/answer.img")
+	joined := strings.Join(argv, " ")
+
+	assert.Contains(t, joined, "qemu-system-aarch64")
+	assert.Contains(t, joined, "nvme,drive=disk0")
+	assert.Contains(t, joined, "qemu-xhci")
+	assert.Contains(t, joined, "-qmp")
+}
+
 func TestBuildRunCommand_ScsiDiskIsActuallyAttached(t *testing.T) {
 	spec := testSpec()
 	spec.DiskBus = "scsi"

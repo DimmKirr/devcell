@@ -10,60 +10,128 @@ import (
 // devices by qdev id, not drive id, so ejecting requires this name.
 const InstallerCDDeviceID = "installer-cd"
 
+// USBBusID names the xhci controller so every storage device can state its
+// bus explicitly. Leaving the bus implicit lets QEMU pick, which is how a
+// device ends up somewhere the firmware never enumerates.
+const USBBusID = "usb-bus"
+
+// ProgressPortName is the virtio-serial port name used for guest→host
+// progress reporting. The guest writes to \\.\Global\<name>, the host
+// reads from a chardev file wired to GuestProgressLogPath.
+const ProgressPortName = `devcell.progress.0`
+
 // BuildInstallCommand constructs the QEMU argv for initial Windows installation.
 // windowsISO and any virtioISO are attached as USB CD-ROMs. autounattendImage
 // is attached as a further CD-ROM when it is an .iso, or as a removable
 // usb-storage disk for a raw FAT image; Windows Setup searches both kinds of
 // removable media for autounattend.xml.
+// CDBusID names the virtio-scsi controller used for CD-ROM devices when
+// CDBus is "scsi". Separate from the disk's NVMe controller.
+const CDBusID = "cd-scsi-bus"
+
 func BuildInstallCommand(spec Spec, windowsISO, autounattendImage string) []string {
 	argv := baseCommand(spec)
 
-	// CDs go on usb-bot + scsi-cd, not the legacy usb-storage device: that one
-	// always instantiates a scsi-DISK (EDK2 names it "USB HARDDRIVE", 512-byte
-	// blocks) and Windows cdboot faults reading it as a 2048-byte CD. usb-bot
-	// is a plain USB Bulk-Only Transport controller we can hang a scsi-cd off.
-	// bootindex 0 belongs to the disk (see baseCommand); CDs follow it.
+	if spec.CDBus == "scsi" {
+		argv = appendSCSICDs(argv, spec, windowsISO, autounattendImage)
+	} else {
+		argv = appendUSBCDs(argv, spec, windowsISO, autounattendImage)
+	}
+
+	return argv
+}
+
+func appendUSBCDs(argv []string, spec Spec, windowsISO, autounattendImage string) []string {
 	bootIdx := 1
+	nextIdx := 0
+
 	argv = append(argv,
 		"-drive", fmt.Sprintf("file=%s,media=cdrom,if=none,id=cdrom0", windowsISO),
-		"-device", "usb-bot,id=bot0",
-		"-device", fmt.Sprintf("scsi-cd,bus=bot0.0,drive=cdrom0,id=%s,bootindex=%d", InstallerCDDeviceID, bootIdx))
+		"-device", fmt.Sprintf("usb-storage,drive=cdrom0,removable=true,bus=%s.0,id=%s,bootindex=%d",
+			USBBusID, InstallerCDDeviceID, bootIdx))
 	bootIdx++
+	nextIdx = 1
 
-	nextIdx := 1
 	if spec.VirtioISO != "" {
 		argv = append(argv,
 			"-drive", fmt.Sprintf("file=%s,media=cdrom,if=none,id=cdrom%d", spec.VirtioISO, nextIdx),
-			"-device", fmt.Sprintf("usb-bot,id=bot%d", nextIdx),
-			"-device", fmt.Sprintf("scsi-cd,bus=bot%d.0,drive=cdrom%d,bootindex=%d", nextIdx, nextIdx, bootIdx))
+			"-device", fmt.Sprintf("usb-storage,drive=cdrom%d,removable=true,bus=%s.0,bootindex=%d",
+				nextIdx, USBBusID, bootIdx))
 		bootIdx++
 		nextIdx++
 	}
 
-	// Answer file. Omitted for boot-only validation runs.
 	switch {
 	case autounattendImage == "":
-		// nothing to attach
 	case strings.HasSuffix(autounattendImage, ".iso"):
-		// Preferred: another CD-ROM. A FAT superfloppy on usb-storage next to
-		// the installer made cdboot take a data abort mid-boot, and Setup
-		// searches CD/DVD drives for autounattend.xml just the same.
 		argv = append(argv,
 			"-drive", fmt.Sprintf("file=%s,media=cdrom,if=none,id=cdrom%d", autounattendImage, nextIdx),
-			"-device", fmt.Sprintf("usb-bot,id=bot%d", nextIdx),
-			"-device", fmt.Sprintf("scsi-cd,bus=bot%d.0,drive=cdrom%d", nextIdx, nextIdx))
+			"-device", fmt.Sprintf("usb-storage,drive=cdrom%d,removable=true,bus=%s.0", nextIdx, USBBusID))
 	default:
-		// Raw FAT image: usb-storage, and it must report removable media —
-		// the image has no partition table and Windows only mounts such a
-		// volume from a removable device.
-		//
-		// bootindex last, and explicitly: this volume has no bootloader, so a
-		// firmware that tries it first parks at "Start boot option" forever.
-		// Without an index its position is the firmware's choice, which makes
-		// the whole install intermittent.
 		argv = append(argv,
 			"-drive", fmt.Sprintf("file=%s,format=raw,if=none,id=usbfat0", autounattendImage),
-			"-device", fmt.Sprintf("usb-storage,drive=usbfat0,removable=true,bootindex=%d", bootIdx))
+			"-device", fmt.Sprintf("usb-storage,drive=usbfat0,removable=true,bus=%s.0,bootindex=%d", USBBusID, bootIdx))
+	}
+
+	return argv
+}
+
+func appendSCSICDs(argv []string, spec Spec, windowsISO, autounattendImage string) []string {
+	bootIdx := 1
+	nextIdx := 0
+
+	argv = append(argv, "-device", fmt.Sprintf("virtio-scsi-pci,id=%s", CDBusID))
+
+	argv = append(argv,
+		"-drive", fmt.Sprintf("file=%s,media=cdrom,if=none,id=cdrom0", windowsISO),
+		"-device", fmt.Sprintf("scsi-cd,drive=cdrom0,bus=%s.0,id=%s,bootindex=%d",
+			CDBusID, InstallerCDDeviceID, bootIdx))
+	bootIdx++
+	nextIdx = 1
+
+	if spec.VirtioISO != "" {
+		argv = append(argv,
+			"-drive", fmt.Sprintf("file=%s,media=cdrom,if=none,id=cdrom%d", spec.VirtioISO, nextIdx),
+			"-device", fmt.Sprintf("scsi-cd,drive=cdrom%d,bus=%s.0,bootindex=%d",
+				nextIdx, CDBusID, bootIdx))
+		bootIdx++
+		nextIdx++
+	}
+
+	// Answer volume always on usb-storage — it's a FAT image, not a CD,
+	// and Windows needs it as removable media.
+	switch {
+	case autounattendImage == "":
+	case strings.HasSuffix(autounattendImage, ".iso"):
+		argv = append(argv,
+			"-drive", fmt.Sprintf("file=%s,media=cdrom,if=none,id=cdrom%d", autounattendImage, nextIdx),
+			"-device", fmt.Sprintf("scsi-cd,drive=cdrom%d,bus=%s.0", nextIdx, CDBusID))
+	default:
+		argv = append(argv,
+			"-drive", fmt.Sprintf("file=%s,format=raw,if=none,id=usbfat0", autounattendImage),
+			"-device", fmt.Sprintf("usb-storage,drive=usbfat0,removable=true,bus=%s.0,bootindex=%d", USBBusID, bootIdx))
+	}
+
+	return argv
+}
+
+// BuildWinPECommand constructs the QEMU argv for booting WinPE from a custom
+// ISO (CELL-430). Only one CD (the WinPE ISO) plus an answer volume on
+// usb-storage. No Windows installer ISO, no virtio ISO.
+func BuildWinPECommand(spec Spec, winpeISO, answerImage string) []string {
+	argv := baseCommand(spec)
+
+	bootIdx := 1
+	argv = append(argv,
+		"-drive", fmt.Sprintf("file=%s,media=cdrom,if=none,id=cdrom0", winpeISO),
+		"-device", fmt.Sprintf("usb-storage,drive=cdrom0,removable=true,bus=%s.0,id=%s,bootindex=%d",
+			USBBusID, InstallerCDDeviceID, bootIdx))
+	bootIdx++
+
+	if answerImage != "" {
+		argv = append(argv,
+			"-drive", fmt.Sprintf("file=%s,format=raw,if=none,id=usbfat0", answerImage),
+			"-device", fmt.Sprintf("usb-storage,drive=usbfat0,removable=true,bus=%s.0,bootindex=%d", USBBusID, bootIdx))
 	}
 
 	return argv
@@ -78,13 +146,12 @@ func BuildRunCommand(spec Spec) []string {
 
 	// Driver ISO: post-install driver work (pnputil the ARM64 INFs, run the
 	// guest-agent MSI) reads it from a normal running VM, not only during
-	// install. Same usb-bot + scsi-cd shape as the installer CDs — see
-	// BuildInstallCommand for why usb-storage cannot carry a CD.
+	// install. Same usb-storage attachment as the install — see
+	// BuildInstallCommand.
 	if spec.VirtioISO != "" {
 		argv = append(argv,
 			"-drive", fmt.Sprintf("file=%s,media=cdrom,if=none,id=cdrom1", spec.VirtioISO),
-			"-device", "usb-bot,id=bot1",
-			"-device", "scsi-cd,bus=bot1.0,drive=cdrom1")
+			"-device", fmt.Sprintf("usb-storage,drive=cdrom1,removable=true,bus=%s.0", USBBusID))
 	}
 
 	// Guest-written log volume — see Spec.LogVolumePath. Raw FAT on
@@ -96,12 +163,10 @@ func BuildRunCommand(spec Spec) []string {
 			"-device", "usb-storage,drive=usbfat0,removable=true")
 	}
 
-	// qemu-ga channel — see Spec.GuestAgentSocketPath.
 	if spec.GuestAgentSocketPath != "" {
 		argv = append(argv,
 			"-chardev", fmt.Sprintf("socket,id=qga0,path=%s,server=on,wait=off", spec.GuestAgentSocketPath),
-			"-device", "virtio-serial-pci",
-			"-device", "virtserialport,chardev=qga0,name=org.qemu.guest_agent.0")
+			"-device", "virtserialport,bus=virtio-serial0.0,chardev=qga0,name=org.qemu.guest_agent.0")
 	}
 
 	// virtio-fs — see Spec.VirtioFSSocketPath. vhost-user devices refuse to
@@ -121,9 +186,14 @@ func BuildRunCommand(spec Spec) []string {
 func baseCommand(spec Spec) []string {
 	qemuBin := "qemu-system-aarch64"
 
+	machine := machineType(spec)
+	if spec.MachineType != "" {
+		machine = spec.MachineType
+	}
+
 	argv := []string{
 		qemuBin,
-		"-machine", machineType(spec),
+		"-machine", machine,
 		"-cpu", cpuType(spec),
 		"-accel", spec.effectiveAccel(),
 		"-smp", fmt.Sprintf("%d", spec.CPUs),
@@ -186,7 +256,7 @@ func baseCommand(spec Spec) []string {
 	// VirtIO ISO, autounattend FAT); default p2=4 puts overflow behind a hub
 	// and UEFI can't mount FS on hub-connected devices.
 	argv = append(argv,
-		"-device", "qemu-xhci,p2=8",
+		"-device", fmt.Sprintf("qemu-xhci,id=%s,p2=8", USBBusID),
 		"-device", "usb-kbd",
 		"-device", "usb-tablet")
 
@@ -195,11 +265,19 @@ func baseCommand(spec Spec) []string {
 		argv = append(argv, "-serial", "file:"+spec.SerialLogPath)
 	}
 
+	// Shared virtio-serial bus for guest-agent and/or progress port.
+	needVirtioSerial := spec.GuestAgentSocketPath != "" || spec.GuestProgressLogPath != ""
+	if needVirtioSerial {
+		argv = append(argv, "-device", "virtio-serial-pci,id=virtio-serial0")
+	}
+
 	// Guest-writable progress port — see Spec.GuestProgressLogPath.
+	// Uses a virtio-serial port: the guest writes to
+	// \\.\Global\devcell.progress.0, the host reads from the chardev file.
 	if spec.GuestProgressLogPath != "" {
 		argv = append(argv,
 			"-chardev", "file,id=guestprog,path="+spec.GuestProgressLogPath,
-			"-device", "pci-serial,chardev=guestprog")
+			"-device", "virtserialport,bus=virtio-serial0.0,chardev=guestprog,name="+ProgressPortName)
 	}
 
 	// QMP monitor (machine protocol for programmatic control)

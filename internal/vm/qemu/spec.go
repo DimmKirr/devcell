@@ -53,10 +53,10 @@ type Spec struct {
 	CPU string
 	// SerialLogPath, when set, redirects the guest serial console to this file.
 	SerialLogPath string
-	// GuestProgressLogPath, when set, attaches a 16550 UART on PCI wired to
-	// this file. On aarch64 the built-in PL011 is a kernel-only debug port
-	// (ACPI SPCR) that Windows does not expose as COMx, so guest scripts need
-	// this PCI port to write progress the host can read.
+	// GuestProgressLogPath, when set, attaches a virtio-serial port
+	// (ProgressPortName) wired to this file. The guest writes progress via
+	// \\.\Global\<ProgressPortName>; this works on ARM64 where pci-serial
+	// 16550 devices don't map to user-mode COMx (CELL-430).
 	GuestProgressLogPath string
 	// DiskCacheMode sets the qcow2 cache policy (e.g. "unsafe" to drop guest
 	// flushes). Empty keeps QEMU's safe default. "unsafe" makes the image
@@ -99,6 +99,13 @@ type Spec struct {
 	// driver, what our installs use) or "scsi" (virtio-scsi + scsi-hd, what
 	// the proven Hyper-V config uses).
 	DiskBus string
+	// CDBus selects the CD/ISO attachment: "usb" (default, usb-storage on
+	// xhci — inbox USBSTOR, no extra driver) or "scsi" (scsi-cd on a
+	// dedicated virtio-scsi-pci controller — needs vioscsi drvload in WinPE).
+	CDBus string
+	// MachineType overrides the -machine string (e.g. "virt,highmem=on").
+	// Empty means machineType() picks the per-accelerator default.
+	MachineType string
 	// LogVolumePath, when set, attaches a raw FAT image as removable USB
 	// storage for guest-written logs — the run-time counterpart of the
 	// install's answer volume (see BuildDevEnvLogVolume).
