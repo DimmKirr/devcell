@@ -136,6 +136,7 @@
           # TPM emulator for `task debug:windows:start` — the Windows debug
           # VM carries its TPM state in the .utm bundle (BitLocker).
           pkgs.swtpm
+          pkgs.wimlib
         ];
         shellHook = ''
           if [ -d .git ] && [ -f .pre-commit-config.yaml ] && \

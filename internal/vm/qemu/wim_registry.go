@@ -66,7 +66,16 @@ func HyperVBootPatches() WimRegistryPatch {
 	return WimRegistryPatch{
 		HivePath: `\Windows\System32\config\SYSTEM`,
 		Patches: []goregedit.DWordPatch{
+			// Kernel drivers — must load at boot (Start=0).
 			{KeyPath: `ControlSet001\Services\hvservice`, ValueName: "Start", Value: 0},
+			{KeyPath: `ControlSet001\Services\vmbusr`, ValueName: "Start", Value: 0},
+
+			// vmbus has Start=0 but StartOverride "0"=3 downgrades it to Manual.
+			{KeyPath: `ControlSet001\Services\vmbus\StartOverride`, ValueName: "0", Value: 0},
+
+			// Win32 services — Auto (2) so SCM starts them in WinPE.
+			{KeyPath: `ControlSet001\Services\HvHost`, ValueName: "Start", Value: 2},
+			{KeyPath: `ControlSet001\Services\vmcompute`, ValueName: "Start", Value: 2},
 		},
 	}
 }
