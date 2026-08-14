@@ -37,8 +37,12 @@ func TestContainerContext_DescribesMountsAndConstraints(t *testing.T) {
 		"skills mount":        ".claude/skills",
 		"user volume":         "/run/secrets",
 		"user volume ro":      "read-only",
-		"host mapping prefix": "host: /Users/dmitry/dev/dimmkirr/devcell",
+		"host path mapping":   "Host path mapping",
 		"nix constraint":      "/opt/devcell",
+		"nix ad-hoc install":  "nix profile install",
+		"nix PATH layout":     "PATH layout",
+		"nix ld libs":         "NIX_LD_LIBRARY_PATH",
+		"nix cgo":             "CGO_CFLAGS",
 	}
 
 	for name, want := range checks {

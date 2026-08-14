@@ -9,14 +9,38 @@
 package runner
 
 import (
+	"bytes"
+	_ "embed"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"text/template"
 
 	"github.com/DimmKirr/devcell/internal/cfg"
 	"github.com/DimmKirr/devcell/internal/config"
 )
+
+//go:embed container_context.tmpl.md
+var containerContextRaw string
+
+var containerContextTmpl = template.Must(template.New("context").Parse(containerContextRaw))
+
+type volumeMount struct {
+	Container string
+	Host      string
+	Mode      string
+}
+
+type contextData struct {
+	AppName   string
+	AppDir    string
+	HostDir   string
+	HomeDir   string
+	HostHome  string
+	ConfigDir string
+	Volumes   []volumeMount
+}
 
 // ContainerContext returns the auto-generated filesystem/runtime preamble
 // — bind mounts, host path mappings, hard constraints — describing the
@@ -28,26 +52,7 @@ import (
 // surface that ships a system prompt (cell claude, cell serve) prepends
 // this so the agent reasons correctly about its filesystem.
 func ContainerContext(c config.Config, cellCfg cfg.CellConfig) string {
-	var b strings.Builder
-
-	appDir := "/" + c.AppName // e.g. /devcell-85
-	hostDir := c.BaseDir      // e.g. /Users/dmitry/dev/dimmkirr/devcell
-	homeDir := "/home/" + c.HostUser
-
-	fmt.Fprintf(&b, "Environment: Docker container (cell-%s)\n", c.AppName)
-	fmt.Fprintf(&b, "Project: %s (alias for %s on host)\n", appDir, hostDir)
-	fmt.Fprintf(&b, "Both paths are bind-mounted from the same host directory and resolve to the same filesystem.\n")
-	fmt.Fprintf(&b, "Working directory is %s. If the user mentions host paths like %s/..., they map to %s/...\n", appDir, hostDir, appDir)
-	b.WriteString("\n")
-
-	b.WriteString("Bind mounts:\n")
-	fmt.Fprintf(&b, "  %s = %s (project source, read-write)\n", appDir, hostDir)
-	fmt.Fprintf(&b, "  %s (persistent home, survives container restarts)\n", homeDir)
-	fmt.Fprintf(&b, "  %s/.claude/skills (read-write)\n", homeDir)
-	fmt.Fprintf(&b, "  %s/.claude/commands (read-only, from host)\n", homeDir)
-	fmt.Fprintf(&b, "  %s/.claude/agents (read-only, from host)\n", homeDir)
-	fmt.Fprintf(&b, "  /etc/devcell/config = %s (user build config)\n", c.ConfigDir)
-
+	var vols []volumeMount
 	for _, vol := range cellCfg.Volumes {
 		parts := strings.SplitN(vol.Resolved(), ":", 3)
 		if len(parts) >= 2 {
@@ -55,27 +60,29 @@ func ContainerContext(c config.Config, cellCfg cfg.CellConfig) string {
 			if len(parts) == 3 && parts[2] == "ro" {
 				mode = "read-only"
 			}
-			fmt.Fprintf(&b, "  %s = %s (%s, from devcell.toml)\n", parts[1], parts[0], mode)
+			vols = append(vols, volumeMount{
+				Container: parts[1],
+				Host:      parts[0],
+				Mode:      mode,
+			})
 		}
 	}
-	b.WriteString("\n")
 
-	b.WriteString("Host path mapping (use these to translate paths the user mentions):\n")
-	fmt.Fprintf(&b, "  host: %s → container: %s\n", hostDir, hostDir)
-	fmt.Fprintf(&b, "  host: %s → container: %s\n", c.HostHome, homeDir)
-	for _, vol := range cellCfg.Volumes {
-		parts := strings.SplitN(vol.Resolved(), ":", 3)
-		if len(parts) >= 2 {
-			fmt.Fprintf(&b, "  host: %s → container: %s\n", parts[0], parts[1])
-		}
+	data := contextData{
+		AppName:   c.AppName,
+		AppDir:    "/" + c.AppName,
+		HostDir:   c.BaseDir,
+		HomeDir:   "/home/" + c.HostUser,
+		HostHome:  c.HostHome,
+		ConfigDir: c.ConfigDir,
+		Volumes:   vols,
 	}
-	b.WriteString("\n")
 
-	b.WriteString("Constraints:\n")
-	b.WriteString("  - /opt/devcell is the nix environment — do not modify at runtime\n")
-	b.WriteString("  - Nix profile: /opt/devcell/.local/state/nix/profiles/profile\n")
-
-	return b.String()
+	var buf bytes.Buffer
+	if err := containerContextTmpl.Execute(&buf, data); err != nil {
+		return fmt.Sprintf("(error rendering container context: %v)\n", err)
+	}
+	return buf.String()
 }
 
 // ResolveOpts bundles every input source the system-prompt resolver looks
@@ -209,8 +216,6 @@ func resolveTiers(src promptSources, cfgBaseDir string) (string, error) {
 		return "", fmt.Errorf("%s are mutually exclusive", src.tomlLabels)
 	}
 	if src.tomlFile != "" {
-		// Resolve relative paths against the project base dir, matching
-		// the convention `[[volumes]]` already uses.
 		path := src.tomlFile
 		if !filepath.IsAbs(path) && cfgBaseDir != "" {
 			path = filepath.Join(cfgBaseDir, path)
