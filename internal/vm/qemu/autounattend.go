@@ -177,6 +177,21 @@ func NetKVMDriverPaths() []VirtIODriver {
 	}}
 }
 
+// VioserialDriverPaths returns the virtio-win vioserial driver for Windows
+// ARM64.
+//
+// The vioserial driver makes the virtio-serial port visible to Windows as
+// \\.\Global\devcell.progress.0. Without it the bootstrap's Send-Progress
+// writes to nothing: PL011 UART does not register as a COMx port on ARM64,
+// and virtio-serial needs this driver. The WinPE phase loads it transiently
+// via drvload, but that does not survive into the installed OS.
+func VioserialDriverPaths() []VirtIODriver {
+	return []VirtIODriver{{
+		INFRelPath:  `vioserial\w11\ARM64\vioser.inf`,
+		Description: "Install the VirtIO serial driver (vioserial)",
+	}}
+}
+
 // SpecializeBootstrapCopyOrder returns the <Order> for the specialize command
 // that copies the bootstrap script from the answer volume to C:\. It runs
 // after all VirtIODriver installs.

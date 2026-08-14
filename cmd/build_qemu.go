@@ -251,7 +251,7 @@ func runBuildQemu(cellName, hostHome, baseDir, stack string, force, noCache, dry
 		// (port allocation, forwarding, discovery) already ships — RDP just
 		// has to be on inside Windows (CELL-369).
 		cfg.EnableRDP = true
-		cfg.VirtIODrivers = qemu.NetKVMDriverPaths()
+		cfg.VirtIODrivers = append(qemu.NetKVMDriverPaths(), qemu.VioserialDriverPaths()...)
 		if len(opensshPayload) > 0 {
 			cfg.OpenSSHPayload = qemu.OpenSSHPayloadName
 			cfg.OpenSSHPayloadData = opensshPayload
@@ -437,6 +437,14 @@ func runBuildQemu(cellName, hostHome, baseDir, stack string, force, noCache, dry
 	// Killing on the shell marker alone would abort before startup.nsh runs.
 	efiShellCh := qemu.WatchSerialForEFIShell(serialLog, screenshotStop)
 	nshFailCh := qemu.WatchSerialForStartupNSHFail(serialLog, screenshotStop)
+
+	// Live-stream bootstrap progress from the virtio-serial port so step
+	// outcomes appear in the CLI output as they happen — without this, a
+	// network-check throw only surfaces after the SSH deadline expires.
+	qemu.TailProgressLog(guestProgressLog, func(line string) {
+		fmt.Printf("  [guest] %s\n", line)
+	}, screenshotStop)
+
 	go func() {
 		select {
 		case <-screenshotStop:

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -148,6 +149,21 @@ func TestCellBuildWindows_QEMU(t *testing.T) {
 				}
 				writeArtifact(t, resultsDir, name, string(data))
 				t.Logf("%s: %d bytes saved", name, len(data))
+			}
+
+			progressSrc := filepath.Join(projectDir, ".context", "debug", "guest-progress.log")
+			if progressData, err := os.ReadFile(progressSrc); err == nil {
+				assert.Contains(t, string(progressData), "devcell-bootstrap:",
+					"guest-progress.log must contain bootstrap progress lines — "+
+						"if empty, the vioserial driver is not installed or Send-Progress is broken (CELL-436)")
+			}
+
+			serialSrc := filepath.Join(projectDir, ".context", "debug", "serial.log")
+			if serialData, err := os.ReadFile(serialSrc); err == nil {
+				assert.Greater(t, len(serialData), 0,
+					"serial.log must not be empty — UEFI firmware writes to it from the first instruction")
+				assert.Contains(t, string(serialData), "BdsDxe:",
+					"serial.log must contain firmware boot manager output")
 			}
 
 			for _, l := range CollectGuestLogs(answerImg) {

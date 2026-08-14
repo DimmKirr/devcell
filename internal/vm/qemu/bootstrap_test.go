@@ -67,8 +67,8 @@ func TestGenerateBootstrapScript_ReportsFailuresToSerialAndTranscript(t *testing
 	assert.Contains(t, ps1, "Invoke-Step", "steps must run through the guarded wrapper")
 	assert.Contains(t, ps1, "FAILED", "failures must be labeled loudly")
 	assert.Contains(t, ps1, "$_.Exception.Message", "failures must carry the error message")
-	assert.Contains(t, ps1, "[System.IO.Ports.SerialPort]::GetPortNames()",
-		"progress must go to the serial port (COM number varies, so enumerate)")
+	assert.Contains(t, ps1, `\\.\Global\`+ProgressPortName,
+		"progress must go to the virtio-serial port, not COM (PL011 has no COMx on ARM64)")
 	assert.Contains(t, ps1, "Start-Transcript", "full output must be captured")
 	assert.Contains(t, ps1, BootstrapLogName, "transcript must land on the answer volume")
 }
@@ -101,7 +101,7 @@ func TestGenerateBootstrapScript_NoKeySectionWithoutPubKey(t *testing.T) {
 	ps1 := string(GenerateBootstrapScript(cfg))
 
 	assert.NotContains(t, ps1, "administrators_authorized_keys")
-	assert.NotContains(t, ps1, "@'", "no key, no here-string")
+	assert.NotContains(t, ps1, "$pubKeys = @'", "no key, no here-string")
 }
 
 func TestGenerateAutounattendXML_SingleBootstrapFirstLogonCommand(t *testing.T) {
@@ -329,6 +329,27 @@ func TestGenerateBootstrapScript_NetworkCheckIsComprehensive(t *testing.T) {
 	} {
 		assert.Contains(t, ps1, probe, "network check must probe: %s", probe)
 	}
+}
+
+// The network check must fail the step (throw) when no adapter is up or no IP
+// is assigned — a diagnostic-only report lets the build continue into OpenSSH
+// install which will fail anyway, wasting time and producing a confusing error.
+func TestGenerateBootstrapScript_NetworkCheckFailsOnNoNetwork(t *testing.T) {
+	ps1 := string(GenerateBootstrapScript(DefaultAutounattendConfig()))
+
+	// Extract the network check step body (between its Invoke-Step and the next one).
+	start := strings.Index(ps1, "Invoke-Step 'check network connectivity'")
+	require.NotEqual(t, -1, start, "network check step must exist")
+	rest := ps1[start:]
+	// Find the next Invoke-Step after this one.
+	nextStep := strings.Index(rest[1:], "Invoke-Step ")
+	require.NotEqual(t, -1, nextStep, "there must be a step after network check")
+	netBlock := rest[:nextStep+1]
+
+	assert.Contains(t, netBlock, "throw",
+		"network check must throw when network is down — OpenSSH install needs connectivity")
+	assert.Contains(t, netBlock, "network verdict",
+		"network check must report a verdict before throwing")
 }
 
 // The Chocolatey openssh package is deprecated by its own maintainers: "The

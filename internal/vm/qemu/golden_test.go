@@ -45,7 +45,7 @@ func TestGeneratedArtifacts_AreByteStable(t *testing.T) {
 		// Get-NetIPConfiguration, routing table, QEMU host ping, DNS
 		// resolution, and a verdict line.
 		{"devcell-bootstrap.ps1", GenerateBootstrapScript(cfg),
-			"1b22dc6cff2cd20a7548067cc90c0e2ddec30299433b67c9ff9554c7ba4839f9"},
+			"9c3c58e341ee88055de31977a3a9c40935eee2aac1e8b3e585cdd32e23ec4fe6"},
 		// diag hash updated 2026-08-13: added routing table, QEMU host
 		// connectivity, DNS resolution, and Get-NetIPConfiguration.
 		{"devcell-diag.ps1", GenerateGuestDiagnosticsScript(),

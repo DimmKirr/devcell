@@ -17,16 +17,35 @@ foreach ($d in (Get-Volume | Where-Object { $_.DriveLetter })) {
 function Send-Progress([string]$msg) {
     $line = "devcell-bootstrap: $msg"
     Write-Output $line
-    # The pci-serial device is a COM port whose number varies; write to every
-    # port so the line reaches the host's guest-progress log.
-    foreach ($name in [System.IO.Ports.SerialPort]::GetPortNames()) {
-        try {
-            $p = New-Object System.IO.Ports.SerialPort $name
-            $p.Open()
-            $p.WriteLine($line)
-            $p.Close()
-        } catch {}
-    }
+    # The virtio-serial port is the only reliable guest→host channel on ARM64:
+    # PL011 UART doesn't register as a COMx port in Windows, and the -serial
+    # device is shared with UEFI firmware output. The vioserial driver must be
+    # installed in the specialize pass (alongside NetKVM) for this path to
+    # exist — it is NOT carried over from the WinPE drvload.
+    #
+    # System.IO.File::Open rejects device paths (\\.\...) — CreateFile is
+    # required; its handle is then wrapped in a FileStream.
+    $port = '\\.\Global\devcell.progress.0'
+    try {
+        if (-not ('Win32.Kernel32' -as [type])) {
+            Add-Type -MemberDefinition @'
+[DllImport("kernel32.dll", SetLastError=true, CharSet=CharSet.Auto)]
+public static extern Microsoft.Win32.SafeHandles.SafeFileHandle CreateFile(
+    string lpFileName, uint dwDesiredAccess, uint dwShareMode,
+    IntPtr lpSecurityAttributes, uint dwCreationDisposition,
+    uint dwFlagsAndAttributes, IntPtr hTemplateFile);
+'@ -Name 'Kernel32' -Namespace 'Win32'
+        }
+        $h = [Win32.Kernel32]::CreateFile($port, 0x40000000, 3, [IntPtr]::Zero, 3, 0, [IntPtr]::Zero)
+        if (-not $h.IsInvalid) {
+            $fs = New-Object System.IO.FileStream($h, [System.IO.FileAccess]::Write)
+            $sw = New-Object System.IO.StreamWriter($fs)
+            $sw.WriteLine($line)
+            $sw.Flush()
+            $sw.Close()
+            $fs.Close()
+        }
+    } catch {}
 }
 
 function Invoke-Step([string]$name, [scriptblock]$body) {
@@ -126,6 +145,9 @@ Invoke-Step 'check network connectivity' {
 
     $netOk = ($adapters | Where-Object { $_.Status -eq 'Up' }).Count -gt 0 -and $ips.Count -gt 0
     Send-Progress "network verdict: $(if ($netOk) { 'OK' } else { 'FAILED' })"
+    if (-not $netOk) {
+        throw "no network adapter is up or no IPv4 address assigned — OpenSSH install requires connectivity"
+    }
 }
 
 Invoke-Step 'suppress Start menu auto-open on login' {
