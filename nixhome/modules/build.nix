@@ -3,6 +3,18 @@
 #               libclang-dev, libxslt1-dev, llvm-dev
 {pkgs, config, lib, ...}: let
   cfg = config.devcell.modules.build;
+  # syslinux is x86-only; wimlib's preBuild and postInstall reference it on Linux.
+  wimlib-portable = if pkgs.stdenv.isx86_64 then pkgs.wimlib
+    else (pkgs.wimlib.override { syslinux = null; }).overrideAttrs {
+      preBuild = "";
+      postInstall = let
+        path = lib.makeBinPath ([ pkgs.cabextract pkgs.mtools pkgs.ntfs3g ] ++ lib.optionals pkgs.stdenv.isLinux [ pkgs.fuse3 ]);
+      in ''
+        for prog in $out/bin/*; do
+          wrapProgram $prog --prefix PATH : $out/bin:${path}
+        done
+      '';
+    };
 in {
   options.devcell.modules.build = {
     enable = lib.mkEnableOption "Native build toolchain: clang, cmake, make, llvm, lld, flex, bison, libxslt";
@@ -28,7 +40,7 @@ in {
       flex
       bison
       libxslt # libxslt1-dev
-      wimlib # WIM/ESD archive library (use: wimlib-imagex, libwim for CGO)
+      wimlib-portable # WIM/ESD archive library (use: wimlib-imagex, libwim for CGO)
     ];
   };
 }
