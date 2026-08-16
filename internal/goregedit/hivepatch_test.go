@@ -152,6 +152,23 @@ func TestApplyDWordPatches_MissingValue(t *testing.T) {
 	assert.ErrorContains(t, err, "not found")
 }
 
+func TestApplyDWordPatches_OptionalSkipsMissing(t *testing.T) {
+	hive := buildTestHive()
+	path := filepath.Join(t.TempDir(), "SYSTEM")
+	require.NoError(t, os.WriteFile(path, hive, 0644))
+
+	err := ApplyDWordPatches(path, []DWordPatch{
+		{KeyPath: `Services\hvservice`, ValueName: "Start", Value: 0},
+		{KeyPath: `Services\nonexistent`, ValueName: "Start", Value: 0, Optional: true},
+	})
+	require.NoError(t, err, "optional patch for missing key must not error")
+
+	patched, err := os.ReadFile(path)
+	require.NoError(t, err)
+	found := findDWordInHive(t, patched, `Services\hvservice`, "Start")
+	assert.Equal(t, uint32(0), found, "existing patch must still apply")
+}
+
 func TestApplyDWordPatches_InvalidMagic(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "SYSTEM")
 	require.NoError(t, os.WriteFile(path, make([]byte, 8192), 0644))
@@ -227,6 +244,48 @@ func findDWordInHive(t *testing.T, data []byte, keyPath, valueName string) uint3
 	}
 	t.Fatalf("value %q not found", valueName)
 	return 0
+}
+
+func TestReadDWord_ReadsValue(t *testing.T) {
+	hive := buildTestHive()
+	path := filepath.Join(t.TempDir(), "SYSTEM")
+	require.NoError(t, os.WriteFile(path, hive, 0644))
+
+	val, err := ReadDWord(path, `Services\hvservice`, "Start")
+	require.NoError(t, err)
+	assert.Equal(t, uint32(3), val, "stock test hive has Start=3")
+}
+
+func TestReadDWord_AfterPatch(t *testing.T) {
+	hive := buildTestHive()
+	path := filepath.Join(t.TempDir(), "SYSTEM")
+	require.NoError(t, os.WriteFile(path, hive, 0644))
+
+	require.NoError(t, ApplyDWordPatches(path, []DWordPatch{
+		{KeyPath: `Services\hvservice`, ValueName: "Start", Value: 0},
+	}))
+
+	val, err := ReadDWord(path, `Services\hvservice`, "Start")
+	require.NoError(t, err)
+	assert.Equal(t, uint32(0), val, "Start should be 0 after patching")
+}
+
+func TestReadDWord_MissingKey(t *testing.T) {
+	hive := buildTestHive()
+	path := filepath.Join(t.TempDir(), "SYSTEM")
+	require.NoError(t, os.WriteFile(path, hive, 0644))
+
+	_, err := ReadDWord(path, `Services\nonexistent`, "Start")
+	assert.ErrorContains(t, err, "not found")
+}
+
+func TestReadDWord_MissingValue(t *testing.T) {
+	hive := buildTestHive()
+	path := filepath.Join(t.TempDir(), "SYSTEM")
+	require.NoError(t, os.WriteFile(path, hive, 0644))
+
+	_, err := ReadDWord(path, `Services\hvservice`, "NoSuch")
+	assert.ErrorContains(t, err, "not found")
 }
 
 func splitPath(p string) []string {

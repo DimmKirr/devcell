@@ -18,6 +18,9 @@ type DWordPatch struct {
 	ValueName string
 	// Value is the new DWORD value.
 	Value uint32
+	// Optional silently skips this patch when the key or value does
+	// not exist instead of returning an error.
+	Optional bool
 }
 
 // ApplyDWordPatches opens a Windows registry hive file, navigates to each
@@ -42,6 +45,9 @@ func ApplyDWordPatches(hivePath string, patches []DWordPatch) error {
 
 	for _, p := range patches {
 		if err := applyOne(data, rootOffset, p); err != nil {
+			if p.Optional && isNotFound(err) {
+				continue
+			}
 			return fmt.Errorf("patch %s\\%s: %w", p.KeyPath, p.ValueName, err)
 		}
 	}
@@ -49,6 +55,117 @@ func ApplyDWordPatches(hivePath string, patches []DWordPatch) error {
 	updateHeaderChecksum(data)
 
 	return os.WriteFile(hivePath, data, 0644)
+}
+
+// ReadDWord reads a single REG_DWORD value from a Windows registry hive
+// file without modifying it. Returns the value or an error if the key,
+// value, or hive is invalid.
+func ReadDWord(hivePath, keyPath, valueName string) (uint32, error) {
+	data, err := os.ReadFile(hivePath)
+	if err != nil {
+		return 0, fmt.Errorf("reading hive: %w", err)
+	}
+	if len(data) < 4096+32 {
+		return 0, fmt.Errorf("hive too small: %d bytes", len(data))
+	}
+	if string(data[:4]) != "regf" {
+		return 0, fmt.Errorf("not a registry hive (magic: %q)", data[:4])
+	}
+
+	rootOffset := binary.LittleEndian.Uint32(data[36:40])
+	return readOne(data, rootOffset, keyPath, valueName)
+}
+
+func readOne(data []byte, rootOffset uint32, keyPath, valueName string) (uint32, error) {
+	cell, err := cellAt(data, rootOffset)
+	if err != nil {
+		return 0, fmt.Errorf("root cell: %w", err)
+	}
+	if len(cell) < 80 || string(cell[4:6]) != "nk" {
+		return 0, fmt.Errorf("root is not a key node")
+	}
+
+	parts := strings.Split(keyPath, `\`)
+	currentOffset := rootOffset
+	for _, part := range parts {
+		cell, err = cellAt(data, currentOffset)
+		if err != nil {
+			return 0, err
+		}
+		currentOffset, err = findSubkey(data, cell, part)
+		if err != nil {
+			return 0, err
+		}
+	}
+
+	cell, err = cellAt(data, currentOffset)
+	if err != nil {
+		return 0, err
+	}
+	return readValue(data, cell, valueName)
+}
+
+func readValue(data []byte, nkCell []byte, valueName string) (uint32, error) {
+	valueCount := int(binary.LittleEndian.Uint32(nkCell[40:44]))
+	if valueCount == 0 {
+		return 0, fmt.Errorf("key has no values")
+	}
+	valueListOffset := binary.LittleEndian.Uint32(nkCell[44:48])
+
+	listCell, err := cellAt(data, valueListOffset)
+	if err != nil {
+		return 0, fmt.Errorf("value list: %w", err)
+	}
+
+	for i := 0; i < valueCount; i++ {
+		elemOff := 4 + i*4
+		if elemOff+4 > len(listCell) {
+			break
+		}
+		vkOffset := binary.LittleEndian.Uint32(listCell[elemOff : elemOff+4])
+		vkCell, err := cellAt(data, vkOffset)
+		if err != nil {
+			continue
+		}
+		if len(vkCell) < 24 || string(vkCell[4:6]) != "vk" {
+			continue
+		}
+
+		vNameLen := int(binary.LittleEndian.Uint16(vkCell[6:8]))
+		dataLen := binary.LittleEndian.Uint32(vkCell[8:12])
+		dataType := binary.LittleEndian.Uint32(vkCell[16:20])
+
+		var vName string
+		if vNameLen > 0 && 24+vNameLen <= len(vkCell) {
+			vName = string(vkCell[24 : 24+vNameLen])
+		}
+
+		if !strings.EqualFold(vName, valueName) {
+			continue
+		}
+
+		const regDword = 4
+		if dataType != regDword {
+			return 0, fmt.Errorf("value %q is type %d, not REG_DWORD (4)", valueName, dataType)
+		}
+
+		if dataLen&0x80000000 != 0 {
+			return binary.LittleEndian.Uint32(vkCell[12:16]), nil
+		}
+
+		actualLen := dataLen & 0x7FFFFFFF
+		if actualLen != 4 {
+			return 0, fmt.Errorf("DWORD value %q has unexpected data length %d", valueName, actualLen)
+		}
+		dataOffset := binary.LittleEndian.Uint32(vkCell[12:16])
+		abs := hbinBase + int(dataOffset) + 4
+		if abs+4 > len(data) {
+			return 0, fmt.Errorf("DWORD data offset out of range")
+		}
+		return binary.LittleEndian.Uint32(data[abs : abs+4]), nil
+	}
+
+	return 0, fmt.Errorf("value %q not found", valueName)
 }
 
 const hbinBase = 4096
@@ -287,6 +404,11 @@ func patchValue(data []byte, nkCell []byte, _ uint32, valueName string, newValue
 	}
 
 	return fmt.Errorf("value %q not found", valueName)
+}
+
+func isNotFound(err error) bool {
+	s := err.Error()
+	return strings.Contains(s, "not found")
 }
 
 func updateHeaderChecksum(data []byte) {
