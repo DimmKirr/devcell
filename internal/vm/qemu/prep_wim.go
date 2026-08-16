@@ -6,12 +6,12 @@ import (
 )
 
 // WimPrepOp describes a single DISM offline servicing operation to apply to
-// a boot.wim image. The builder WinPE script iterates these in order.
+// a WIM image. The builder WinPE script iterates these in order.
 type WimPrepOp struct {
 	// Feature enables a Windows feature via
 	//   dism /Image:<mount> /Enable-Feature /FeatureName:<Feature> /All
 	//     /Source:<install.wim-mount>\Windows /LimitAccess
-	// Mutually exclusive with Package and Capability.
+	// Mutually exclusive with Package, Capability, and Driver.
 	Feature string
 
 	// Package adds a .cab or .mum package via
@@ -23,6 +23,13 @@ type WimPrepOp struct {
 	//   dism /Image:<mount> /Add-Capability /CapabilityName:<Capability>
 	//     /Source:<install.wim-mount>
 	Capability string
+
+	// Driver injects a driver via
+	//   dism /Image:<mount> /Add-Driver /Driver:%VIRTIO%\<Driver> /Recurse
+	// The path is relative to the virtio-win ISO root (e.g. "NetKVM\w11\ARM64").
+	// The script probes for the virtio-win drive letter automatically when
+	// any op uses this field.
+	Driver string
 }
 
 // WimPrepConfig parameterises the WIM builder pipeline. A builder WinPE boots,
@@ -35,6 +42,15 @@ type WimPrepConfig struct {
 	// WimImageIndex is the boot.wim image to service (default 2 =
 	// "Microsoft Windows Setup").
 	WimImageIndex int
+
+	// SourceWim is the filename of the WIM to service on the shared
+	// volume. Default: "boot.wim".
+	SourceWim string
+
+	// TargetWim is the filename of the output WIM on the shared volume.
+	// When equal to SourceWim the copy step is skipped (DISM commits
+	// in place). Default: "devcell.wim".
+	TargetWim string
 }
 
 const (
@@ -63,6 +79,22 @@ func GenerateWimBuilderScript(cfg WimPrepConfig) []byte {
 	if idx == 0 {
 		idx = 2
 	}
+	sourceWim := cfg.SourceWim
+	if sourceWim == "" {
+		sourceWim = "boot.wim"
+	}
+	targetWim := cfg.TargetWim
+	if targetWim == "" {
+		targetWim = "devcell.wim"
+	}
+
+	needsVirtIO := false
+	for _, op := range cfg.Ops {
+		if op.Driver != "" {
+			needsVirtIO = true
+			break
+		}
+	}
 
 	var b strings.Builder
 	b.WriteString("@echo off\r\n")
@@ -87,13 +119,28 @@ func GenerateWimBuilderScript(cfg WimPrepConfig) []byte {
 	b.WriteString("echo Found Windows ISO at %WINISO%\r\n")
 	b.WriteString("echo.\r\n")
 
-	// Verify boot.wim exists on the shared volume
-	b.WriteString("if not exist %SHARED%\\boot.wim (\r\n")
-	b.WriteString("    echo ERROR: boot.wim not found on shared volume %SHARED%\r\n")
+	// Find the virtio-win ISO drive (only when Driver ops are present)
+	if needsVirtIO {
+		b.WriteString("set VIRTIO=\r\n")
+		b.WriteString("for %%d in (C D E F G H I J K L M N O P Q R S T U V W Y Z) do (\r\n")
+		b.WriteString("    if exist %%d:\\vioserial\\w11\\ARM64\\vioser.inf set VIRTIO=%%d:\r\n")
+		b.WriteString(")\r\n")
+		b.WriteString("if \"%VIRTIO%\"==\"\" (\r\n")
+		b.WriteString("    echo ERROR: virtio-win ISO not found — no drive has vioserial\\w11\\ARM64\\vioser.inf\r\n")
+		b.WriteString("    echo FAIL > %SHARED%\\" + WimBuilderDoneFile + "\r\n")
+		b.WriteString("    goto done\r\n")
+		b.WriteString(")\r\n")
+		b.WriteString("echo Found virtio-win ISO at %VIRTIO%\r\n")
+		b.WriteString("echo.\r\n")
+	}
+
+	// Verify source WIM exists on the shared volume
+	fmt.Fprintf(&b, "if not exist %%SHARED%%\\%s (\r\n", sourceWim)
+	fmt.Fprintf(&b, "    echo ERROR: %s not found on shared volume %%SHARED%%\r\n", sourceWim)
 	b.WriteString("    echo FAIL > %SHARED%\\" + WimBuilderDoneFile + "\r\n")
 	b.WriteString("    goto done\r\n")
 	b.WriteString(")\r\n")
-	b.WriteString("echo Found boot.wim on %SHARED%\r\n")
+	fmt.Fprintf(&b, "echo Found %s on %%SHARED%%\r\n", sourceWim)
 	b.WriteString("echo.\r\n")
 
 	// WinPE boots from X: (RAM disk) — there is no C: drive. Partition the
@@ -134,15 +181,15 @@ func GenerateWimBuilderScript(cfg WimPrepConfig) []byte {
 	b.WriteString("mkdir C:\\mnt\\install 2>nul\r\n")
 	b.WriteString("echo.\r\n")
 
-	// Mount boot.wim
-	fmt.Fprintf(&b, "echo --- Mounting boot.wim (index %d) ---\r\n", idx)
-	fmt.Fprintf(&b, "dism /Mount-Image /ImageFile:%%SHARED%%\\boot.wim /Index:%d /MountDir:C:\\mnt\\boot 2>&1\r\n", idx)
+	// Mount source WIM
+	fmt.Fprintf(&b, "echo --- Mounting %s (index %d) ---\r\n", sourceWim, idx)
+	fmt.Fprintf(&b, "dism /Mount-Image /ImageFile:%%SHARED%%\\%s /Index:%d /MountDir:C:\\mnt\\boot 2>&1\r\n", sourceWim, idx)
 	b.WriteString("if !ERRORLEVEL! neq 0 (\r\n")
-	b.WriteString("    echo ERROR: Failed to mount boot.wim — exit code !ERRORLEVEL!\r\n")
+	fmt.Fprintf(&b, "    echo ERROR: Failed to mount %s — exit code !ERRORLEVEL!\r\n", sourceWim)
 	b.WriteString("    echo FAIL > %SHARED%\\" + WimBuilderDoneFile + "\r\n")
 	b.WriteString("    goto done\r\n")
 	b.WriteString(")\r\n")
-	b.WriteString("echo boot.wim mounted successfully\r\n")
+	fmt.Fprintf(&b, "echo %s mounted successfully\r\n", sourceWim)
 	b.WriteString("echo.\r\n")
 
 	// Mount install.wim (read-only, index 1)
@@ -171,6 +218,9 @@ func GenerateWimBuilderScript(cfg WimPrepConfig) []byte {
 		case op.Package != "":
 			desc = fmt.Sprintf("Add-Package %s", op.Package)
 			cmd = fmt.Sprintf("dism /Image:C:\\mnt\\boot /Add-Package /PackagePath:C:\\mnt\\install\\%s", op.Package)
+		case op.Driver != "":
+			desc = fmt.Sprintf("Add-Driver %s", op.Driver)
+			cmd = fmt.Sprintf("dism /Image:C:\\mnt\\boot /Add-Driver /Driver:%%VIRTIO%%\\%s /Recurse", op.Driver)
 		case op.Capability != "":
 			desc = fmt.Sprintf("Add-Capability %s", op.Capability)
 			// Capabilities are often Staged with no payload in install.wim.
@@ -217,9 +267,14 @@ func GenerateWimBuilderScript(cfg WimPrepConfig) []byte {
 	b.WriteString("echo Operations: !OPS_OK! succeeded, !OPS_FAIL! failed\r\n")
 	b.WriteString("echo.\r\n")
 
-	// Verify: list enabled features
+	// Verify: list enabled features and injected drivers
 	b.WriteString("echo --- Verifying serviced image ---\r\n")
 	b.WriteString("dism /Image:C:\\mnt\\boot /Get-Features 2>&1 | findstr /i \"Enabled\" 2>&1\r\n")
+	if needsVirtIO {
+		b.WriteString("echo.\r\n")
+		b.WriteString("echo --- Injected drivers ---\r\n")
+		b.WriteString("dism /Image:C:\\mnt\\boot /Get-Drivers 2>&1 | findstr /i \"oem\" 2>&1\r\n")
+	}
 	b.WriteString("echo.\r\n")
 
 	// Unmount install.wim (discard, read-only)
@@ -227,27 +282,34 @@ func GenerateWimBuilderScript(cfg WimPrepConfig) []byte {
 	b.WriteString("dism /Unmount-Image /MountDir:C:\\mnt\\install /Discard 2>&1\r\n")
 	b.WriteString("echo.\r\n")
 
-	// Unmount boot.wim (commit changes)
-	b.WriteString("echo --- Committing boot.wim changes ---\r\n")
-	b.WriteString("dism /Unmount-Image /MountDir:C:\\mnt\\boot /Commit 2>&1\r\n")
-	b.WriteString("if !ERRORLEVEL! neq 0 (\r\n")
-	b.WriteString("    echo ERROR: Failed to commit boot.wim — exit code !ERRORLEVEL!\r\n")
-	b.WriteString("    echo FAIL > %SHARED%\\" + WimBuilderDoneFile + "\r\n")
-	b.WriteString("    goto done\r\n")
-	b.WriteString(")\r\n")
-	b.WriteString("echo boot.wim committed successfully\r\n")
+	// Write provenance marker into the mounted image root
+	b.WriteString("echo --- Writing devcell info.json ---\r\n")
+	b.WriteString("echo {\"version\":\"%DATE%T%TIME%\"} > C:\\mnt\\boot\\info.json\r\n")
 	b.WriteString("echo.\r\n")
 
-	// Copy to devcell.wim
-	b.WriteString("echo --- Creating devcell.wim ---\r\n")
-	b.WriteString("copy %SHARED%\\boot.wim %SHARED%\\devcell.wim 2>&1\r\n")
+	// Unmount source WIM (commit changes)
+	fmt.Fprintf(&b, "echo --- Committing %s changes ---\r\n", sourceWim)
+	b.WriteString("dism /Unmount-Image /MountDir:C:\\mnt\\boot /Commit 2>&1\r\n")
 	b.WriteString("if !ERRORLEVEL! neq 0 (\r\n")
-	b.WriteString("    echo ERROR: Failed to create devcell.wim\r\n")
+	fmt.Fprintf(&b, "    echo ERROR: Failed to commit %s — exit code !ERRORLEVEL!\r\n", sourceWim)
 	b.WriteString("    echo FAIL > %SHARED%\\" + WimBuilderDoneFile + "\r\n")
 	b.WriteString("    goto done\r\n")
 	b.WriteString(")\r\n")
-	b.WriteString("echo devcell.wim created\r\n")
+	fmt.Fprintf(&b, "echo %s committed successfully\r\n", sourceWim)
 	b.WriteString("echo.\r\n")
+
+	// Copy to target WIM (skip if source == target — already committed in place)
+	if sourceWim != targetWim {
+		fmt.Fprintf(&b, "echo --- Creating %s ---\r\n", targetWim)
+		fmt.Fprintf(&b, "copy %%SHARED%%\\%s %%SHARED%%\\%s 2>&1\r\n", sourceWim, targetWim)
+		b.WriteString("if !ERRORLEVEL! neq 0 (\r\n")
+		fmt.Fprintf(&b, "    echo ERROR: Failed to create %s\r\n", targetWim)
+		b.WriteString("    echo FAIL > %SHARED%\\" + WimBuilderDoneFile + "\r\n")
+		b.WriteString("    goto done\r\n")
+		b.WriteString(")\r\n")
+		fmt.Fprintf(&b, "echo %s created\r\n", targetWim)
+		b.WriteString("echo.\r\n")
+	}
 
 	// Success marker
 	b.WriteString("echo === DEVCELL WIM BUILDER COMPLETE ===\r\n")
@@ -270,12 +332,32 @@ func HyperVPrepOps() []WimPrepOp {
 	}
 }
 
+// WSL2PrepOps returns the servicing operations to enable WSL2 in a boot.wim.
+// Requires Hyper-V (HyperVPrepOps) as a prerequisite — VirtualMachinePlatform
+// is included there.
+func WSL2PrepOps() []WimPrepOp {
+	return []WimPrepOp{
+		{Feature: "Microsoft-Windows-Subsystem-Linux"},
+	}
+}
+
 // OpenSSHPrepOps returns the servicing operations to add OpenSSH to a
 // boot.wim. Uses the capability name rather than a feature.
 func OpenSSHPrepOps() []WimPrepOp {
 	return []WimPrepOp{
 		{Capability: "OpenSSH.Server~~~~0.0.1.0"},
 		{Capability: "OpenSSH.Client~~~~0.0.1.0"},
+	}
+}
+
+// VirtIODriverPrepOps returns the servicing operations to inject the ARM64
+// virtio-win drivers (NetKVM, vioserial, vioscsi) into a WIM image. The
+// paths are relative to the virtio-win ISO root.
+func VirtIODriverPrepOps() []WimPrepOp {
+	return []WimPrepOp{
+		{Driver: `NetKVM\w11\ARM64`},
+		{Driver: `vioserial\w11\ARM64`},
+		{Driver: `vioscsi\w11\ARM64`},
 	}
 }
 
@@ -299,6 +381,9 @@ type WimBuilderSpec struct {
 	SharedImg string
 	// WindowsISO is the full Windows ISO (provides install.wim).
 	WindowsISO string
+	// VirtIOISO is the virtio-win ISO (provides driver directories for
+	// DISM /Add-Driver). Required when any WimPrepOp uses the Driver field.
+	VirtIOISO string
 }
 
 // BuildWimBuilderArgv constructs the QEMU argv for the WIM builder VM.
@@ -311,6 +396,11 @@ func BuildWimBuilderArgv(wbs WimBuilderSpec) []string {
 		argv = append(argv,
 			"-drive", "file="+wbs.WindowsISO+",media=cdrom,if=none,id=cdrom1",
 			"-device", "usb-storage,drive=cdrom1,removable=true,bus="+USBBusID+".0")
+	}
+	if wbs.VirtIOISO != "" {
+		argv = append(argv,
+			"-drive", "file="+wbs.VirtIOISO+",media=cdrom,if=none,id=cdrom2",
+			"-device", "usb-storage,drive=cdrom2,removable=true,bus="+USBBusID+".0")
 	}
 	return argv
 }

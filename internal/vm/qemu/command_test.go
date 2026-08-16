@@ -669,7 +669,9 @@ func TestBuildWinPECommand_AnswerVolumeOnUSBStorage(t *testing.T) {
 	joined := strings.Join(argv, " ")
 
 	assert.Contains(t, joined, "file=/tmp/answer.img,format=raw,if=none,id=usbfat0")
-	assert.Contains(t, joined, "usb-storage,drive=usbfat0,removable=true,bus=usb-bus.0,bootindex=2")
+	assert.Contains(t, joined, "usb-storage,drive=usbfat0,removable=true,bus=usb-bus.0")
+	assert.NotContains(t, joined, "usbfat0,removable=true,bus=usb-bus.0,bootindex=",
+		"answer volume must not be a boot candidate — ARM64 kernel firmware crashes on non-bootable FAT")
 }
 
 func TestBuildWinPECommand_NoVirtioISO(t *testing.T) {
@@ -695,6 +697,26 @@ func TestBuildWinPECommand_HasBaseElements(t *testing.T) {
 	assert.Contains(t, joined, "-qmp")
 }
 
+func TestBuildWinPECommand_Qcow2AnswerVolume(t *testing.T) {
+	s := testSpec()
+	s.VirtioISO = ""
+	argv := BuildWinPECommand(s, "/tmp/winpe.iso", "/tmp/shared.qcow2")
+	joined := strings.Join(argv, " ")
+
+	assert.Contains(t, joined, "file=/tmp/shared.qcow2,format=qcow2,if=none,id=usbfat0",
+		"qcow2 extension must produce format=qcow2")
+}
+
+func TestBuildWinPECommand_RawAnswerVolumeStaysRaw(t *testing.T) {
+	s := testSpec()
+	s.VirtioISO = ""
+	argv := BuildWinPECommand(s, "/tmp/winpe.iso", "/tmp/answer.img")
+	joined := strings.Join(argv, " ")
+
+	assert.Contains(t, joined, "format=raw",
+		"non-qcow2 extension must remain format=raw")
+}
+
 func TestBuildRunCommand_ScsiDiskIsActuallyAttached(t *testing.T) {
 	spec := testSpec()
 	spec.DiskBus = "scsi"
@@ -704,4 +726,30 @@ func TestBuildRunCommand_ScsiDiskIsActuallyAttached(t *testing.T) {
 	assert.Contains(t, joined, "id=disk0", "the drive must exist")
 	assert.Contains(t, joined, "virtio-scsi-pci", "and its controller")
 	assert.Contains(t, joined, "scsi-hd,drive=disk0", "and the drive must be bound to it")
+}
+
+func TestBuildInstallCommand_DevcellWimImg(t *testing.T) {
+	spec := testSpec()
+	spec.DevcellWimImg = "/tmp/devcell-wim.img"
+	argv := BuildInstallCommand(spec, "/tmp/win.iso", "/tmp/answer.img")
+	joined := strings.Join(argv, " ")
+	assert.Contains(t, joined, "devcellwim0")
+	assert.Contains(t, joined, "/tmp/devcell-wim.img")
+	assert.Contains(t, joined, "usb-storage,drive=devcellwim0,removable=true")
+}
+
+func TestBuildInstallCommand_DevcellWimImg_Qcow2(t *testing.T) {
+	spec := testSpec()
+	spec.DevcellWimImg = "/tmp/devcell-wim.qcow2"
+	argv := BuildInstallCommand(spec, "/tmp/win.iso", "/tmp/answer.img")
+	joined := strings.Join(argv, " ")
+	assert.Contains(t, joined, "format=qcow2")
+	assert.Contains(t, joined, "devcellwim0")
+}
+
+func TestBuildInstallCommand_NoDevcellWimImg(t *testing.T) {
+	spec := testSpec()
+	argv := BuildInstallCommand(spec, "/tmp/win.iso", "/tmp/answer.img")
+	joined := strings.Join(argv, " ")
+	assert.NotContains(t, joined, "devcellwim0")
 }

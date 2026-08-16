@@ -38,6 +38,16 @@ func BuildInstallCommand(spec Spec, windowsISO, autounattendImage string) []stri
 		argv = appendUSBCDs(argv, spec, windowsISO, autounattendImage)
 	}
 
+	if spec.DevcellWimImg != "" {
+		driveFormat := "raw"
+		if strings.HasSuffix(spec.DevcellWimImg, ".qcow2") {
+			driveFormat = "qcow2"
+		}
+		argv = append(argv,
+			"-drive", fmt.Sprintf("file=%s,format=%s,if=none,id=devcellwim0", spec.DevcellWimImg, driveFormat),
+			"-device", fmt.Sprintf("usb-storage,drive=devcellwim0,removable=true,bus=%s.0", USBBusID))
+	}
+
 	return argv
 }
 
@@ -121,17 +131,19 @@ func appendSCSICDs(argv []string, spec Spec, windowsISO, autounattendImage strin
 func BuildWinPECommand(spec Spec, winpeISO, answerImage string) []string {
 	argv := baseCommand(spec)
 
-	bootIdx := 1
 	argv = append(argv,
 		"-drive", fmt.Sprintf("file=%s,media=cdrom,if=none,id=cdrom0", winpeISO),
-		"-device", fmt.Sprintf("usb-storage,drive=cdrom0,removable=true,bus=%s.0,id=%s,bootindex=%d",
-			USBBusID, InstallerCDDeviceID, bootIdx))
-	bootIdx++
+		"-device", fmt.Sprintf("usb-storage,drive=cdrom0,removable=true,bus=%s.0,id=%s,bootindex=1",
+			USBBusID, InstallerCDDeviceID))
 
 	if answerImage != "" {
+		driveFormat := "raw"
+		if strings.HasSuffix(answerImage, ".qcow2") {
+			driveFormat = "qcow2"
+		}
 		argv = append(argv,
-			"-drive", fmt.Sprintf("file=%s,format=raw,if=none,id=usbfat0", answerImage),
-			"-device", fmt.Sprintf("usb-storage,drive=usbfat0,removable=true,bus=%s.0,bootindex=%d", USBBusID, bootIdx))
+			"-drive", fmt.Sprintf("file=%s,format=%s,if=none,id=usbfat0", answerImage, driveFormat),
+			"-device", fmt.Sprintf("usb-storage,drive=usbfat0,removable=true,bus=%s.0", USBBusID))
 	}
 
 	return argv

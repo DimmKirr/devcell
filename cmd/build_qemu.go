@@ -794,8 +794,9 @@ func runQemuDevEnvFinalize(ctx context.Context, pr *ux.PhaseRunner, obs qemu.Obs
 }
 
 // runWimBuilder boots a builder WinPE that runs DISM offline servicing to
-// produce devcell.wim with Hyper-V and OpenSSH enabled. Returns the path to
-// the cached devcell.wim on success.
+// produce devcell.wim with Hyper-V, WSL2, OpenSSH, and virtio drivers
+// (NetKVM, vioserial, vioscsi) baked in. Returns the path to the cached
+// devcell.wim on success.
 func runWimBuilder(ctx context.Context, templateDir, windowsISO, virtioISO string, obs qemu.Observer) (string, error) {
 	tmpDir, err := os.MkdirTemp("", "devcell-wim-builder-*")
 	if err != nil {
@@ -822,14 +823,19 @@ func runWimBuilder(ctx context.Context, templateDir, windowsISO, virtioISO strin
 		return "", fmt.Errorf("reading boot.wim: %w", err)
 	}
 
+	var ops []qemu.WimPrepOp
+	ops = append(ops, qemu.HyperVPrepOps()...)
+	ops = append(ops, qemu.WSL2PrepOps()...)
+	ops = append(ops, qemu.OpenSSHPrepOps()...)
+	ops = append(ops, qemu.VirtIODriverPrepOps()...)
 	cfg := qemu.WimPrepConfig{
-		Ops: append(qemu.HyperVPrepOps(), qemu.OpenSSHPrepOps()...),
+		Ops: ops,
 	}
 	sharedFiles := qemu.SharedVolumeFiles(cfg)
 	sharedFiles["/boot.wim"] = bootWimData
 
-	sharedImg := filepath.Join(tmpDir, "shared.img")
-	if err := isokit.CreateFATImageSized(sharedImg, sharedFiles, 2*1024*1024*1024); err != nil {
+	sharedImg := filepath.Join(tmpDir, "shared.qcow2")
+	if err := qemu.CreateFATQcow2(sharedImg, sharedFiles, 20*1024*1024*1024); err != nil {
 		return "", fmt.Errorf("creating shared volume: %w", err)
 	}
 
@@ -912,6 +918,7 @@ func runWimBuilder(ctx context.Context, templateDir, windowsISO, virtioISO strin
 		WinPEISO:   winpeISO,
 		SharedImg:  sharedImg,
 		WindowsISO: windowsISO,
+		VirtIOISO:  virtioISO,
 	}
 	argv := qemu.BuildWimBuilderArgv(wbs)
 
@@ -982,7 +989,7 @@ func runWimBuilder(ctx context.Context, templateDir, windowsISO, virtioISO strin
 
 	// 8. Extract devcell.wim from the shared volume and cache it
 	cachedWim := filepath.Join(templateDir, "devcell.wim")
-	wimData, err := isokit.ReadFileFromFAT(sharedImg, "/devcell.wim")
+	wimData, err := qemu.ReadFileFromFATQcow2(sharedImg, "/devcell.wim")
 	if err != nil {
 		return "", fmt.Errorf("reading devcell.wim from shared volume: %w", err)
 	}
@@ -990,12 +997,25 @@ func runWimBuilder(ctx context.Context, templateDir, windowsISO, virtioISO strin
 		return "", fmt.Errorf("caching devcell.wim: %w", err)
 	}
 
+	// 9. Apply registry patches — DISM created the service entries, now
+	// set correct Start values so they load at boot.
+	if err := qemu.PatchDevcellWim(cachedWim, 2, qemu.HyperVBootPatches()); err != nil {
+		ux.Debugf("post-DISM registry patching failed: %v — devcell.wim may boot without Hyper-V services", err)
+	}
+
 	return cachedWim, nil
 }
 
-// readFATFile reads a file from a FAT image, returning empty string on any error.
+// readFATFile reads a file from a FAT image (raw or qcow2), returning empty
+// string on any error.
 func readFATFile(imgPath, filePath string) string {
-	data, err := isokit.ReadFileFromFAT(imgPath, filePath)
+	var data []byte
+	var err error
+	if strings.HasSuffix(imgPath, ".qcow2") {
+		data, err = qemu.ReadFileFromFATQcow2(imgPath, filePath)
+	} else {
+		data, err = isokit.ReadFileFromFAT(imgPath, filePath)
+	}
 	if err != nil {
 		return ""
 	}

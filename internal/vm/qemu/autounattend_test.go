@@ -491,6 +491,19 @@ func TestGenerateAutounattendXML_ImageNameIsConfigurable(t *testing.T) {
 	assert.NotContains(t, out, "<Value>Windows 11 Pro</Value>")
 }
 
+func TestGenerateAutounattendXML_InstallWimPath(t *testing.T) {
+	cfg := DefaultAutounattendConfig()
+	cfg.InstallWimPath = `X:\devcell-install.wim`
+	out := string(GenerateAutounattendXML(cfg))
+	assert.Contains(t, out, `<Path>X:\devcell-install.wim</Path>`)
+	assert.Contains(t, out, "<InstallFrom>")
+}
+
+func TestGenerateAutounattendXML_NoInstallWimPath(t *testing.T) {
+	out := string(GenerateAutounattendXML(DefaultAutounattendConfig()))
+	assert.NotContains(t, out, "devcell-install.wim")
+}
+
 func TestWriteAutounattendImage_PreservesLongFilename(t *testing.T) {
 	// Windows Setup looks for a file literally named "autounattend.xml".
 	// The FAT writer stores a Long File Name entry, so the name survives —

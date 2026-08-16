@@ -21,8 +21,13 @@ import (
 // TestWimBuilder boots a builder WinPE that runs DISM offline servicing
 // against a copy of boot.wim. The test verifies:
 //  1. The builder script finds install.wim on the Windows ISO
-//  2. DISM mount/unmount/servicing commands execute
-//  3. The builder writes a completion marker
+//  2. The builder script finds the virtio-win ISO
+//  3. DISM mount/unmount/servicing commands execute
+//  4. The builder writes a completion marker
+//  5. devcell.wim contains Hyper-V binaries and enabled features
+//  6. devcell.wim contains WSL2 (Microsoft-Windows-Subsystem-Linux) feature
+//  7. devcell.wim contains OpenSSH binaries
+//  8. devcell.wim contains virtio drivers (NetKVM, vioserial, vioscsi)
 //
 // This is the integration test for `cell build --engine=qemu`'s WIM prep
 // phase. The same BuildWimBuilderArgv and SharedVolumeFiles functions are
@@ -68,15 +73,21 @@ func TestWimBuilder(t *testing.T) {
 			require.NoError(t, err)
 			t.Logf("boot.wim: %d bytes (%.1f MB)", len(bootWimData), float64(len(bootWimData))/(1024*1024))
 
+			var ops []WimPrepOp
+			ops = append(ops, HyperVPrepOps()...)
+			ops = append(ops, WSL2PrepOps()...)
+			ops = append(ops, OpenSSHPrepOps()...)
+			ops = append(ops, VirtIODriverPrepOps()...)
 			cfg := WimPrepConfig{
-				Ops: append(HyperVPrepOps(), OpenSSHPrepOps()...),
+				Ops: ops,
 			}
 			sharedFiles := SharedVolumeFiles(cfg)
 			sharedFiles["/boot.wim"] = bootWimData
 
-			sharedImg := filepath.Join(tmpDir, "shared.img")
-			// 2GB: boot.wim (~500MB) + devcell.wim (~700MB) + DISM scratch
-			require.NoError(t, isokit.CreateFATImageSized(sharedImg, sharedFiles, 2*1024*1024*1024))
+			sharedImg := filepath.Join(tmpDir, "shared.qcow2")
+			// 20GB sparse qcow2: boot.wim (~500MB) + devcell.wim (~700MB) + DISM scratch.
+			// Only actual data occupies host disk.
+			require.NoError(t, CreateFATQcow2(sharedImg, sharedFiles, 20*1024*1024*1024))
 			t.Logf("shared volume: %s", sharedImg)
 
 			// ── 4. Inject agent into boot.wim for standalone WinPE ──
@@ -161,6 +172,7 @@ func TestWimBuilder(t *testing.T) {
 				WinPEISO:   winpeISO,
 				SharedImg:  sharedImg,
 				WindowsISO: winISO,
+				VirtIOISO:  virtioISO,
 			}
 			argv := BuildWimBuilderArgv(wbs)
 			argv[0] = qemuBin
@@ -277,6 +289,9 @@ func TestWimBuilder(t *testing.T) {
 			assert.Contains(t, agentOut, "Found Windows ISO",
 				"builder must find install.wim on the Windows ISO drive")
 
+			assert.Contains(t, agentOut, "Found virtio-win ISO",
+				"builder must find virtio-win drivers ISO")
+
 			assert.Contains(t, agentOut, "Mounting boot.wim",
 				"builder must attempt to mount boot.wim")
 
@@ -292,7 +307,7 @@ func TestWimBuilder(t *testing.T) {
 
 			// ── 10. Verify devcell.wim contents with wimlib ──
 			// Extract devcell.wim from the shared volume and open it.
-			devcellWimData, err := isokit.ReadFileFromFAT(sharedImg, "/devcell.wim")
+			devcellWimData, err := ReadFileFromFATQcow2(sharedImg, "/devcell.wim")
 			require.NoError(t, err, "reading devcell.wim from shared volume")
 			require.NotEmpty(t, devcellWimData, "devcell.wim is empty")
 			t.Logf("devcell.wim: %d bytes (%.1f MB)", len(devcellWimData), float64(len(devcellWimData))/(1024*1024))
@@ -313,9 +328,12 @@ func TestWimBuilder(t *testing.T) {
 			require.NoError(t, os.MkdirAll(extractDir, 0755))
 			require.NoError(t, wim.ExtractImage(2, extractDir, nil))
 
-			// Hyper-V binaries that /Enable-Feature should have added.
-			// These are absent from stock boot.wim — their presence proves
-			// DISM servicing worked.
+			// ── 10a. Hyper-V: binaries and feature enablement ──
+			assert.Contains(t, agentOut, "OK: Enable-Feature Microsoft-Hyper-V",
+				"DISM must report Hyper-V feature enabled")
+			assert.Contains(t, agentOut, "OK: Enable-Feature VirtualMachinePlatform",
+				"DISM must report VirtualMachinePlatform feature enabled")
+
 			hypervFiles := []string{
 				"Windows/System32/vmms.exe",
 				"Windows/System32/vmwp.exe",
@@ -333,7 +351,18 @@ func TestWimBuilder(t *testing.T) {
 				}
 			}
 
-			// OpenSSH binaries that /Add-Capability should have added.
+			// ── 10a-reg. Hyper-V: registry boot patches ──
+			if err := VerifyWimRegistry(wim, 2, `\Windows\System32\config\SYSTEM`, HyperVBootChecks()); err != nil {
+				t.Errorf("Hyper-V registry verification failed: %v", err)
+			} else {
+				t.Log("  Hyper-V registry patches verified")
+			}
+
+			// ── 10b. WSL2: feature enablement ──
+			assert.Contains(t, agentOut, "OK: Enable-Feature Microsoft-Windows-Subsystem-Linux",
+				"DISM must report WSL feature enabled")
+
+			// ── 10c. OpenSSH: binaries ──
 			opensshFiles := []string{
 				"Windows/System32/OpenSSH/sshd.exe",
 				"Windows/System32/OpenSSH/ssh.exe",
@@ -345,6 +374,35 @@ func TestWimBuilder(t *testing.T) {
 					t.Logf("  OpenSSH OK: %s (%d bytes)", f, info.Size())
 				} else {
 					t.Errorf("  OpenSSH MISSING: %s", f)
+				}
+			}
+
+			// ── 10d. VirtIO drivers: DISM /Add-Driver output and DriverStore files ──
+			assert.Contains(t, agentOut, `OK: Add-Driver NetKVM\w11\ARM64`,
+				"DISM must report NetKVM driver added")
+			assert.Contains(t, agentOut, `OK: Add-Driver vioserial\w11\ARM64`,
+				"DISM must report vioserial driver added")
+			assert.Contains(t, agentOut, `OK: Add-Driver vioscsi\w11\ARM64`,
+				"DISM must report vioscsi driver added")
+
+			// DISM /Add-Driver places driver files under DriverStore/FileRepository.
+			// The exact subdirectory name is generated by DISM (e.g.
+			// netkvm.inf_arm64_<hash>), so we glob for the key binaries.
+			driverStoreDir := filepath.Join(extractDir, "Windows", "System32", "DriverStore", "FileRepository")
+			for _, drv := range []struct {
+				name string
+				sys  string
+			}{
+				{"NetKVM", "netkvm.sys"},
+				{"vioserial", "vioser.sys"},
+				{"vioscsi", "vioscsi.sys"},
+			} {
+				matches, _ := filepath.Glob(filepath.Join(driverStoreDir, "*", drv.sys))
+				if len(matches) > 0 {
+					info, _ := os.Stat(matches[0])
+					t.Logf("  VirtIO OK: %s → %s (%d bytes)", drv.name, filepath.Base(filepath.Dir(matches[0])), info.Size())
+				} else {
+					t.Errorf("  VirtIO MISSING: %s (%s not found in DriverStore/FileRepository)", drv.name, drv.sys)
 				}
 			}
 		})

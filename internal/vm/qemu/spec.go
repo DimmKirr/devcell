@@ -110,6 +110,11 @@ type Spec struct {
 	// storage for guest-written logs — the run-time counterpart of the
 	// install's answer volume (see BuildDevEnvLogVolume).
 	LogVolumePath string
+	// DevcellWimImg, when set, attaches a FAT volume containing the
+	// custom devcell.wim as an additional USB drive during install. Windows
+	// Setup reads from <Path> in autounattend.xml to find it. The volume
+	// is a raw or qcow2 FAT image.
+	DevcellWimImg string
 }
 
 // usesTCG reports whether this spec runs under software emulation.

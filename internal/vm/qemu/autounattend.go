@@ -54,6 +54,11 @@ type AutounattendConfig struct {
 	// ARM64 media carries three (Home, Home Single Language, Pro); without a
 	// choice Setup stops to ask. Defaults to "Windows 11 Pro".
 	ImageName string
+	// InstallWimPath, when set, tells Windows Setup to install from a custom
+	// WIM at this path (e.g. "X:\devcell-install.wim") instead of the stock
+	// install.wim inside the ISO. The path must be reachable from WinPE — a
+	// drive letter assigned to a USB volume the VM mounts.
+	InstallWimPath string
 	// EFIBootLoader is the raw bytes of the Windows EFI bootloader
 	// (BOOTAA64.EFI), extracted from the installer ISO at build time. When
 	// set, BuildAnswerVolume writes it to /EFI/BOOT/BOOTAA64.EFI on the
@@ -389,8 +394,11 @@ const autounattendTmplStr = `<?xml version="1.0" encoding="utf-8"?>
 
       <ImageInstall>
         <OSImage>
-{{- if .ImageName}}
+{{- if or .ImageName .InstallWimPath}}
           <InstallFrom>
+{{- if .InstallWimPath}}
+            <Path>{{.InstallWimPath}}</Path>
+{{- end}}
             <MetaData wcm:action="add">
               <Key>/IMAGE/NAME</Key>
               <Value>{{.ImageName}}</Value>

@@ -139,11 +139,167 @@ func TestHyperVPrepOps(t *testing.T) {
 	assert.Equal(t, "VirtualMachinePlatform", ops[1].Feature)
 }
 
+func TestWSL2PrepOps(t *testing.T) {
+	ops := WSL2PrepOps()
+	require.Len(t, ops, 1)
+	assert.Equal(t, "Microsoft-Windows-Subsystem-Linux", ops[0].Feature)
+}
+
+func TestGenerateWimBuilderScript_WSL2Feature(t *testing.T) {
+	cfg := WimPrepConfig{
+		Ops: append(HyperVPrepOps(), WSL2PrepOps()...),
+	}
+	script := string(GenerateWimBuilderScript(cfg))
+	assert.Contains(t, script, "Microsoft-Windows-Subsystem-Linux")
+	assert.Contains(t, script, "/Enable-Feature /FeatureName:Microsoft-Windows-Subsystem-Linux")
+}
+
 func TestOpenSSHPrepOps(t *testing.T) {
 	ops := OpenSSHPrepOps()
 	require.Len(t, ops, 2)
 	assert.Equal(t, "OpenSSH.Server~~~~0.0.1.0", ops[0].Capability)
 	assert.Equal(t, "OpenSSH.Client~~~~0.0.1.0", ops[1].Capability)
+}
+
+func TestGenerateWimBuilderScript_DefaultSourceAndTarget(t *testing.T) {
+	cfg := WimPrepConfig{
+		Ops: []WimPrepOp{{Feature: "TestFeature"}},
+	}
+	script := string(GenerateWimBuilderScript(cfg))
+
+	// Default source is boot.wim on the shared volume.
+	assert.Contains(t, script, `%SHARED%\boot.wim`)
+	// Default target is devcell.wim.
+	assert.Contains(t, script, `%SHARED%\devcell.wim`)
+}
+
+func TestGenerateWimBuilderScript_CustomSourceWim(t *testing.T) {
+	cfg := WimPrepConfig{
+		Ops:       []WimPrepOp{{Feature: "TestFeature"}},
+		SourceWim: "install.wim",
+	}
+	script := string(GenerateWimBuilderScript(cfg))
+
+	// Must reference install.wim as the source to mount.
+	assert.Contains(t, script, `%SHARED%\install.wim`)
+	assert.Contains(t, script, "install.wim not found")
+	// Must NOT reference boot.wim as the source.
+	assert.NotContains(t, script, `%SHARED%\boot.wim`)
+}
+
+func TestGenerateWimBuilderScript_CustomTargetWim(t *testing.T) {
+	cfg := WimPrepConfig{
+		Ops:       []WimPrepOp{{Feature: "TestFeature"}},
+		TargetWim: "custom-output.wim",
+	}
+	script := string(GenerateWimBuilderScript(cfg))
+
+	assert.Contains(t, script, `custom-output.wim`)
+	// Default source still applies.
+	assert.Contains(t, script, `%SHARED%\boot.wim`)
+}
+
+func TestGenerateWimBuilderScript_SameSourceAndTarget_NoCopy(t *testing.T) {
+	cfg := WimPrepConfig{
+		Ops:       []WimPrepOp{{Feature: "TestFeature"}},
+		SourceWim: "devcell.wim",
+		TargetWim: "devcell.wim",
+	}
+	script := string(GenerateWimBuilderScript(cfg))
+
+	// When source == target, skip the copy step — DISM committed in place.
+	assert.NotContains(t, script, "copy %SHARED%")
+}
+
+func TestVirtIODriverPrepOps(t *testing.T) {
+	ops := VirtIODriverPrepOps()
+	require.Len(t, ops, 3)
+	assert.Equal(t, `NetKVM\w11\ARM64`, ops[0].Driver)
+	assert.Equal(t, `vioserial\w11\ARM64`, ops[1].Driver)
+	assert.Equal(t, `vioscsi\w11\ARM64`, ops[2].Driver)
+}
+
+func TestGenerateWimBuilderScript_DriverOp(t *testing.T) {
+	cfg := WimPrepConfig{
+		Ops: []WimPrepOp{{Driver: `NetKVM\w11\ARM64`}},
+	}
+	script := string(GenerateWimBuilderScript(cfg))
+
+	assert.Contains(t, script, `/Add-Driver /Driver:%VIRTIO%\NetKVM\w11\ARM64 /Recurse`)
+	assert.Contains(t, script, "/Image:C:\\mnt\\boot")
+}
+
+func TestGenerateWimBuilderScript_DriverOpProbesVirtioISO(t *testing.T) {
+	cfg := WimPrepConfig{
+		Ops: []WimPrepOp{{Driver: `NetKVM\w11\ARM64`}},
+	}
+	script := string(GenerateWimBuilderScript(cfg))
+
+	assert.Contains(t, script, "set VIRTIO=")
+	assert.Contains(t, script, `vioserial\w11\ARM64\vioser.inf set VIRTIO=`)
+	assert.Contains(t, script, "virtio-win ISO not found")
+}
+
+func TestGenerateWimBuilderScript_NoDriverOp_NoVirtioProbe(t *testing.T) {
+	cfg := WimPrepConfig{
+		Ops: []WimPrepOp{{Feature: "TestFeature"}},
+	}
+	script := string(GenerateWimBuilderScript(cfg))
+
+	assert.NotContains(t, script, "set VIRTIO=")
+	assert.NotContains(t, script, "virtio-win ISO not found")
+}
+
+func TestGenerateWimBuilderScript_DriverOpVerifiesDrivers(t *testing.T) {
+	cfg := WimPrepConfig{
+		Ops: []WimPrepOp{{Driver: `NetKVM\w11\ARM64`}},
+	}
+	script := string(GenerateWimBuilderScript(cfg))
+
+	assert.Contains(t, script, "/Get-Drivers")
+}
+
+func TestGenerateWimBuilderScript_MixedOps(t *testing.T) {
+	cfg := WimPrepConfig{
+		Ops: append(HyperVPrepOps(), VirtIODriverPrepOps()...),
+	}
+	script := string(GenerateWimBuilderScript(cfg))
+
+	assert.Contains(t, script, "/Enable-Feature /FeatureName:Microsoft-Hyper-V")
+	assert.Contains(t, script, `/Add-Driver /Driver:%VIRTIO%\NetKVM\w11\ARM64 /Recurse`)
+	assert.Contains(t, script, `/Add-Driver /Driver:%VIRTIO%\vioserial\w11\ARM64 /Recurse`)
+	assert.Contains(t, script, `/Add-Driver /Driver:%VIRTIO%\vioscsi\w11\ARM64 /Recurse`)
+	assert.Contains(t, script, "set VIRTIO=")
+}
+
+func TestBuildWimBuilderArgv_VirtIOISO(t *testing.T) {
+	s := testSpec()
+	wbs := WimBuilderSpec{
+		Spec:       s,
+		WinPEISO:   "/tmp/winpe.iso",
+		SharedImg:  "/tmp/shared.qcow2",
+		WindowsISO: "/tmp/windows.iso",
+		VirtIOISO:  "/tmp/virtio-win.iso",
+	}
+	argv := BuildWimBuilderArgv(wbs)
+	joined := strings.Join(argv, " ")
+
+	assert.Contains(t, joined, "file=/tmp/virtio-win.iso,media=cdrom,if=none,id=cdrom2")
+	assert.Contains(t, joined, "usb-storage,drive=cdrom2")
+}
+
+func TestBuildWimBuilderArgv_NoVirtIOISO(t *testing.T) {
+	s := testSpec()
+	wbs := WimBuilderSpec{
+		Spec:       s,
+		WinPEISO:   "/tmp/winpe.iso",
+		SharedImg:  "/tmp/shared.qcow2",
+		WindowsISO: "/tmp/windows.iso",
+	}
+	argv := BuildWimBuilderArgv(wbs)
+	joined := strings.Join(argv, " ")
+
+	assert.NotContains(t, joined, "cdrom2")
 }
 
 func TestWimBuilderScriptCommand(t *testing.T) {
