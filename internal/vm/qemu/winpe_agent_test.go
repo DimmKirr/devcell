@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestGenerateWinPEShellINI_RunsBootstrapBeforeSetup(t *testing.T) {
@@ -127,6 +128,7 @@ func TestGenerateWinPEHyperVDiagScript_StructuredOutput(t *testing.T) {
 	assert.Contains(t, out, "hvservice.sys", "must verify hypervisor service driver is present")
 	assert.Contains(t, out, "winhv.sys", "must verify WinHV platform driver is present")
 	assert.Contains(t, out, "vmms.exe", "must check for vmms binary")
+	assert.Contains(t, out, "BINARIES_TOTAL_MISSING=", "must emit parseable binary count")
 
 	// Driver registry details
 	assert.Contains(t, out, "DRIVER REGISTRY DETAILS", "must dump full driver registry keys")
@@ -149,6 +151,11 @@ func TestGenerateWinPEHyperVDiagScript_StructuredOutput(t *testing.T) {
 
 	// Start services
 	assert.Contains(t, out, "START HYPERV SERVICES", "must attempt to start services")
+	assert.Contains(t, out, "_NET_START_EXIT=", "must emit per-service net start exit code")
+	assert.Contains(t, out, "sc query", "must query service state after start attempts")
+	assert.Contains(t, out, "_SC_EXIT=", "must emit per-service sc query exit code")
+	assert.Contains(t, out, "_SC_STATE=", "must emit per-service STATE from sc query")
+	assert.Contains(t, out, "tasklist /svc", "must list service-hosting processes")
 
 	// Event logs
 	assert.Contains(t, out, "EVENT LOGS", "must collect event logs")
@@ -157,9 +164,11 @@ func TestGenerateWinPEHyperVDiagScript_StructuredOutput(t *testing.T) {
 	// SetupAPI
 	assert.Contains(t, out, "SETUPAPI LOGS", "must check driver setup logs")
 	assert.Contains(t, out, "setupapi.dev.log", "must dump setupapi device log")
+	assert.Contains(t, out, "SETUPAPI_ERRORS=", "must emit parseable setupapi error summary")
 
 	// Final status
 	assert.Contains(t, out, "FINAL DRIVER STATUS", "must report final driver status")
+	assert.Contains(t, out, "_START_VALUE=", "must emit parseable Start value per registered service")
 	assert.Contains(t, out, "POST-MORTEM SUMMARY", "must include post-mortem summary")
 	assert.Contains(t, out, "net start 2>&1", "must list all running services")
 
@@ -239,6 +248,20 @@ func TestGenerateWinPEEchoProbeScript_MountsVirtiofs(t *testing.T) {
 func TestGenerateWinPEEchoProbeScript_RunsToCompletion(t *testing.T) {
 	out := string(GenerateWinPEEchoProbeScript("devcell-logs"))
 	assert.Contains(t, out, "DEVCELL ECHO PROBE COMPLETE")
+}
+
+func TestWinPEDiagToolPaths_ContainsCoreTools(t *testing.T) {
+	paths := WinPEDiagToolPaths()
+	require.NotEmpty(t, paths, "must inject at least one tool")
+	for _, p := range paths {
+		assert.True(t, strings.HasPrefix(p, `\Windows\System32\`),
+			"tool %s must be a System32 binary", p)
+		assert.True(t, strings.HasSuffix(p, ".exe"),
+			"tool %s must be an executable", p)
+	}
+	joined := strings.Join(paths, " ")
+	assert.Contains(t, joined, "sc.exe", "sc.exe is required for service state queries")
+	assert.Contains(t, joined, "wevtutil.exe", "wevtutil.exe is required for event log queries")
 }
 
 func TestWinPEEchoProbeScriptCommand_InvokesOnAnswerVolume(t *testing.T) {

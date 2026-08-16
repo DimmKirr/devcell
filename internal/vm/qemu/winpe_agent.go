@@ -269,6 +269,18 @@ const (
 	WinPEEchoProbeScriptName = `devcell-winpe-echo-probe.cmd`
 )
 
+// WinPEDiagToolPaths returns the WIM-internal paths of System32 binaries
+// to extract from install.wim and inject into boot.wim. Stock WinPE
+// lacks these; injecting them gives the diagnostics script real service
+// management and process visibility.
+func WinPEDiagToolPaths() []string {
+	return []string{
+		`\Windows\System32\sc.exe`,
+		`\Windows\System32\tasklist.exe`,
+		`\Windows\System32\wevtutil.exe`,
+	}
+}
+
 // WinPEHyperVDiagScriptCommand returns the agent command that invokes the
 // Hyper-V/WSL2 diagnostics script.
 func WinPEHyperVDiagScriptCommand() string {
@@ -371,6 +383,7 @@ func GenerateWinPEHyperVDiagScript(progressPort string) []byte {
 	b.WriteString("    )\r\n")
 	b.WriteString(")\r\n")
 	b.WriteString("echo Binaries found: !BINARIES_OK!  missing: !BINARIES_MISSING!\r\n")
+	b.WriteString("echo BINARIES_TOTAL_MISSING=!BINARIES_MISSING!\r\n")
 	serial("binaries-ok=!BINARIES_OK! missing=!BINARIES_MISSING!")
 	b.WriteString("echo.\r\n")
 
@@ -526,7 +539,48 @@ func GenerateWinPEHyperVDiagScript(progressPort string) []byte {
 	b.WriteString("    echo -- net start %%s:\r\n")
 	b.WriteString("    net start %%s 2>&1\r\n")
 	b.WriteString("    echo   exit code: !ERRORLEVEL!\r\n")
+	b.WriteString("    echo   %%s_NET_START_EXIT=!ERRORLEVEL!\r\n")
 	b.WriteString(")\r\n")
+	b.WriteString("echo.\r\n")
+	b.WriteString("echo -- sc query service state:\r\n")
+	// wimlib on Linux is case-sensitive and may create \Windows\System32\
+	// alongside WinPE's existing \windows\system32\. Use absolute path
+	// to find sc.exe regardless of PATH case mismatch.
+	b.WriteString("set SC_EXE=\r\n")
+	b.WriteString("if exist X:\\Windows\\System32\\sc.exe set SC_EXE=X:\\Windows\\System32\\sc.exe\r\n")
+	b.WriteString("if exist X:\\windows\\system32\\sc.exe set SC_EXE=X:\\windows\\system32\\sc.exe\r\n")
+	b.WriteString("if \"!SC_EXE!\"==\"\" (\r\n")
+	b.WriteString("    echo   sc.exe: NOT FOUND — inject tools via WinPEDiagToolPaths\r\n")
+	b.WriteString("    for %%s in (hvservice vmbus winhv winhvr hvsocket HvHost vmcompute) do (\r\n")
+	b.WriteString("        echo   %%s_SC_EXIT=9009\r\n")
+	b.WriteString("        echo   %%s_SC_STATE=UNAVAILABLE\r\n")
+	b.WriteString("    )\r\n")
+	b.WriteString("    goto sc_done\r\n")
+	b.WriteString(")\r\n")
+	b.WriteString("echo   sc.exe: !SC_EXE!\r\n")
+	// sc.exe on ARM64 uses WriteConsoleW, not WriteFile — its text output
+	// cannot be captured by any file/pipe redirect (file is always 0 bytes).
+	// Derive SC_STATE from the exit code instead: 0 = queryable, 1060 = absent.
+	b.WriteString("for %%s in (hvservice vmbus winhv winhvr hvsocket HvHost vmcompute) do (\r\n")
+	b.WriteString("    echo -- sc query %%s:\r\n")
+	b.WriteString("    !SC_EXE! query %%s >nul 2>&1\r\n")
+	b.WriteString("    set SC_RC=!ERRORLEVEL!\r\n")
+	b.WriteString("    echo   %%s_SC_EXIT=!SC_RC!\r\n")
+	b.WriteString("    if !SC_RC! equ 0 (\r\n")
+	b.WriteString("        echo   %%s_SC_STATE=QUERYABLE\r\n")
+	b.WriteString("    ) else if !SC_RC! equ 1060 (\r\n")
+	b.WriteString("        echo   %%s_SC_STATE=NOT_EXIST\r\n")
+	b.WriteString("    ) else (\r\n")
+	b.WriteString("        echo   %%s_SC_STATE=ERROR\r\n")
+	b.WriteString("    )\r\n")
+	b.WriteString(")\r\n")
+	b.WriteString(":sc_done\r\n")
+	b.WriteString("echo.\r\n")
+	b.WriteString("echo -- tasklist /svc (service-hosting processes):\r\n")
+	b.WriteString("set TASKLIST_EXE=\r\n")
+	b.WriteString("if exist X:\\Windows\\System32\\tasklist.exe set TASKLIST_EXE=X:\\Windows\\System32\\tasklist.exe\r\n")
+	b.WriteString("if exist X:\\windows\\system32\\tasklist.exe set TASKLIST_EXE=X:\\windows\\system32\\tasklist.exe\r\n")
+	b.WriteString("if \"!TASKLIST_EXE!\"==\"\" (echo   tasklist: NOT FOUND) else (!TASKLIST_EXE! /svc 2>&1)\r\n")
 	b.WriteString("echo.\r\n")
 
 	// ── 12. COLLECT EVENT LOGS ──
@@ -535,18 +589,20 @@ func GenerateWinPEHyperVDiagScript(progressPort string) []byte {
 	serial("section-event-logs")
 	b.WriteString("echo === EVENT LOGS ===\r\n")
 	b.WriteString("echo -- wevtutil availability:\r\n")
-	b.WriteString("where wevtutil >nul 2>&1\r\n")
-	b.WriteString("if !ERRORLEVEL! neq 0 (\r\n")
+	b.WriteString("set WEVTUTIL_EXE=\r\n")
+	b.WriteString("if exist X:\\Windows\\System32\\wevtutil.exe set WEVTUTIL_EXE=X:\\Windows\\System32\\wevtutil.exe\r\n")
+	b.WriteString("if exist X:\\windows\\system32\\wevtutil.exe set WEVTUTIL_EXE=X:\\windows\\system32\\wevtutil.exe\r\n")
+	b.WriteString("if \"!WEVTUTIL_EXE!\"==\"\" (\r\n")
 	b.WriteString("    echo   wevtutil: NOT FOUND\r\n")
 	b.WriteString("    goto skip_evtlog\r\n")
 	b.WriteString(")\r\n")
-	b.WriteString("echo   wevtutil: found\r\n")
+	b.WriteString("echo   wevtutil: !WEVTUTIL_EXE!\r\n")
 	b.WriteString("echo.\r\n")
 	b.WriteString("echo -- Service Control Manager events (last 20):\r\n")
-	b.WriteString(`wevtutil qe System /q:"*[System[Provider[@Name='Service Control Manager']]]" /c:20 /rd:true /f:text 2>&1` + "\r\n")
+	b.WriteString(`!WEVTUTIL_EXE! qe System /q:"*[System[Provider[@Name='Service Control Manager']]]" /c:20 /rd:true /f:text 2>&1` + "\r\n")
 	b.WriteString("echo.\r\n")
 	b.WriteString("echo -- Hyper-V related events (last 20):\r\n")
-	b.WriteString(`wevtutil qe System /q:"*[System[Provider[starts-with(@Name,'Microsoft-Windows-Hyper-V')]]]" /c:20 /rd:true /f:text 2>&1` + "\r\n")
+	b.WriteString(`!WEVTUTIL_EXE! qe System /q:"*[System[Provider[starts-with(@Name,'Microsoft-Windows-Hyper-V')]]]" /c:20 /rd:true /f:text 2>&1` + "\r\n")
 	b.WriteString("echo.\r\n")
 	b.WriteString("echo -- Kernel-Boot events (last 10):\r\n")
 	b.WriteString(`wevtutil qe System /q:"*[System[Provider[@Name='Microsoft-Windows-Kernel-Boot']]]" /c:10 /rd:true /f:text 2>&1` + "\r\n")
@@ -565,9 +621,15 @@ func GenerateWinPEHyperVDiagScript(progressPort string) []byte {
 	b.WriteString("echo -- setupapi.dev.log (errors only):\r\n")
 	b.WriteString("if exist X:\\Windows\\inf\\setupapi.dev.log (\r\n")
 	b.WriteString("    findstr /i \"ERROR FAIL\" X:\\Windows\\inf\\setupapi.dev.log 2>nul\r\n")
-	b.WriteString("    if !ERRORLEVEL! neq 0 echo   no errors in setupapi.dev.log\r\n")
+	b.WriteString("    if !ERRORLEVEL! neq 0 (\r\n")
+	b.WriteString("        echo   no errors in setupapi.dev.log\r\n")
+	b.WriteString("        echo   SETUPAPI_ERRORS=NONE\r\n")
+	b.WriteString("    ) else (\r\n")
+	b.WriteString("        echo   SETUPAPI_ERRORS=FOUND\r\n")
+	b.WriteString("    )\r\n")
 	b.WriteString(") else (\r\n")
 	b.WriteString("    echo   setupapi.dev.log: NOT FOUND\r\n")
+	b.WriteString("    echo   SETUPAPI_ERRORS=NONE\r\n")
 	b.WriteString(")\r\n")
 	b.WriteString("echo.\r\n")
 
@@ -576,7 +638,7 @@ func GenerateWinPEHyperVDiagScript(progressPort string) []byte {
 	b.WriteString("rem -- 14. FINAL DRIVER STATUS (after start attempt)\r\n")
 	serial("section-final-status")
 	b.WriteString("echo === FINAL DRIVER STATUS ===\r\n")
-	b.WriteString("for %%d in (hvservice vmbus winhv winhvr hvsocket vmbusr vmbkmcl) do (\r\n")
+	b.WriteString("for %%d in (hvservice vmbus winhv winhvr hvsocket vmbusr vmbkmcl HvHost vmcompute) do (\r\n")
 	b.WriteString("    echo -- %%d:\r\n")
 	b.WriteString("    reg query \"HKLM\\SYSTEM\\CurrentControlSet\\Services\\%%d\" /v Start 2>nul\r\n")
 	b.WriteString("    if !ERRORLEVEL! neq 0 (\r\n")
@@ -584,6 +646,7 @@ func GenerateWinPEHyperVDiagScript(progressPort string) []byte {
 	b.WriteString("        echo   %%d_STATUS=NOT_REGISTERED\r\n")
 	b.WriteString("    ) else (\r\n")
 	b.WriteString("        echo   %%d_STATUS=REGISTERED\r\n")
+	b.WriteString("        for /f \"tokens=3\" %%v in ('reg query \"HKLM\\SYSTEM\\CurrentControlSet\\Services\\%%d\" /v Start ^| find \"Start\"') do echo   %%d_START_VALUE=%%v\r\n")
 	b.WriteString("    )\r\n")
 	b.WriteString(")\r\n")
 	b.WriteString("echo.\r\n")
