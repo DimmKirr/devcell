@@ -380,6 +380,21 @@ func (v VolumeMount) Resolved() string {
 	return v.Mount
 }
 
+// ContainerPath returns the container-side mount point with trailing slashes
+// stripped so path comparisons work regardless of how the user wrote the path.
+// For "host:container" or "host:container:mode" it returns "container".
+// For shorthand (no colon) it returns the path itself (identity mount).
+func (v VolumeMount) ContainerPath() string {
+	if v.Mount == "" {
+		return ""
+	}
+	parts := strings.SplitN(v.Mount, ":", 3)
+	if len(parts) >= 2 {
+		return strings.TrimRight(parts[1], "/")
+	}
+	return strings.TrimRight(v.Mount, "/")
+}
+
 // PackagesSection holds [packages] config for npm and python tools.
 type PackagesSection struct {
 	Npm    map[string]string `toml:"npm"`
@@ -979,8 +994,26 @@ func Merge(global, project CellConfig) CellConfig {
 		out.Ports.PublishIP = project.Ports.PublishIP
 	}
 
-	// Slices accumulate: global first, then project
-	out.Volumes = append(global.Volumes, project.Volumes...)
+	// Volumes accumulate; project wins when both layers mount at the same
+	// container path. Dedup by ContainerPath prevents Docker's
+	// "Duplicate mount point" error.
+	{
+		seen := make(map[string]int, len(global.Volumes)+len(project.Volumes))
+		for _, v := range global.Volumes {
+			cp := v.ContainerPath()
+			seen[cp] = len(out.Volumes)
+			out.Volumes = append(out.Volumes, v)
+		}
+		for _, v := range project.Volumes {
+			cp := v.ContainerPath()
+			if idx, ok := seen[cp]; ok {
+				out.Volumes[idx] = v
+			} else {
+				seen[cp] = len(out.Volumes)
+				out.Volumes = append(out.Volumes, v)
+			}
+		}
+	}
 
 	// LLM models: project default wins, providers accumulate (project wins on key conflict)
 	if project.LLM.Models.Default != "" {

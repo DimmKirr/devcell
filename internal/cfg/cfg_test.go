@@ -118,6 +118,54 @@ func TestMerge_VolumesAccumulate(t *testing.T) {
 	}
 }
 
+func TestMerge_VolumesDedupByContainerPath(t *testing.T) {
+	global := cfg.CellConfig{Volumes: []cfg.VolumeMount{
+		{Mount: "/host/a:/container/shared"},
+	}}
+	project := cfg.CellConfig{Volumes: []cfg.VolumeMount{
+		{Mount: "/host/b:/container/shared"},
+	}}
+	merged := cfg.Merge(global, project)
+	if len(merged.Volumes) != 1 {
+		t.Fatalf("want 1 volume (deduped), got %d: %+v", len(merged.Volumes), merged.Volumes)
+	}
+	if merged.Volumes[0].Mount != "/host/b:/container/shared" {
+		t.Errorf("project should win on conflict, got %q", merged.Volumes[0].Mount)
+	}
+}
+
+func TestMerge_VolumesDedupShorthand(t *testing.T) {
+	global := cfg.CellConfig{Volumes: []cfg.VolumeMount{
+		{Mount: "/Users/dmitry/dev/skills"},
+	}}
+	project := cfg.CellConfig{Volumes: []cfg.VolumeMount{
+		{Mount: "/Users/dmitry/dev/skills"},
+	}}
+	merged := cfg.Merge(global, project)
+	if len(merged.Volumes) != 1 {
+		t.Errorf("want 1 volume (deduped shorthand), got %d: %+v", len(merged.Volumes), merged.Volumes)
+	}
+}
+
+func TestVolumeMount_ContainerPath(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"/host:/container", "/container"},
+		{"/host:/container:ro", "/container"},
+		{"/Users/dmitry/dev/skills", "/Users/dmitry/dev/skills"},
+		{"/Users/dmitry/dev/skills/", "/Users/dmitry/dev/skills"},
+		{"/host/:/container/", "/container"},
+		{"", ""},
+	}
+	for _, tc := range cases {
+		got := cfg.VolumeMount{Mount: tc.in}.ContainerPath()
+		if got != tc.want {
+			t.Errorf("ContainerPath(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestApplyEnv_ImageTagOverride(t *testing.T) {
 	c := cfg.CellConfig{Cell: cfg.CellSection{ImageTag: "v0.0.0-ultimate"}}
 	cfg.ApplyEnv(&c, func(k string) string {

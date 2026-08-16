@@ -375,6 +375,66 @@ func TestArgv_CfgVolumes_SinglePathShorthand(t *testing.T) {
 	}
 }
 
+func TestArgv_CfgVolumes_DedupAgainstBaseDir(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.CellCfg.Volumes = []cfg.VolumeMount{
+			{Mount: "/home/bob/myproject"},
+			{Mount: "/other/path:/other/path"},
+		}
+	})
+	count := 0
+	for i, a := range argv {
+		if a == "-v" && i+1 < len(argv) {
+			if strings.Contains(argv[i+1], "/home/bob/myproject:/home/bob/myproject") {
+				count++
+			}
+		}
+	}
+	if count != 1 {
+		t.Errorf("BaseDir identity mount should appear exactly once, got %d", count)
+	}
+	if !hasConsecutive(argv, "-v", "/other/path:/other/path") {
+		t.Errorf("non-duplicate volume should still be present")
+	}
+}
+
+func TestArgv_CfgVolumes_DedupTrailingSlash(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.CellCfg.Volumes = []cfg.VolumeMount{
+			{Mount: "/home/bob/myproject/"},
+		}
+	})
+	// Without dedup this would produce a third "-v /home/bob/myproject/:/home/bob/myproject/"
+	// that Docker rejects as "Duplicate mount point".
+	// The two standard mounts (identity + appname alias) should still be present.
+	withoutDedup := buildArgv(t, func(s *runner.RunSpec) {})
+	count := 0
+	for i, a := range argv {
+		if a == "-v" && i+1 < len(argv) && argv[i+1] == "/home/bob/myproject/:/home/bob/myproject/" {
+			count++
+		}
+	}
+	if count != 0 {
+		t.Errorf("trailing-slash user volume should be suppressed, but found %d", count)
+	}
+	// Standard mounts must be unchanged
+	stdCount := 0
+	for i, a := range argv {
+		if a == "-v" && i+1 < len(argv) && strings.HasPrefix(argv[i+1], "/home/bob/myproject:") {
+			stdCount++
+		}
+	}
+	baselineStd := 0
+	for i, a := range withoutDedup {
+		if a == "-v" && i+1 < len(withoutDedup) && strings.HasPrefix(withoutDedup[i+1], "/home/bob/myproject:") {
+			baselineStd++
+		}
+	}
+	if stdCount != baselineStd {
+		t.Errorf("standard mounts changed: got %d, want %d", stdCount, baselineStd)
+	}
+}
+
 // --- cfg mise ---
 
 func TestArgv_MiseEnvVars(t *testing.T) {

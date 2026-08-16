@@ -457,8 +457,25 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 	}
 
 
-	// cfg [[volumes]] entries
+	// cfg [[volumes]] entries — skip any whose container path duplicates
+	// a standard mount (e.g. BaseDir identity mount) to avoid Docker's
+	// "Duplicate mount point" error.
+	stdMounts := map[string]bool{
+		c.BaseDir:                              true,
+		"/" + c.AppName:                        true,
+		"/home/" + c.HostUser:                  true,
+		"/var/run/docker.sock":                 true,
+		"/home/" + c.HostUser + "/.claude/commands": true,
+		"/home/" + c.HostUser + "/.claude/agents":   true,
+		"/home/" + c.HostUser + "/.claude/skills":   true,
+		"/etc/devcell/config":                  true,
+		"/home/" + c.HostUser + "/.config/devcell":  true,
+	}
 	for _, vol := range spec.CellCfg.Volumes {
+		cp := vol.ContainerPath()
+		if stdMounts[cp] {
+			continue
+		}
 		argv = append(argv, "-v", vol.Resolved())
 	}
 
