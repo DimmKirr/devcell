@@ -69,6 +69,11 @@ in
         of whichever base prompt is in effect, alongside the container context
         devcell always contributes. Nothing is removed, so this is the
         lower-risk of the two.
+
+        Note: pkgs.formats.toml renders newlines as \n inside a quoted string,
+        not as TOML multiline (triple-quoted). The content is preserved — the
+        Go parser decodes \n correctly — but the generated devcell.toml is
+        harder to read. This is a remarshal limitation, not a bug.
       '';
     };
   };
