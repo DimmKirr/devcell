@@ -52,6 +52,11 @@
       mcp      # Model Context Protocol SDK
       fastmcp  # MCP framework
     ];
+    # FastMCP >=2.x renamed the constructor kwarg from description to instructions
+    postPatch = ''
+      substituteInPlace gimp_mcp_server.py \
+        --replace-fail 'description="GIMP' 'instructions="GIMP'
+    '';
     doCheck = false;
   };
 in {
