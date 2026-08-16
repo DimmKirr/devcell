@@ -45,3 +45,17 @@ func TestHyperVBootPatches_ContainsAllRequiredPatches(t *testing.T) {
 		assert.True(t, found, "missing patch: %s\\%s", exp.KeyPath, exp.ValueName)
 	}
 }
+
+func TestHyperVBootChecks_MatchesPatches(t *testing.T) {
+	patches := HyperVBootPatches().Patches
+	checks := HyperVBootChecks()
+
+	require.Len(t, checks, len(patches), "checks and patches must cover the same entries")
+
+	for i, p := range patches {
+		c := checks[i]
+		assert.Equal(t, p.KeyPath, c.KeyPath, "check[%d] KeyPath", i)
+		assert.Equal(t, p.ValueName, c.ValueName, "check[%d] ValueName", i)
+		assert.Equal(t, p.Value, c.Expected, "check[%d] Expected value", i)
+	}
+}

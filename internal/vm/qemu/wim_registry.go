@@ -59,6 +59,59 @@ func PatchWimRegistry(wim *wimlib.WIM, imageNum int, rp WimRegistryPatch) (clean
 	return rm, nil
 }
 
+// WimDWordCheck describes a single registry DWORD expectation for
+// VerifyWimRegistry.
+type WimDWordCheck struct {
+	KeyPath   string
+	ValueName string
+	Expected  uint32
+	Optional  bool
+}
+
+// VerifyWimRegistry extracts a registry hive from a WIM image and verifies
+// that every check's DWORD value matches the expectation. Returns the first
+// non-optional mismatch as an error. Optional checks that fail (key/value
+// missing) are silently skipped.
+func VerifyWimRegistry(wim *wimlib.WIM, imageNum int, hivePath string, checks []WimDWordCheck) error {
+	tmpDir, err := os.MkdirTemp("", "goregedit-verify-*")
+	if err != nil {
+		return fmt.Errorf("creating temp dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	if err := wim.ExtractPaths(imageNum, tmpDir, []string{hivePath}); err != nil {
+		return fmt.Errorf("extracting %s: %w", hivePath, err)
+	}
+
+	localPath := filepath.Join(tmpDir, filepath.FromSlash(strings.ReplaceAll(hivePath, `\`, `/`)))
+	for _, c := range checks {
+		val, err := goregedit.ReadDWord(localPath, c.KeyPath, c.ValueName)
+		if err != nil {
+			if c.Optional {
+				continue
+			}
+			return fmt.Errorf("reading %s\\%s: %w", c.KeyPath, c.ValueName, err)
+		}
+		if val != c.Expected {
+			return fmt.Errorf("%s\\%s: got %d, want %d", c.KeyPath, c.ValueName, val, c.Expected)
+		}
+	}
+	return nil
+}
+
+// HyperVBootChecks returns the registry value expectations corresponding
+// to HyperVBootPatches. Use with VerifyWimRegistry to assert patches
+// were applied correctly.
+func HyperVBootChecks() []WimDWordCheck {
+	return []WimDWordCheck{
+		{KeyPath: `ControlSet001\Services\hvservice`, ValueName: "Start", Expected: 0, Optional: true},
+		{KeyPath: `ControlSet001\Services\vmbusr`, ValueName: "Start", Expected: 0, Optional: true},
+		{KeyPath: `ControlSet001\Services\vmbus\StartOverride`, ValueName: "0", Expected: 0, Optional: true},
+		{KeyPath: `ControlSet001\Services\HvHost`, ValueName: "Start", Expected: 2, Optional: true},
+		{KeyPath: `ControlSet001\Services\vmcompute`, ValueName: "Start", Expected: 2, Optional: true},
+	}
+}
+
 // HyperVBootPatches returns the registry patches needed to make Hyper-V
 // services start at boot in WinPE. Without these, hvservice has Start=3
 // (Manual) and never loads.
@@ -67,15 +120,16 @@ func HyperVBootPatches() WimRegistryPatch {
 		HivePath: `\Windows\System32\config\SYSTEM`,
 		Patches: []goregedit.DWordPatch{
 			// Kernel drivers — must load at boot (Start=0).
-			{KeyPath: `ControlSet001\Services\hvservice`, ValueName: "Start", Value: 0},
-			{KeyPath: `ControlSet001\Services\vmbusr`, ValueName: "Start", Value: 0},
+			// Optional: not every boot.wim ships every service key.
+			{KeyPath: `ControlSet001\Services\hvservice`, ValueName: "Start", Value: 0, Optional: true},
+			{KeyPath: `ControlSet001\Services\vmbusr`, ValueName: "Start", Value: 0, Optional: true},
 
 			// vmbus has Start=0 but StartOverride "0"=3 downgrades it to Manual.
-			{KeyPath: `ControlSet001\Services\vmbus\StartOverride`, ValueName: "0", Value: 0},
+			{KeyPath: `ControlSet001\Services\vmbus\StartOverride`, ValueName: "0", Value: 0, Optional: true},
 
 			// Win32 services — Auto (2) so SCM starts them in WinPE.
-			{KeyPath: `ControlSet001\Services\HvHost`, ValueName: "Start", Value: 2},
-			{KeyPath: `ControlSet001\Services\vmcompute`, ValueName: "Start", Value: 2},
+			{KeyPath: `ControlSet001\Services\HvHost`, ValueName: "Start", Value: 2, Optional: true},
+			{KeyPath: `ControlSet001\Services\vmcompute`, ValueName: "Start", Value: 2, Optional: true},
 		},
 	}
 }

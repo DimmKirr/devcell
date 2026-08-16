@@ -9,6 +9,35 @@ import (
 	"github.com/DimmKirr/devcell/internal/wimlib"
 )
 
+// PatchDevcellWim applies registry patches to an on-disk WIM file (typically
+// devcell.wim after DISM offline servicing). This is the host-side post-step
+// that sets correct Start values for services created or updated by DISM.
+func PatchDevcellWim(wimPath string, imageNum int, registryPatches ...WimRegistryPatch) error {
+	if !wimlib.Available() {
+		return fmt.Errorf("wimlib not available — build with -tags wimlib")
+	}
+
+	wim, err := wimlib.OpenWIM(wimPath)
+	if err != nil {
+		return fmt.Errorf("opening WIM: %w", err)
+	}
+	defer wim.Close()
+
+	for _, rp := range registryPatches {
+		cleanup, err := PatchWimRegistry(wim, imageNum, rp)
+		if err != nil {
+			return fmt.Errorf("patching registry %s: %w", rp.HivePath, err)
+		}
+		defer cleanup()
+	}
+
+	if err := wim.Overwrite(); err != nil {
+		return fmt.Errorf("overwriting WIM: %w", err)
+	}
+
+	return nil
+}
+
 // InjectWinPEPayload uses wimlib to inject WinPE agent files into boot.wim
 // image 2. The injectDir must contain winpeshl.ini, bootstrap.cmd, agent.cmd,
 // and optionally vioserial drivers under drivers/. The WIM is modified in-place.
