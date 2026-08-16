@@ -102,7 +102,7 @@ func TestWinPEEchoProbe(t *testing.T) {
 
 			// ── 4. Inject into boot.wim image 2 ──
 			bootWimPath := filepath.Join(stageDir, "sources", "boot.wim")
-			injectIntoBootWim(t, bootWimPath, injectDir)
+			injectIntoBootWim(t, bootWimPath, injectDir, diagToolFiles{})
 
 			// ── 5. Create custom bootable ISO ──
 			winpeISO := filepath.Join(tmpDir, "winpe-echo.iso")

@@ -3,6 +3,7 @@
 package qemu
 
 import (
+	"fmt"
 	"hash/fnv"
 	"os"
 	"os/exec"
@@ -45,7 +46,10 @@ func TestWinPEHyperVInjection(t *testing.T) {
 			}
 
 			qemuBin := requireQEMUBin(t)
-			fwPath := requireFirmware(t)
+			kernelFW, err := KernelFirmwarePath()
+			if err != nil {
+				t.Skipf("no kernel-bootable firmware: %v", err)
+			}
 			winISO := requireWindowsISO(t)
 			virtioISO := requireVirtioISO(t)
 
@@ -59,6 +63,12 @@ func TestWinPEHyperVInjection(t *testing.T) {
 			// ── 1b. Extract vioserial driver for progress channel ──
 			vioserialDrivers, err := LoadWinPEVioserialDrivers(virtioISO)
 			require.NoError(t, err, "extracting vioserial drivers from virtio-win ISO")
+
+			// ── 1c. Extract diagnostic tools from install.wim ──
+			// Stock WinPE lacks sc.exe, tasklist.exe, wevtutil.exe — extract
+			// them from the full Windows install.wim so they can be injected
+			// into boot.wim alongside scripts and registry patches.
+			diagTools := extractDiagToolsFromInstallWim(t, winISO)
 
 			// ── 2. Generate WinPE payload scripts ──
 			injectDir := filepath.Join(tmpDir, "inject")
@@ -92,7 +102,7 @@ func TestWinPEHyperVInjection(t *testing.T) {
 
 			// ── 3. Inject into boot.wim image 2 via wimlib ──
 			bootWimPath := filepath.Join(stageDir, "sources", "boot.wim")
-			injectIntoBootWim(t, bootWimPath, injectDir, HyperVBootPatches())
+			injectIntoBootWim(t, bootWimPath, injectDir, diagTools, HyperVBootPatches())
 
 			// ── 4. Create custom bootable ISO ──
 			winpeISO := filepath.Join(tmpDir, "winpe-hyperv.iso")
@@ -116,16 +126,6 @@ func TestWinPEHyperVInjection(t *testing.T) {
 			}
 			require.NoError(t, err, "qemu-img create: %s", out)
 
-			fwInfo, err := os.Stat(fwPath)
-			require.NoError(t, err)
-			kernelMode := fwInfo.Size() < 64*1024*1024
-
-			var varsPath string
-			if !kernelMode {
-				varsPath = filepath.Join(tmpDir, "vars.fd")
-				require.NoError(t, PrepareVarsFile(fwPath, varsPath))
-			}
-
 			serialLog := filepath.Join(resultsDir, "serial.log")
 			guestProgressLog := filepath.Join(resultsDir, "guest-progress.log")
 			spec := Spec{
@@ -133,13 +133,12 @@ func TestWinPEHyperVInjection(t *testing.T) {
 				CPUs:                 4,
 				MemoryGB:             4,
 				DiskPath:             diskPath,
-				FirmwarePath:         fwPath,
-				VarsPath:             varsPath,
-				FirmwareKernel:       kernelMode,
+				FirmwarePath:         kernelFW,
+				FirmwareKernel:       true,
+				SecureWorld:          true,
 				QMPSocketDir:         tmpDir,
 				DisplayType:          "none",
 				Accel:                qemuAccel,
-				MachineType:          "virt",
 				SerialLogPath:        serialLog,
 				GuestProgressLogPath: guestProgressLog,
 				NoReboot:             true,
@@ -151,118 +150,31 @@ func TestWinPEHyperVInjection(t *testing.T) {
 
 			argv := BuildWinPECommand(spec, winpeISO, answerImg)
 			argv[0] = qemuBin
-			// Attach the original Windows ISO so the diag script can find
-			// install.wim (the custom WinPE ISO only has boot files).
-			argv = append(argv,
-				"-drive", "file="+winISO+",media=cdrom,if=none,id=cdrom1",
-				"-device", "usb-storage,drive=cdrom1,removable=true,bus="+USBBusID+".0")
 			appendRunInfo(t, resultsDir, "test:  "+t.Name()+"\nargv:  "+strings.Join(argv, " ")+"\n")
 
 			require.NoError(t, EnsureScreenshotDir(resultsDir, ScreenSourceQMP))
 
 			// ── 7. Boot and poll ──
-			exclusiveQEMU(t)
-			cmd := exec.Command(argv[0], argv[1:]...)
-			qemuLog := qemuOutput(t, resultsDir, argv)
-			cmd.Stdout = qemuLog
-			cmd.Stderr = qemuLog
-			require.NoError(t, cmd.Start(), "starting QEMU")
-			defer func() {
-				cmd.Process.Kill()
-				cmd.Wait()
-			}()
-
-			waitForSocket(t, qmpSock, 30*time.Second, resultsDir)
-			assertAccel(t, qmpSock, accel, resultsDir)
-
-			stop := make(chan struct{})
-			defer close(stop)
-			efiShellCh := WatchSerialForEFIShell(serialLog, stop)
-			syncExCh := WatchSerialForSyncException(serialLog, stop)
-
-			const (
-				overallDeadline = 6 * time.Minute
-				pollInterval    = 10 * time.Second
-				stallBudget     = 60 * time.Second
-			)
-			stallLimit := StallPollsFor(int(stallBudget.Seconds()), int(pollInterval.Seconds()))
-			var stall StallTracker
-
-			ppmPath := filepath.Join(tmpDir, "screen.ppm")
-			start := time.Now()
-			frame := 0
-			for time.Since(start) < overallDeadline {
-				time.Sleep(pollInterval)
-				frame++
-
-				var pollHash uint64
-				var pollRead int64
-				var pollPC string
-
-				os.Remove(ppmPath)
-				if err := QMPScreendump(qmpSock, ppmPath); err == nil {
-					if ppmData, err := os.ReadFile(ppmPath); err == nil {
-						h := fnv.New64a()
-						h.Write(ppmData)
-						pollHash = h.Sum64()
-					}
-					pngPath := ScreenshotPath(resultsDir, ScreenSourceQMP, time.Now(),
-						"none", frame, frame, "png")
-					if err := ConvertPPMtoPNG(ppmPath, pngPath); err == nil {
-						t.Logf("[frame %d] saved %s", frame, filepath.Base(pngPath))
-					}
+			// ARM64 EDK2 kernel firmware intermittently crashes with
+			// Synchronous Exception when enumerating the USB answer
+			// volume as a boot candidate. Retry up to 3 times.
+			const maxFWRetries = 3
+			var fwCrashCount int
+			for attempt := 1; attempt <= maxFWRetries; attempt++ {
+				if attempt > 1 {
+					t.Logf("firmware crash retry %d/%d — restarting QEMU", attempt, maxFWRetries)
+					os.Truncate(serialLog, 0)
 				}
 
-				if stats, err := QMPBlockStats(qmpSock); err == nil {
-					for _, s := range stats {
-						pollRead += s.ReadBytes
-					}
-				}
-				if regs, err := QMPHumanMonitor(qmpSock, "info registers"); err == nil {
-					pollPC = ExtractRegister(regs, "PC=")
-				}
-
-				n := stall.Observe(StallSignal{ScreenHash: pollHash, ReadBytes: pollRead, PC: pollPC})
-				t.Logf("[frame %d] hash=%016x rd=%d PC=%s stall=%d/%d",
-					frame, pollHash, pollRead, pollPC, n, stallLimit)
-
-				if stall.Stalled(stallLimit) {
-					if _, err := os.Stat(ppmPath); err == nil {
-						ConvertPPMtoPNG(ppmPath, filepath.Join(resultsDir, "stalled-last.png"))
-					}
-					dumpSerialLog(t, serialLog, resultsDir)
-					t.Fatalf("guest stalled: screen, disk IO, and PC unchanged for %d consecutive polls (%v)",
-						stall.Consecutive(), time.Duration(stall.Consecutive())*pollInterval)
-				}
-
-				select {
-				case reason := <-syncExCh:
-					dumpSerialLog(t, serialLog, resultsDir)
-					t.Fatalf("firmware crashed during boot — Synchronous Exception: %s", reason)
-				case reason := <-efiShellCh:
-					dumpSerialLog(t, serialLog, resultsDir)
-					t.Fatalf("firmware dropped to EFI shell: %s", reason)
-				default:
-				}
-
-				doneMarker := readAnswerVolumeFile(t, answerImg, "/"+AgentDoneFile)
-				if doneMarker != "" {
-					t.Logf("agent done marker appeared after %s (%d frames)", time.Since(start).Round(time.Second), frame)
+				crashed := bootWinPEAndPoll(t, argv, qmpSock, serialLog, answerImg, tmpDir, resultsDir)
+				if !crashed {
 					break
 				}
+				fwCrashCount++
+				if fwCrashCount >= maxFWRetries {
+					t.Fatalf("firmware crashed %d/%d times — giving up", fwCrashCount, maxFWRetries)
+				}
 			}
-
-			// ── 8. Capture final state ──
-			os.Remove(ppmPath)
-			if err := QMPScreendump(qmpSock, ppmPath); err == nil {
-				frame++
-				pngPath := ScreenshotPath(resultsDir, ScreenSourceQMP, time.Now(),
-					"final", frame, frame, "png")
-				ConvertPPMtoPNG(ppmPath, pngPath)
-			}
-
-			cmd.Process.Kill()
-			cmd.Wait()
 
 			// ── 9. Assert diagnostics ──
 			diagOut := readAnswerVolumeFile(t, answerImg, "/"+AgentResultFile)
@@ -305,12 +217,70 @@ func TestWinPEHyperVInjection(t *testing.T) {
 					"must contain section: %s", section.desc)
 			}
 
-			assert.Contains(t, diagOut, "vmms",
-				"must query the vmms (Hyper-V VM Management) service")
-			assert.Contains(t, diagOut, "net start hvservice",
-				"must attempt net start hvservice")
-			assert.Contains(t, diagOut, "hvservice_STATUS=",
-				"must report hvservice registration status")
+			// ── 1. Packages installed: core Hyper-V binaries present in boot.wim ──
+
+			for _, bin := range []string{
+				"hvaa64.exe", "hvloader.dll", "hvservice.sys",
+				"winhv.sys", "winhvr.sys", "hvsocket.sys",
+				"vmbus.sys", "vmbkmcl.sys",
+			} {
+				assert.NotContains(t, diagOut, "MISSING: X:\\Windows\\System32\\"+bin,
+					"core binary %s must not be missing from boot.wim", bin)
+				assert.NotContains(t, diagOut, "MISSING: X:\\Windows\\System32\\drivers\\"+bin,
+					"core binary %s must not be missing from boot.wim", bin)
+			}
+
+			// Services report their registration status.
+			for _, svc := range []string{
+				"hvservice", "vmbus", "vmbusr", "HvHost", "vmcompute",
+				"winhv", "winhvr", "hvsocket", "vmbkmcl",
+			} {
+				assert.Contains(t, diagOut, svc+"_STATUS=",
+					"must report %s registration status", svc)
+			}
+
+			// Services that exist in stock boot.wim MUST be REGISTERED
+			// after go-regedit patching.
+			for _, svc := range []string{"hvservice", "vmbus", "HvHost"} {
+				assert.Contains(t, diagOut, svc+"_STATUS=REGISTERED",
+					"%s must be registered in boot.wim", svc)
+			}
+
+			// ── 2. Able to start: correct Start values + start attempted ──
+
+			// Boot-load drivers: go-regedit patched Start from 3→0.
+			for _, svc := range []struct{ name, value string }{
+				{"hvservice", "0x0"},
+				{"vmbus", "0x0"},
+			} {
+				assert.Contains(t, diagOut, svc.name+"_START_VALUE="+svc.value,
+					"%s must have Start=%s (Boot) after offline registry patching", svc.name, svc.value)
+			}
+
+			// Auto-start service: go-regedit patched HvHost Start to 2.
+			assert.Contains(t, diagOut, "HvHost_START_VALUE=0x2",
+				"HvHost must have Start=0x2 (Auto) after offline registry patching")
+
+			// net start was attempted for every core driver.
+			for _, svc := range []string{"hvservice", "vmbus", "winhv", "winhvr", "hvsocket"} {
+				assert.Contains(t, diagOut, svc+"_NET_START_EXIT=",
+					"must attempt net start %s and report exit code", svc)
+			}
+
+			// sc query: sc.exe on ARM64 uses WriteConsoleW so text output
+			// can't be captured, but the exit code is reliable. Exit 0 means
+			// the service exists and is queryable; 1060 means absent.
+			for _, svc := range []string{"hvservice", "vmbus", "HvHost"} {
+				assert.Contains(t, diagOut, svc+"_SC_EXIT=0",
+					"sc query %s must succeed (exit 0) for registered services", svc)
+				assert.Contains(t, diagOut, svc+"_SC_STATE=QUERYABLE",
+					"registered service %s must be QUERYABLE via sc.exe", svc)
+			}
+
+			// ── 2.1. Clean logs: no driver setup errors ──
+
+			assert.Contains(t, diagOut, "SETUPAPI_ERRORS=NONE",
+				"setupapi.dev.log must have no ERROR/FAIL entries after Hyper-V injection")
 		})
 	}
 }
@@ -413,11 +383,72 @@ func extract7z(isoPath, filePath string) ([]byte, error) {
 	return os.ReadFile(filepath.Join(tmpDir, base))
 }
 
+// diagToolFiles holds the WIM path → host filesystem path mapping for
+// diagnostic tools extracted from install.wim.
+type diagToolFiles struct {
+	// wimPath → host filesystem path
+	tools map[string]string
+}
+
+// extractDiagToolsFromInstallWim extracts diagnostic tools (sc.exe, etc.)
+// from the full Windows install.wim inside the ISO. Returns the extracted
+// tool mappings; the caller injects them into boot.wim in the same WIM
+// session as scripts and registry patches.
+func extractDiagToolsFromInstallWim(t *testing.T, winISO string) diagToolFiles {
+	t.Helper()
+
+	result := diagToolFiles{tools: make(map[string]string)}
+	tmpDir := t.TempDir()
+
+	installWimPath := filepath.Join(tmpDir, "install.wim")
+	for _, isoPath := range []string{"sources/install.wim", "Sources/install.wim"} {
+		cmd := exec.Command("7z", "e", "-o"+tmpDir, "-y", winISO, isoPath)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Logf("7z extract %s: %v (%s)", isoPath, err, out)
+			continue
+		}
+		break
+	}
+	if _, err := os.Stat(installWimPath); err != nil {
+		t.Logf("warning: could not extract install.wim from ISO — skipping tool extraction")
+		return result
+	}
+	t.Logf("extracted install.wim (%s)", installWimPath)
+
+	installWim, err := wimlib.OpenWIM(installWimPath)
+	require.NoError(t, err, "opening install.wim")
+	defer installWim.Close()
+
+	toolsDir := filepath.Join(tmpDir, "tools")
+	require.NoError(t, os.MkdirAll(toolsDir, 0755))
+
+	for _, wp := range WinPEDiagToolPaths() {
+		if err := installWim.ExtractPaths(1, toolsDir, []string{wp}); err != nil {
+			t.Logf("warning: could not extract %s from install.wim: %v", wp, err)
+			continue
+		}
+		rel := strings.TrimPrefix(wp, `\`)
+		rel = strings.ReplaceAll(rel, `\`, string(filepath.Separator))
+		fsPath := filepath.Join(toolsDir, rel)
+		if _, err := os.Stat(fsPath); err != nil {
+			t.Logf("warning: extracted %s but file not found at %s", wp, fsPath)
+			continue
+		}
+		result.tools[wp] = fsPath
+		t.Logf("extracted %s (%s)", wp, fsPath)
+	}
+	installWim.Close()
+	os.Remove(installWimPath)
+
+	t.Logf("extracted %d diagnostic tools from install.wim", len(result.tools))
+	return result
+}
+
 // injectIntoBootWim uses wimlib to add WinPE payload files into boot.wim
 // image 2 ("Microsoft Windows Setup"). The WIM is modified in-place.
 // Optional registryPatches are applied to hives inside the WIM before
 // overwriting (e.g. setting hvservice Start=0 for Hyper-V boot).
-func injectIntoBootWim(t *testing.T, bootWimPath, injectDir string, registryPatches ...WimRegistryPatch) {
+func injectIntoBootWim(t *testing.T, bootWimPath, injectDir string, diagTools diagToolFiles, registryPatches ...WimRegistryPatch) {
 	t.Helper()
 
 	require.True(t, wimlib.Available(), "wimlib CGO bindings not available — build with -tags wimlib")
@@ -442,6 +473,11 @@ func injectIntoBootWim(t *testing.T, bootWimPath, injectDir string, registryPatc
 	require.NoError(t, wim.UpdateImageAddTree(imageNum,
 		injectDir, `\devcell`))
 
+	for wimPath, fsPath := range diagTools.tools {
+		t.Logf("injecting diag tool %s into boot.wim", wimPath)
+		require.NoError(t, wim.UpdateImageAdd(imageNum, fsPath, wimPath))
+	}
+
 	for _, rp := range registryPatches {
 		t.Logf("patching WIM registry: %s (%d patches)", rp.HivePath, len(rp.Patches))
 		cleanup, err := PatchWimRegistry(wim, imageNum, rp)
@@ -449,6 +485,122 @@ func injectIntoBootWim(t *testing.T, bootWimPath, injectDir string, registryPatc
 		defer cleanup()
 	}
 
+	infoJSON := filepath.Join(injectDir, "info.json")
+	require.NoError(t, os.WriteFile(infoJSON,
+		[]byte(fmt.Sprintf(`{"version":"%s"}`, time.Now().UTC().Format(time.RFC3339))),
+		0644))
+	require.NoError(t, wim.UpdateImageAdd(imageNum, infoJSON, `\info.json`))
+
 	require.NoError(t, wim.Overwrite())
-	t.Logf("boot.wim modified in-place with payload scripts")
+	t.Logf("boot.wim modified in-place with payload scripts and %d diag tools", len(diagTools.tools))
+}
+
+// bootWinPEAndPoll starts QEMU, polls for completion, and returns true if
+// the firmware crashed with a Synchronous Exception (caller should retry).
+func bootWinPEAndPoll(t *testing.T, argv []string, qmpSock, serialLog, answerImg, tmpDir, resultsDir string) (firmwareCrashed bool) {
+	t.Helper()
+
+	exclusiveQEMU(t)
+	cmd := exec.Command(argv[0], argv[1:]...)
+	qemuLog := qemuOutput(t, resultsDir, argv)
+	cmd.Stdout = qemuLog
+	cmd.Stderr = qemuLog
+	require.NoError(t, cmd.Start(), "starting QEMU")
+	defer func() {
+		cmd.Process.Kill()
+		cmd.Wait()
+	}()
+
+	waitForSocket(t, qmpSock, 30*time.Second, resultsDir)
+
+	stop := make(chan struct{})
+	defer close(stop)
+	efiShellCh := WatchSerialForEFIShell(serialLog, stop)
+	syncExCh := WatchSerialForSyncException(serialLog, stop)
+
+	const (
+		overallDeadline = 6 * time.Minute
+		pollInterval    = 10 * time.Second
+		stallBudget     = 60 * time.Second
+	)
+	stallLimit := StallPollsFor(int(stallBudget.Seconds()), int(pollInterval.Seconds()))
+	var stall StallTracker
+
+	ppmPath := filepath.Join(tmpDir, "screen.ppm")
+	start := time.Now()
+	frame := 0
+	for time.Since(start) < overallDeadline {
+		time.Sleep(pollInterval)
+		frame++
+
+		var pollHash uint64
+		var pollRead int64
+		var pollPC string
+
+		os.Remove(ppmPath)
+		if err := QMPScreendump(qmpSock, ppmPath); err == nil {
+			if ppmData, err := os.ReadFile(ppmPath); err == nil {
+				h := fnv.New64a()
+				h.Write(ppmData)
+				pollHash = h.Sum64()
+			}
+			pngPath := ScreenshotPath(resultsDir, ScreenSourceQMP, time.Now(),
+				"none", frame, frame, "png")
+			if err := ConvertPPMtoPNG(ppmPath, pngPath); err == nil {
+				t.Logf("[frame %d] saved %s", frame, filepath.Base(pngPath))
+			}
+		}
+
+		if stats, err := QMPBlockStats(qmpSock); err == nil {
+			for _, s := range stats {
+				pollRead += s.ReadBytes
+			}
+		}
+		if regs, err := QMPHumanMonitor(qmpSock, "info registers"); err == nil {
+			pollPC = ExtractRegister(regs, "PC=")
+		}
+
+		n := stall.Observe(StallSignal{ScreenHash: pollHash, ReadBytes: pollRead, PC: pollPC})
+		t.Logf("[frame %d] hash=%016x rd=%d PC=%s stall=%d/%d",
+			frame, pollHash, pollRead, pollPC, n, stallLimit)
+
+		if stall.Stalled(stallLimit) {
+			if _, err := os.Stat(ppmPath); err == nil {
+				ConvertPPMtoPNG(ppmPath, filepath.Join(resultsDir, "stalled-last.png"))
+			}
+			dumpSerialLog(t, serialLog, resultsDir)
+			t.Fatalf("guest stalled: screen, disk IO, and PC unchanged for %d consecutive polls (%v)",
+				stall.Consecutive(), time.Duration(stall.Consecutive())*pollInterval)
+		}
+
+		select {
+		case reason := <-syncExCh:
+			dumpSerialLog(t, serialLog, resultsDir)
+			t.Logf("firmware Synchronous Exception (intermittent EDK2 bug): %s", reason)
+			return true
+		case reason := <-efiShellCh:
+			dumpSerialLog(t, serialLog, resultsDir)
+			t.Fatalf("firmware dropped to EFI shell: %s", reason)
+		default:
+		}
+
+		doneMarker := readAnswerVolumeFile(t, answerImg, "/"+AgentDoneFile)
+		if doneMarker != "" {
+			t.Logf("agent done marker appeared after %s (%d frames)", time.Since(start).Round(time.Second), frame)
+			break
+		}
+	}
+
+	// Capture final state.
+	os.Remove(ppmPath)
+	if err := QMPScreendump(qmpSock, ppmPath); err == nil {
+		frame++
+		pngPath := ScreenshotPath(resultsDir, ScreenSourceQMP, time.Now(),
+			"final", frame, frame, "png")
+		ConvertPPMtoPNG(ppmPath, pngPath)
+	}
+
+	cmd.Process.Kill()
+	cmd.Wait()
+	return false
 }

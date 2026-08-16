@@ -21,6 +21,13 @@ import (
 // turns a half-written volume into an error instead of a panic.
 func readAnswerVolumeFile(t *testing.T, answerImg, name string) string {
 	t.Helper()
+	if strings.HasSuffix(answerImg, ".qcow2") {
+		content, err := ReadFileFromFATQcow2(answerImg, name)
+		if err != nil {
+			return ""
+		}
+		return string(content)
+	}
 	snap := filepath.Join(t.TempDir(), "answer-snap.img")
 	data, err := os.ReadFile(answerImg)
 	if err != nil {
