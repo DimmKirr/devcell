@@ -438,6 +438,7 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 	v(c.HostHome + "/.claude/commands:/home/" + c.HostUser + "/.claude/commands")
 	v(c.HostHome + "/.claude/agents:/home/" + c.HostUser + "/.claude/agents:ro")
 	v(c.HostHome + "/.claude/skills:/home/" + c.HostUser + "/.claude/skills")
+	v(c.HostHome + "/.agents:/home/" + c.HostUser + "/.agents:ro")
 	v(c.ConfigDir + ":/etc/devcell/config")
 	v(c.ConfigDir + ":/home/" + c.HostUser + "/.config/devcell")
 
@@ -468,6 +469,7 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 		"/home/" + c.HostUser + "/.claude/commands": true,
 		"/home/" + c.HostUser + "/.claude/agents":   true,
 		"/home/" + c.HostUser + "/.claude/skills":   true,
+		"/home/" + c.HostUser + "/.agents":          true,
 		"/etc/devcell/config":                  true,
 		"/home/" + c.HostUser + "/.config/devcell":  true,
 	}
