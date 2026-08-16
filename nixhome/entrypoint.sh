@@ -124,7 +124,11 @@ chown "$HOST_USER" "$GNUPGHOME"
 # builds dangle after nix GC removes old store paths. Remove them so fragments
 # can write fresh configs.
 if [ -d "$HOME" ]; then
-    find "$HOME" -maxdepth 4 -type l -not -path "*/tmp/*" 2>/dev/null | while IFS= read -r _link; do
+    # Skip .config/devcell: bind-mounted from host, may contain host home-manager symlinks
+    find "$HOME" -maxdepth 4 -type l \
+        -not -path "*/tmp/*" \
+        -not -path "$HOME/.config/devcell/*" \
+        2>/dev/null | while IFS= read -r _link; do
         _target=$(readlink "$_link" 2>/dev/null)
         case "$_target" in /nix/store/*)
             if [ ! -e "$_link" ]; then
