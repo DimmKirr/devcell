@@ -395,10 +395,19 @@ func (v VolumeMount) ContainerPath() string {
 	return strings.TrimRight(v.Mount, "/")
 }
 
-// PackagesSection holds [packages] config for npm and python tools.
+// NixPackages holds [packages.nix] config: arbitrary nixpkgs packages
+// from three channels matching the flake inputs in nixhome/flake.nix.
+type NixPackages struct {
+	Stable   []string `toml:"stable"`
+	Unstable []string `toml:"unstable"`
+	Edge     []string `toml:"edge"`
+}
+
+// PackagesSection holds [packages] config for npm, python, and nix tools.
 type PackagesSection struct {
 	Npm    map[string]string `toml:"npm"`
 	Python map[string]string `toml:"python"`
+	Nix    NixPackages       `toml:"nix"`
 }
 
 // LLMProvider holds a single provider entry under [llm.models.providers.<name>].
@@ -743,6 +752,17 @@ func unionDedupStrings(a, b []string) []string {
 	return out
 }
 
+// mergeNixPkgTier merges one [packages.nix] tier with the same semantics as
+// [cell].modules: union-dedup, sorted; explicit empty slice clears global.
+func mergeNixPkgTier(global, project []string) []string {
+	if project != nil && len(project) == 0 {
+		return []string{}
+	}
+	merged := unionDedupStrings(global, project)
+	sort.Strings(merged)
+	return merged
+}
+
 // Merge returns a new CellConfig with project overriding global for scalars;
 // slices accumulate (Volumes, Ports.Forward, Op documents, [cell].modules).
 // For [cell].modules: explicit empty list in project ([]) clears global as
@@ -1026,6 +1046,32 @@ func Merge(global, project CellConfig) CellConfig {
 		}
 		for k, v := range project.LLM.Models.Providers {
 			out.LLM.Models.Providers[k] = v
+		}
+	}
+
+	// Packages.Nix: union-dedup per tier, same semantics as [cell].modules.
+	// Explicit empty slice in project clears global (escape hatch).
+	out.Packages.Nix.Stable = mergeNixPkgTier(global.Packages.Nix.Stable, project.Packages.Nix.Stable)
+	out.Packages.Nix.Unstable = mergeNixPkgTier(global.Packages.Nix.Unstable, project.Packages.Nix.Unstable)
+	out.Packages.Nix.Edge = mergeNixPkgTier(global.Packages.Nix.Edge, project.Packages.Nix.Edge)
+
+	// Packages.Npm/Python: maps accumulate (same semantics as Env — project wins on key conflict).
+	if len(global.Packages.Npm) > 0 || len(project.Packages.Npm) > 0 {
+		out.Packages.Npm = make(map[string]string, len(global.Packages.Npm)+len(project.Packages.Npm))
+		for k, v := range global.Packages.Npm {
+			out.Packages.Npm[k] = v
+		}
+		for k, v := range project.Packages.Npm {
+			out.Packages.Npm[k] = v
+		}
+	}
+	if len(global.Packages.Python) > 0 || len(project.Packages.Python) > 0 {
+		out.Packages.Python = make(map[string]string, len(global.Packages.Python)+len(project.Packages.Python))
+		for k, v := range global.Packages.Python {
+			out.Packages.Python[k] = v
+		}
+		for k, v := range project.Packages.Python {
+			out.Packages.Python[k] = v
 		}
 	}
 

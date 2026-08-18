@@ -2373,3 +2373,143 @@ func TestMerge_LLMAppendSystemPromptGlobalSurvivesEmptyProject(t *testing.T) {
 		t.Errorf("append_system_prompt = %q, want global value preserved", out.LLM.AppendSystemPrompt)
 	}
 }
+
+// ── CELL-446: Packages merge ────────────────────────────────────────────────
+
+func TestMerge_PackagesNpmAccumulates(t *testing.T) {
+	global := cfg.CellConfig{Packages: cfg.PackagesSection{
+		Npm: map[string]string{"prettier": "*", "eslint": "8"},
+	}}
+	project := cfg.CellConfig{Packages: cfg.PackagesSection{
+		Npm: map[string]string{"eslint": "9", "typescript": "*"},
+	}}
+	merged := cfg.Merge(global, project)
+	if merged.Packages.Npm["prettier"] != "*" {
+		t.Errorf("prettier should be *, got %q", merged.Packages.Npm["prettier"])
+	}
+	if merged.Packages.Npm["eslint"] != "9" {
+		t.Errorf("eslint: project should win, got %q", merged.Packages.Npm["eslint"])
+	}
+	if merged.Packages.Npm["typescript"] != "*" {
+		t.Errorf("typescript should be *, got %q", merged.Packages.Npm["typescript"])
+	}
+}
+
+func TestMerge_PackagesPythonAccumulates(t *testing.T) {
+	global := cfg.CellConfig{Packages: cfg.PackagesSection{
+		Python: map[string]string{"pre-commit": "*"},
+	}}
+	project := cfg.CellConfig{Packages: cfg.PackagesSection{
+		Python: map[string]string{"black": "*"},
+	}}
+	merged := cfg.Merge(global, project)
+	if merged.Packages.Python["pre-commit"] != "*" {
+		t.Errorf("pre-commit should be *, got %q", merged.Packages.Python["pre-commit"])
+	}
+	if merged.Packages.Python["black"] != "*" {
+		t.Errorf("black should be *, got %q", merged.Packages.Python["black"])
+	}
+}
+
+func TestMerge_PackagesGlobalSurvivesEmptyProject(t *testing.T) {
+	global := cfg.CellConfig{Packages: cfg.PackagesSection{
+		Npm: map[string]string{"prettier": "*"},
+	}}
+	merged := cfg.Merge(global, cfg.CellConfig{})
+	if merged.Packages.Npm["prettier"] != "*" {
+		t.Errorf("global npm packages should survive empty project, got %q", merged.Packages.Npm["prettier"])
+	}
+}
+
+// ── CELL-445: NixPackages parsing and merge ─────────────────────────────────
+
+func TestLoadFile_NixPackages(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[packages.nix]
+stable = ["tmux", "htop"]
+unstable = ["some-tool"]
+edge = ["bleeding-edge"]
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantStable := []string{"tmux", "htop"}
+	if len(c.Packages.Nix.Stable) != 2 || c.Packages.Nix.Stable[0] != wantStable[0] || c.Packages.Nix.Stable[1] != wantStable[1] {
+		t.Errorf("stable = %v, want %v", c.Packages.Nix.Stable, wantStable)
+	}
+	if len(c.Packages.Nix.Unstable) != 1 || c.Packages.Nix.Unstable[0] != "some-tool" {
+		t.Errorf("unstable = %v, want [some-tool]", c.Packages.Nix.Unstable)
+	}
+	if len(c.Packages.Nix.Edge) != 1 || c.Packages.Nix.Edge[0] != "bleeding-edge" {
+		t.Errorf("edge = %v, want [bleeding-edge]", c.Packages.Nix.Edge)
+	}
+}
+
+func TestLoadFile_NixPackagesEmpty(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[packages.nix]
+stable = []
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Packages.Nix.Stable == nil || len(c.Packages.Nix.Stable) != 0 {
+		t.Errorf("stable should be empty non-nil slice, got %v (nil=%v)", c.Packages.Nix.Stable, c.Packages.Nix.Stable == nil)
+	}
+}
+
+func TestMerge_NixPackagesUnionDedup(t *testing.T) {
+	global := cfg.CellConfig{Packages: cfg.PackagesSection{
+		Nix: cfg.NixPackages{
+			Stable:   []string{"tmux", "htop"},
+			Unstable: []string{"tool-a"},
+		},
+	}}
+	project := cfg.CellConfig{Packages: cfg.PackagesSection{
+		Nix: cfg.NixPackages{
+			Stable:   []string{"htop", "cowsay"},
+			Unstable: []string{"tool-b"},
+			Edge:     []string{"edge-pkg"},
+		},
+	}}
+	merged := cfg.Merge(global, project)
+	wantStable := []string{"cowsay", "htop", "tmux"}
+	if strings.Join(merged.Packages.Nix.Stable, ",") != strings.Join(wantStable, ",") {
+		t.Errorf("stable = %v, want %v (union, deduped, sorted)", merged.Packages.Nix.Stable, wantStable)
+	}
+	wantUnstable := []string{"tool-a", "tool-b"}
+	if strings.Join(merged.Packages.Nix.Unstable, ",") != strings.Join(wantUnstable, ",") {
+		t.Errorf("unstable = %v, want %v", merged.Packages.Nix.Unstable, wantUnstable)
+	}
+	wantEdge := []string{"edge-pkg"}
+	if strings.Join(merged.Packages.Nix.Edge, ",") != strings.Join(wantEdge, ",") {
+		t.Errorf("edge = %v, want %v", merged.Packages.Nix.Edge, wantEdge)
+	}
+}
+
+func TestMerge_NixPackagesEscapeHatch(t *testing.T) {
+	global := cfg.CellConfig{Packages: cfg.PackagesSection{
+		Nix: cfg.NixPackages{Stable: []string{"tmux", "htop"}},
+	}}
+	project := cfg.CellConfig{Packages: cfg.PackagesSection{
+		Nix: cfg.NixPackages{Stable: []string{}},
+	}}
+	merged := cfg.Merge(global, project)
+	if len(merged.Packages.Nix.Stable) != 0 {
+		t.Errorf("explicit empty stable in project should clear global, got %v", merged.Packages.Nix.Stable)
+	}
+}
+
+func TestMerge_NixPackagesGlobalSurvivesNilProject(t *testing.T) {
+	global := cfg.CellConfig{Packages: cfg.PackagesSection{
+		Nix: cfg.NixPackages{Stable: []string{"tmux"}},
+	}}
+	merged := cfg.Merge(global, cfg.CellConfig{})
+	if len(merged.Packages.Nix.Stable) != 1 || merged.Packages.Nix.Stable[0] != "tmux" {
+		t.Errorf("global nix stable should survive nil project, got %v", merged.Packages.Nix.Stable)
+	}
+}

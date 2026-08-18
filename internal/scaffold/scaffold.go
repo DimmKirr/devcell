@@ -128,7 +128,8 @@ func generatePyprojectTOML(pkgs map[string]string) []byte {
 // and modules from the upstream devcell nixhome flake.
 // stack is a stack name (e.g. "go"), modules is a list of module names,
 // ver is the version tag, nixhomePath overrides the input URL to path:./nixhome.
-func GenerateFlakeNix(stack string, modules []string, ver string, withNixhome bool) string {
+// nixPkgs adds arbitrary nixpkgs packages with lib.hiPri (user override semantics).
+func GenerateFlakeNix(stack string, modules []string, ver string, withNixhome bool, nixPkgs ...cfg.NixPackages) string {
 	if stack == "" {
 		stack = "base"
 	}
@@ -154,6 +155,25 @@ func GenerateFlakeNix(stack string, modules []string, ver string, withNixhome bo
 			enableLines = append(enableLines, fmt.Sprintf("devcell.modules.%s.enable = true;", m))
 		}
 		moduleExpr += fmt.Sprintf(" ++ [ { %s } ]", strings.Join(enableLines, " "))
+	}
+
+	// CELL-445: [packages.nix] — arbitrary user packages with lib.hiPri override.
+	var np cfg.NixPackages
+	if len(nixPkgs) > 0 {
+		np = nixPkgs[0]
+	}
+	if len(np.Stable) > 0 || len(np.Unstable) > 0 || len(np.Edge) > 0 {
+		var parts []string
+		if len(np.Stable) > 0 {
+			parts = append(parts, fmt.Sprintf("(map lib.hiPri (with pkgs; [ %s ]))", strings.Join(np.Stable, " ")))
+		}
+		if len(np.Unstable) > 0 {
+			parts = append(parts, fmt.Sprintf("(map lib.hiPri (with pkgsUnstable; [ %s ]))", strings.Join(np.Unstable, " ")))
+		}
+		if len(np.Edge) > 0 {
+			parts = append(parts, fmt.Sprintf("(map lib.hiPri (with pkgsEdge; [ %s ]))", strings.Join(np.Edge, " ")))
+		}
+		moduleExpr += fmt.Sprintf(" ++ [ { home.packages = %s; } ]", strings.Join(parts, " ++ "))
 	}
 
 	return fmt.Sprintf(`{
@@ -637,7 +657,7 @@ func RegenerateBuildContext(configDir string, cellCfg cfg.CellConfig) error {
 	stack := cellCfg.Cell.ResolvedStack()
 
 	// Regenerate flake.nix from stack + modules.
-	flake := GenerateFlakeNix(stack, cellCfg.Cell.Modules, version.Version, withNixhome)
+	flake := GenerateFlakeNix(stack, cellCfg.Cell.Modules, version.Version, withNixhome, cellCfg.Packages.Nix)
 	if err := os.WriteFile(filepath.Join(configDir, "flake.nix"), []byte(flake), 0644); err != nil {
 		return fmt.Errorf("write flake.nix: %w", err)
 	}

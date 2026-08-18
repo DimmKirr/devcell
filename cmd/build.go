@@ -458,12 +458,17 @@ func runBuildThin(c config.Config, stackOverride, imageOverride string, forceRec
 		return fmt.Errorf("sync nixhome: %w", err)
 	}
 
+	// Validate [packages.nix] before generating the flake.
+	if err := cfg.ValidateNixPackages(cellCfg.Packages.Nix); err != nil {
+		return err
+	}
+
 	// Write the overlay flake at .devcell/flake.nix — same generator as pure
 	// path. Imports path:./nixhome (the just-synced upstream) + enables the
 	// merged TOML modules. home-manager will switch against this overlay's
 	// `devcell-local<arch>` output, not the upstream stack outputs directly,
 	// so [cell].modules takes effect in thin builds (CELL-38 + CELL-61).
-	overlayFlake := scaffold.GenerateFlakeNix(stack, cellCfg.Cell.Modules, version.Version, true)
+	overlayFlake := scaffold.GenerateFlakeNix(stack, cellCfg.Cell.Modules, version.Version, true, cellCfg.Packages.Nix)
 	overlayPath := filepath.Join(c.BuildDir, "flake.nix")
 	if err := os.WriteFile(overlayPath, []byte(overlayFlake), 0o644); err != nil {
 		return fmt.Errorf("write overlay flake: %w", err)

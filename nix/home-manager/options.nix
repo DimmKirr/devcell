@@ -110,5 +110,10 @@ in
   packages = {
     npm = opt (types.attrsOf types.str);
     python = opt (types.attrsOf types.str);
+    nix = {
+      stable = opt (types.listOf types.str);
+      unstable = opt (types.listOf types.str);
+      edge = opt (types.listOf types.str);
+    };
   };
 }
