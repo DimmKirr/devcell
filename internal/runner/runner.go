@@ -217,6 +217,8 @@ type RunSpec struct {
 	UserArgs     []string
 	Debug        bool                // pass DEVCELL_DEBUG=true into the container
 	NixDaemon    bool                // pass DEVCELL_NIX_DAEMON=true into the container
+	SkipFlake    bool                // pass DEVCELL_SKIP_FLAKE=1 into the container
+	TrustFlake   bool                // pass DEVCELL_FLAKE_TRUST=1 into the container
 	Image        string              // image ID or tag to run; defaults to UserImageTag
 	ExtraEnv     map[string]string   // additional env vars injected by the command handler
 	InheritEnv   []string            // env var names to inherit from host (passed as -e KEY with no value)
@@ -357,6 +359,16 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 	// Nix daemon — enables in-container package installation via nix-daemon
 	if spec.NixDaemon {
 		argv = append(argv, "-e", "DEVCELL_NIX_DAEMON=true")
+	}
+
+	// Skip project flake — degrades install failure to warning instead of boot abort
+	if spec.SkipFlake {
+		argv = append(argv, "-e", "DEVCELL_SKIP_FLAKE=1")
+	}
+
+	// Project flake trust — user confirmed host-side that flake.nix packages should be installed
+	if spec.TrustFlake {
+		argv = append(argv, "-e", "DEVCELL_FLAKE_TRUST=1")
 	}
 
 	// Pass the image tag/ID into the container for debug logging

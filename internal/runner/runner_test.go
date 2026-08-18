@@ -1194,3 +1194,35 @@ func TestArgv_NeverDisablesNewPrivileges(t *testing.T) {
 		}
 	}
 }
+
+func TestArgv_SkipFlakeEnvVar(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) { s.SkipFlake = true })
+	if !hasConsecutive(argv, "-e", "DEVCELL_SKIP_FLAKE=1") {
+		t.Fatal("expected DEVCELL_SKIP_FLAKE=1 when SkipFlake is true")
+	}
+}
+
+func TestArgv_SkipFlakeAbsentByDefault(t *testing.T) {
+	argv := buildArgv(t)
+	for _, a := range argv {
+		if strings.Contains(a, "DEVCELL_SKIP_FLAKE") {
+			t.Fatalf("DEVCELL_SKIP_FLAKE should not appear by default, got: %s", a)
+		}
+	}
+}
+
+func TestArgv_TrustFlakeEnvVar(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) { s.TrustFlake = true })
+	if !hasConsecutive(argv, "-e", "DEVCELL_FLAKE_TRUST=1") {
+		t.Fatal("expected DEVCELL_FLAKE_TRUST=1 when TrustFlake is true")
+	}
+}
+
+func TestArgv_TrustFlakeAbsentByDefault(t *testing.T) {
+	argv := buildArgv(t)
+	for _, a := range argv {
+		if strings.Contains(a, "DEVCELL_FLAKE_TRUST") {
+			t.Fatalf("DEVCELL_FLAKE_TRUST should not appear by default, got: %s", a)
+		}
+	}
+}

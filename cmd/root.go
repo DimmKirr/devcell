@@ -177,6 +177,7 @@ var cellBoolFlags = map[string]bool{
 	"--no-1password": true, // skip [op] documents resolution at cell-open (CELL-42)
 	"--local":        true, // pin --engine=qemu to the in-container path (CELL-378)
 	"--auto-cleanup": true, // run the CELL-334 root reaper at cell start (CELL-390)
+	"--skip-flake":   true, // skip project-level flake.nix install (CELL-447)
 }
 
 // cellStringFlags are string flags consumed by devcell: strip the flag token
@@ -799,6 +800,13 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 		defer bootWatcher.Close()
 	}
 
+	// CELL-447: detect project flake.nix and prompt for trust host-side.
+	skipFlake := scanFlag("--skip-flake")
+	trustFlake := false
+	if !skipFlake {
+		trustFlake = resolveTrustFlake(c.BaseDir, c.CellHome)
+	}
+
 	spec := runner.RunSpec{
 		Config:       c,
 		CellCfg:      cellCfg,
@@ -807,6 +815,8 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 		UserArgs:     userArgs,
 		Debug:        ux.Verbose,
 		NixDaemon:    scanFlag("--nix-daemon"),
+		SkipFlake:    skipFlake,
+		TrustFlake:   trustFlake,
 		Image:        imageID,
 		ExtraEnv:     extraEnv,
 		InheritEnv:   inheritEnv,
@@ -900,6 +910,45 @@ func scanStringFlag(flag string) string {
 		}
 	}
 	return ""
+}
+
+// resolveTrustFlake checks if the project has a flake.nix and whether the
+// user has trusted it. On first encounter, prompts interactively and caches
+// the answer in cellHome. Returns true if DEVCELL_FLAKE_TRUST=1 should be
+// passed to the container.
+func resolveTrustFlake(baseDir, cellHome string) bool {
+	flakePath := filepath.Join(baseDir, "flake.nix")
+	if _, err := os.Stat(flakePath); err != nil {
+		return false
+	}
+
+	trustFile := filepath.Join(cellHome, "flake-trust")
+	if data, err := os.ReadFile(trustFile); err == nil {
+		return strings.TrimSpace(string(data)) == "1"
+	}
+
+	if !isatty.IsTerminal(os.Stdin.Fd()) {
+		ux.Debugf("project-flake: found flake.nix but stdin is not a terminal — skipping trust prompt")
+		return false
+	}
+
+	fmt.Printf("\n Found flake.nix in %s\n", baseDir)
+	fmt.Printf(" Install its packages into this cell? [Y/n] ")
+
+	var answer string
+	fmt.Scanln(&answer)
+	answer = strings.TrimSpace(answer)
+
+	trusted := answer == "" || strings.HasPrefix(strings.ToLower(answer), "y")
+
+	_ = os.MkdirAll(cellHome, 0o755)
+	if trusted {
+		_ = os.WriteFile(trustFile, []byte("1\n"), 0o644)
+	} else {
+		_ = os.WriteFile(trustFile, []byte("0\n"), 0o644)
+	}
+
+	return trusted
 }
 
 // buildImageWithSpinner runs docker build with a spinner.

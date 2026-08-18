@@ -124,6 +124,12 @@
         executable = true;
         source = ./fragments/07-gcroot.sh;
       };
+      # Project flake — detects flake.nix in the project root and installs
+      # packages into a dedicated profile at start time (CELL-447).
+      ".config/devcell/entrypoint.d/08-project-flake.sh" = {
+        executable = true;
+        source = ./fragments/08-project-flake.sh;
+      };
       ".config/devcell/entrypoint.d/20-homedir.sh" = {
         executable = true;
         source = ./fragments/20-homedir.sh;

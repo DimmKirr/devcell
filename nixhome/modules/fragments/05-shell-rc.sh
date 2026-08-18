@@ -70,7 +70,7 @@ export NIX_CONF_DIR="/opt/devcell/.config/nix"
 export STARSHIP_CONFIG="/opt/devcell/.config/starship.toml"
 export FONTCONFIG_PATH="/opt/devcell/.config/fontconfig"
 export HISTFILE="$HOME/.zsh_history"
-export PATH="$HOME/go/bin:$HOME/.local/state/nix/profiles/profile/bin:/opt/devcell/.local/state/nix/profiles/profile/bin:$HOME/.local/share/mise/shims\${PATH:+:}\${PATH}"
+export PATH="$HOME/go/bin:$HOME/.local/state/nix/profiles/profile/bin:$HOME/.local/state/nix/profiles/project/bin:/opt/devcell/.local/state/nix/profiles/profile/bin:$HOME/.local/share/mise/shims\${PATH:+:}\${PATH}"
 # NIX_LD_LIBRARY_PATH bootstrap for shells — covers docker exec / IDE attach
 # that bypass entrypoint.d/06-nix-ldpath.sh. Points at the merged .nix-ld-libs/
 # directory (symlinks to every .so* from the profile closure, glibc excluded).
