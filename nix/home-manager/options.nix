@@ -63,6 +63,7 @@ in
     append_system_prompt = opt types.str;
     append_system_prompt_file = opt types.str;
     use_ollama = opt types.bool;
+    use_openrouter = opt types.bool;
     models = {
       default = opt types.str;
       providers = opt (types.attrsOf (types.submodule {

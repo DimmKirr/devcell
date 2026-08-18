@@ -167,6 +167,7 @@ var cellBoolFlags = map[string]bool{
 	"--debug":        true,
 	"--macos":        true,
 	"--ollama":       true,
+	"--openrouter":   true,
 	"--impure":       true, // legacy Dockerfile path (CELL-165 canonical name)
 	"--debian":       true, // deprecated alias for --impure (kept stripping for one release)
 	"--pure":         true, // silent no-op after flip; kept stripped from forwarded args
@@ -765,6 +766,13 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 		})
 	case len(opDocs) > 0 && (skipOp || noOpEnv != ""):
 		ux.Debugf("1Password: skipped (--no-1password / DEVCELL_NO_1PASSWORD)")
+	}
+
+	// Resolve deferred API keys that depend on 1Password secrets.
+	if extraEnv != nil && extraEnv["ANTHROPIC_BASE_URL"] == "https://openrouter.ai/api" {
+		if err := ResolveOpenRouterKey(extraEnv); err != nil {
+			return err
+		}
 	}
 
 	// Final ✓ row before docker exec takes the TTY. The phase checklist

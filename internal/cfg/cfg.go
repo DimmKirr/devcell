@@ -444,6 +444,7 @@ type LLMSection struct {
 	AppendSystemPrompt     string           `toml:"append_system_prompt"`
 	AppendSystemPromptFile string           `toml:"append_system_prompt_file"`
 	UseOllama              bool             `toml:"use_ollama"`
+	UseOpenRouter          bool             `toml:"use_openrouter"`
 	Models                 LLMModelsSection `toml:"models"`
 }
 
@@ -910,6 +911,9 @@ func Merge(global, project CellConfig) CellConfig {
 	}
 	if project.LLM.UseOllama {
 		out.LLM.UseOllama = true
+	}
+	if project.LLM.UseOpenRouter {
+		out.LLM.UseOpenRouter = true
 	}
 
 	// Git: project wins when non-zero

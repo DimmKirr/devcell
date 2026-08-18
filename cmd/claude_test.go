@@ -223,6 +223,169 @@ func TestClaude_OllamaNoModel_NoAnthropicModel(t *testing.T) {
 	}
 }
 
+// TestClaude_OpenRouterFlag_InjectsEnv verifies that "cell claude --openrouter --dry-run"
+// injects ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN, and OPENROUTER_API_KEY into docker argv.
+func TestClaude_OpenRouterFlag_InjectsEnv(t *testing.T) {
+	home := scaffoldedHome(t)
+
+	cmd := exec.Command(binaryPath, "claude", "--openrouter", "--dry-run")
+	cmd.Dir = home
+	cmd.Env = append(os.Environ(), "DEVCELL_BUNK=1", "HOME="+home, "OPENROUTER_API_KEY=sk-or-test-key")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("claude --openrouter --dry-run failed: %v\noutput: %s", err, out)
+	}
+
+	argv := string(out)
+	if !strings.Contains(argv, "ANTHROPIC_BASE_URL=https://openrouter.ai/api") {
+		t.Errorf("expected ANTHROPIC_BASE_URL=https://openrouter.ai/api in argv:\n%s", argv)
+	}
+	if !strings.Contains(argv, "ANTHROPIC_AUTH_TOKEN=sk-or-test-key") {
+		t.Errorf("expected ANTHROPIC_AUTH_TOKEN=sk-or-test-key in argv:\n%s", argv)
+	}
+	if !strings.Contains(argv, "OPENROUTER_API_KEY=sk-or-test-key") {
+		t.Errorf("expected OPENROUTER_API_KEY=sk-or-test-key in argv:\n%s", argv)
+	}
+	if !strings.Contains(argv, "ANTHROPIC_API_KEY=") {
+		t.Errorf("expected ANTHROPIC_API_KEY= (empty) in argv:\n%s", argv)
+	}
+}
+
+// TestClaude_OpenRouterFlag_Stripped verifies --openrouter is NOT forwarded to claude binary.
+func TestClaude_OpenRouterFlag_Stripped(t *testing.T) {
+	home := scaffoldedHome(t)
+
+	cmd := exec.Command(binaryPath, "claude", "--openrouter", "--dry-run")
+	cmd.Dir = home
+	cmd.Env = append(os.Environ(), "DEVCELL_BUNK=1", "HOME="+home, "OPENROUTER_API_KEY=sk-or-test-key")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("claude --openrouter --dry-run failed: %v\noutput: %s", err, out)
+	}
+
+	parts := strings.Fields(strings.TrimSpace(string(out)))
+	for _, p := range parts {
+		if p == "--openrouter" {
+			t.Errorf("--openrouter should be stripped from argv, but found it:\n%s", out)
+		}
+	}
+}
+
+// TestClaude_ConfigUseOpenRouter_InjectsEnv verifies that [llm] use_openrouter=true
+// in devcell.toml injects the openrouter env vars.
+func TestClaude_ConfigUseOpenRouter_InjectsEnv(t *testing.T) {
+	home := scaffoldedHome(t)
+
+	cfgDir := filepath.Join(home, ".config", "devcell")
+	tomlContent := `[cell]
+[llm]
+use_openrouter = true
+`
+	if err := os.WriteFile(filepath.Join(cfgDir, "devcell.toml"), []byte(tomlContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(binaryPath, "claude", "--dry-run")
+	cmd.Dir = home
+	cmd.Env = append(os.Environ(), "DEVCELL_BUNK=1", "HOME="+home, "OPENROUTER_API_KEY=sk-or-test-key")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("claude --dry-run failed: %v\noutput: %s", err, out)
+	}
+
+	argv := string(out)
+	if !strings.Contains(argv, "ANTHROPIC_BASE_URL=https://openrouter.ai/api") {
+		t.Errorf("expected ANTHROPIC_BASE_URL from config:\n%s", argv)
+	}
+	if !strings.Contains(argv, "OPENROUTER_API_KEY=sk-or-test-key") {
+		t.Errorf("expected OPENROUTER_API_KEY from config:\n%s", argv)
+	}
+}
+
+// TestClaude_OpenRouterConfigModel verifies that [llm.models] default with openrouter/
+// prefix is stripped and injected as ANTHROPIC_MODEL.
+func TestClaude_OpenRouterConfigModel(t *testing.T) {
+	home := scaffoldedHome(t)
+
+	cfgDir := filepath.Join(home, ".config", "devcell")
+	tomlContent := `[cell]
+[llm]
+use_openrouter = true
+
+[llm.models]
+default = "openrouter/google/gemini-2.5-pro"
+`
+	if err := os.WriteFile(filepath.Join(cfgDir, "devcell.toml"), []byte(tomlContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(binaryPath, "claude", "--dry-run")
+	cmd.Dir = home
+	cmd.Env = append(os.Environ(), "DEVCELL_BUNK=1", "HOME="+home, "OPENROUTER_API_KEY=sk-or-test-key")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("claude --dry-run failed: %v\noutput: %s", err, out)
+	}
+
+	argv := string(out)
+	if !strings.Contains(argv, "ANTHROPIC_MODEL=google/gemini-2.5-pro") {
+		t.Errorf("expected ANTHROPIC_MODEL=google/gemini-2.5-pro (prefix stripped), got:\n%s", argv)
+	}
+}
+
+// TestClaude_OpenRouterNoKey_Error verifies that --openrouter without OPENROUTER_API_KEY
+// exits with an error.
+func TestClaude_OpenRouterNoKey_Error(t *testing.T) {
+	home := scaffoldedHome(t)
+
+	cmd := exec.Command(binaryPath, "claude", "--openrouter", "--dry-run")
+	cmd.Dir = home
+	env := []string{"DEVCELL_BUNK=1", "HOME=" + home, "PATH=" + os.Getenv("PATH")}
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected error when OPENROUTER_API_KEY is missing, but got success:\n%s", out)
+	}
+
+	if !strings.Contains(string(out), "OPENROUTER_API_KEY") {
+		t.Errorf("expected error mentioning OPENROUTER_API_KEY, got:\n%s", out)
+	}
+}
+
+// TestClaude_OpenRouterProviderFallback verifies that when default is an ollama model,
+// openrouter mode falls back to the first model in [llm.models.providers.openrouter].
+func TestClaude_OpenRouterProviderFallback(t *testing.T) {
+	home := scaffoldedHome(t)
+
+	cfgDir := filepath.Join(home, ".config", "devcell")
+	tomlContent := `[cell]
+[llm]
+use_openrouter = true
+
+[llm.models]
+default = "ollama/qwen3-coder:30b"
+
+[llm.models.providers.openrouter]
+models = ["moonshotai/kimi-k3", "google/gemini-2.5-pro", "x-ai/grok-4.6"]
+`
+	if err := os.WriteFile(filepath.Join(cfgDir, "devcell.toml"), []byte(tomlContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(binaryPath, "claude", "--dry-run")
+	cmd.Dir = home
+	cmd.Env = append(os.Environ(), "DEVCELL_BUNK=1", "HOME="+home, "OPENROUTER_API_KEY=sk-or-test-key")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("claude --dry-run failed: %v\noutput: %s", err, out)
+	}
+
+	argv := string(out)
+	if !strings.Contains(argv, "ANTHROPIC_MODEL=moonshotai/kimi-k3") {
+		t.Errorf("expected ANTHROPIC_MODEL=moonshotai/kimi-k3 (first from providers.openrouter), got:\n%s", argv)
+	}
+}
+
 // TestClaude_OllamaWithUserArgs verifies that --ollama + user args work together.
 func TestClaude_OllamaWithUserArgs(t *testing.T) {
 	home := scaffoldedHome(t)
