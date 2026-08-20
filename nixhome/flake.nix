@@ -281,6 +281,7 @@
       financial = [./modules/financial.nix];
       go = [./modules/go.nix];
       graphics = [./modules/graphics.nix];
+      graynet = [./modules/graynet.nix];
       infra = [./modules/infra.nix];
       llm = [./modules/llm];
       media = [./modules/media];                     # bundles plex

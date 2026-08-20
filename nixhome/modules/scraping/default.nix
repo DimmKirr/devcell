@@ -1723,6 +1723,14 @@ SHIMEOF
         fi
       fi
 
+      # CELL-450: route browser through SOCKS/HTTP proxy (e.g. Tor via graynet.nix)
+      if [ -n "''${GRAYNET_PROXY:-}" ]; then
+        ${pkgs.jq}/bin/jq --arg proxy "$GRAYNET_PROXY" \
+          '.browser.launchOptions.args += ["--proxy-server=" + $proxy]' \
+          "$_RUNTIME_CONFIG" > "$_RUNTIME_CONFIG.proxy"
+        mv "$_RUNTIME_CONFIG.proxy" "$_RUNTIME_CONFIG"
+      fi
+
       [ -f "$_SHARE/stealth-init.js" ] && _EXTRA_ARGS+=(--init-script "$_SHARE/stealth-init.js")
       [ -f "$_SHARE/keep-alive-init.js" ] && _EXTRA_ARGS+=(--init-script "$_SHARE/keep-alive-init.js")
       [ -f "$_SHARE/network-capture-init.js" ] && _EXTRA_ARGS+=(--init-script "$_SHARE/network-capture-init.js")
