@@ -33,7 +33,7 @@ func nixStorePhase(ctx context.Context, pr *ux.PhaseRunner, thin bool, baseDir s
 
 	var health runner.NixStoreHealth
 	probed := false
-	_ = pr.PhaseDetailed("Nix store", func() (string, error) {
+	_ = pr.PhaseDetailedWarn("Nix store", func() (string, bool, error) {
 		volume := runner.ThinStoreVolume()
 		argv := runner.NixHealthProbeArgv(volume)
 		ux.Debugf("nix health: probing volume=%s", volume)
@@ -42,24 +42,23 @@ func nixStorePhase(ctx context.Context, pr *ux.PhaseRunner, thin bool, baseDir s
 		out, err := exec.CommandContext(ctx, argv[0], argv[1:]...).CombinedOutput()
 		ux.Debugf("nix health: raw output=%q err=%v", strings.TrimSpace(string(out)), err)
 		if err != nil {
-			// Docker hiccup, missing volume, etc. — report, don't block.
-			return "skipped (probe unavailable)", nil
+			return "skipped (probe unavailable)", false, nil
 		}
 		h, perr := runner.ParseNixStoreHealth(string(out))
 		if perr != nil {
 			ux.Debugf("nix health: parse failed: %v", perr)
-			return "skipped (unreadable probe output)", nil
+			return "skipped (unreadable probe output)", false, nil
 		}
 		ux.Debugf("nix health: parsed total=%d stale=%d hashes=%d generations=%d orphaned=%d revs=%d newest_rev=%s newest_projects=%d",
 			h.TotalRoots, h.StaleRoots, h.ProfileHashes, h.Generations, h.OrphanedGenerations,
 			h.DistinctRevs, h.NewestRev, h.NewestProjects)
 		health, probed = h, true
 
-		detail := h.Summary()
+		detail, warn := h.Summary()
 		if scanFlag("--auto-cleanup") {
 			detail += "; " + autoCleanupDetail(ctx)
 		}
-		return detail, nil
+		return detail, warn, nil
 	})
 
 	return staleCellNudge(baseDir, health, probed, staleWarn)

@@ -95,7 +95,10 @@ func TestParseNixStoreHealth_NoDatapointLineIsError(t *testing.T) {
 // Summary is the non-debug UX: one line for the "Nix store" phase row.
 func TestNixStoreHealth_SummaryClean(t *testing.T) {
 	h := runner.NixStoreHealth{TotalRoots: 4, ProfileHashes: 1, Generations: 2}
-	s := h.Summary()
+	s, warn := h.Summary()
+	if warn {
+		t.Error("clean store must not be a warning")
+	}
 	for _, want := range []string{"clean", "4 roots", "1 profile hash"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("clean summary missing %q, got %q", want, s)
@@ -105,7 +108,10 @@ func TestNixStoreHealth_SummaryClean(t *testing.T) {
 
 func TestNixStoreHealth_SummaryFindingsIncludePruneHint(t *testing.T) {
 	h := runner.NixStoreHealth{TotalRoots: 6, StaleRoots: 2, ProfileHashes: 3, Generations: 8, OrphanedGenerations: 5}
-	s := h.Summary()
+	s, warn := h.Summary()
+	if !warn {
+		t.Error("findings must be a warning")
+	}
 	for _, want := range []string{"2 stale root", "5 orphaned generation", "cell build prune --pure"} {
 		if !strings.Contains(s, want) {
 			t.Errorf("findings summary missing %q, got %q", want, s)
@@ -115,8 +121,15 @@ func TestNixStoreHealth_SummaryFindingsIncludePruneHint(t *testing.T) {
 
 func TestNixStoreHealth_SummaryReportsDrift(t *testing.T) {
 	h := runner.NixStoreHealth{TotalRoots: 4, ProfileHashes: 3, Generations: 2}
-	if s := h.Summary(); !strings.Contains(s, "3 profile hashes") {
+	s, warn := h.Summary()
+	if !warn {
+		t.Error("drift must be a warning")
+	}
+	if !strings.Contains(s, "3 profile hashes") {
 		t.Errorf("drift (multiple hashes) must be visible in summary, got %q", s)
+	}
+	if !strings.Contains(s, "cell build prune --pure") {
+		t.Errorf("drift-only summary must include prune hint, got %q", s)
 	}
 }
 

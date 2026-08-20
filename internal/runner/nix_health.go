@@ -178,10 +178,12 @@ func plural(n int, word string) string {
 }
 
 // Summary renders the one-line non-debug UX for the "Nix store" phase row.
-func (h NixStoreHealth) Summary() string {
+// The bool return signals whether the result is a warning (should render ⚠
+// instead of ✓).
+func (h NixStoreHealth) Summary() (string, bool) {
 	hashPart := plural(h.ProfileHashes, "profile hash")
 	if h.StaleRoots == 0 && h.OrphanedGenerations == 0 && h.ProfileHashes <= 1 {
-		return fmt.Sprintf("clean — %s, %s", plural(h.TotalRoots, "root"), hashPart)
+		return fmt.Sprintf("clean — %s, %s", plural(h.TotalRoots, "root"), hashPart), false
 	}
 	var parts []string
 	if h.StaleRoots > 0 {
@@ -194,8 +196,6 @@ func (h NixStoreHealth) Summary() string {
 		parts = append(parts, hashPart+" (drift)")
 	}
 	s := strings.Join(parts, ", ")
-	if h.StaleRoots > 0 || h.OrphanedGenerations > 0 {
-		s += " — run: cell build prune --pure"
-	}
-	return s
+	s += " — run: cell build prune --pure"
+	return s, true
 }

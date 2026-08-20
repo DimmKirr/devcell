@@ -147,6 +147,43 @@ func TestPhaseRunner_PhaseDetailedRunningFailureUsesFinalName(t *testing.T) {
 	}
 }
 
+func TestPhaseRunner_PhaseDetailedWarnShowsWarningSymbol(t *testing.T) {
+	defer withPlainText(t)()
+	out := captureStdoutPhases(func() {
+		pr := &ux.PhaseRunner{}
+		_ = pr.PhaseDetailedWarn("Nix store", func() (string, bool, error) {
+			return "3 profile hashes (drift)", true, nil
+		})
+	})
+	stripped := plain(out)
+	if !strings.Contains(stripped, "⚠") {
+		t.Errorf("warn=true must render ⚠, got %q", stripped)
+	}
+	if strings.Contains(stripped, "✓") {
+		t.Errorf("warn=true must NOT render ✓, got %q", stripped)
+	}
+	if !strings.Contains(stripped, "Nix store — 3 profile hashes (drift)") {
+		t.Errorf("detail missing: %q", stripped)
+	}
+}
+
+func TestPhaseRunner_PhaseDetailedWarnFalseShowsSuccess(t *testing.T) {
+	defer withPlainText(t)()
+	out := captureStdoutPhases(func() {
+		pr := &ux.PhaseRunner{}
+		_ = pr.PhaseDetailedWarn("Nix store", func() (string, bool, error) {
+			return "clean", false, nil
+		})
+	})
+	stripped := plain(out)
+	if !strings.Contains(stripped, "✓") {
+		t.Errorf("warn=false must render ✓, got %q", stripped)
+	}
+	if strings.Contains(stripped, "⚠") {
+		t.Errorf("warn=false must NOT render ⚠, got %q", stripped)
+	}
+}
+
 func TestPhaseRunner_SealEmitsFinalRow(t *testing.T) {
 	defer withPlainText(t)()
 	out := captureStdoutPhases(func() {

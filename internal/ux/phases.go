@@ -82,6 +82,30 @@ func (p *PhaseRunner) PhaseDetailed(name string, fn func() (detail string, err e
 	return nil
 }
 
+// PhaseDetailedWarn is like PhaseDetailed but the callback also returns a
+// warn bool. When warn is true, the permanent row renders ⚠ (warning)
+// instead of ✓ (success).
+func (p *PhaseRunner) PhaseDetailedWarn(name string, fn func() (detail string, warn bool, err error)) error {
+	p.cur = NewProgressSpinner(name)
+	detail, warn, err := fn()
+	if err != nil {
+		p.cur.Fail(name + " — " + err.Error())
+		p.cur = nil
+		return err
+	}
+	label := name
+	if detail != "" {
+		label = name + " — " + detail
+	}
+	if warn {
+		p.cur.Warn(label)
+	} else {
+		p.cur.Success(label)
+	}
+	p.cur = nil
+	return nil
+}
+
 // PhaseDetailedRunning is like PhaseDetailed but renders a different label
 // while the spinner is active vs the permanent ✓/✗ row. Use for phases whose
 // in-progress text carries a user prompt that no longer applies once the

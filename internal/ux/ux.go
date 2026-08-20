@@ -170,6 +170,14 @@ func (ps *ProgressSpinner) stop() {
 	<-ps.stopped
 }
 
+// Warn stops the spinner and prints a warning row (⚠ instead of ✓).
+func (ps *ProgressSpinner) Warn(message string) *ProgressSpinner {
+	ps.stop()
+	elapsed := time.Since(ps.start).Round(time.Millisecond)
+	fmt.Printf("\r %s %s %s\r\n", prefix(StyleWarning, "⚠"), message, StyleMuted.Render(elapsed.String()))
+	return ps
+}
+
 // Fail stops the spinner and prints a failure message.
 func (ps *ProgressSpinner) Fail(message string) *ProgressSpinner {
 	ps.stop()
