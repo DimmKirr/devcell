@@ -1,10 +1,11 @@
 package qemu
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"image/color"
-	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -319,9 +320,11 @@ func bootWindowsISO(t *testing.T, cfg windowsBootConfig) {
 	// of stdout is not good enough: a run directory that records 40 frames but
 	// not which accelerator produced them cannot be attributed afterwards
 	// without re-deriving it from the code state at launch.
-	appendRunInfo(t, resultsDir, fmt.Sprintf(
-		"test:    %s\naccel:   %s\nmachine: %s\ncpu:     %s\nqemu:    %s\niso:     %s\nargv:    %s\n",
-		t.Name(), spec.Accel, machineType(spec), cpuType(spec), qemuBin, isoPath, strings.Join(argv, " ")))
+	updateRunJSON(t, resultsDir, map[string]any{
+		"test": t.Name(), "accel": spec.Accel, "machine": machineType(spec),
+		"cpu": cpuType(spec), "qemu": qemuBin, "iso": isoPath,
+		"qemu-args": strings.Join(argv, " "),
+	})
 
 	t.Logf("QEMU command: %v", argv)
 	exclusiveQEMU(t)
@@ -336,7 +339,7 @@ func bootWindowsISO(t *testing.T, cfg windowsBootConfig) {
 		cmd.Wait()
 	}()
 
-	waitForSocket(t, qmpSock, 30*time.Second, resultsDir)
+	waitForSocket(t, qmpSock, 30*time.Second, qemuLog)
 
 	assertAccel(t, qmpSock, accel, resultsDir)
 
@@ -344,7 +347,7 @@ func bootWindowsISO(t *testing.T, cfg windowsBootConfig) {
 	if kvmEnabled, _, err := QMPQueryKVM(qmpSock); err == nil && kvmEnabled {
 		if caps, err := QueryKVMHostCaps(KVMDevice); err == nil {
 			t.Logf("kvm host caps: %s", caps.Summary())
-			appendRunInfo(t, resultsDir, "kvm-caps: "+caps.Summary()+"\n")
+			updateRunJSON(t, resultsDir, map[string]any{"kvm-caps": caps.Summary()})
 		} else {
 			t.Logf("WARNING: kvm host caps query failed: %v", err)
 		}
@@ -631,16 +634,7 @@ func requireWindowsISO(t *testing.T) string {
 		return p
 	}
 
-	// 2. Cached ISO (from `cell init --engine=qemu`)
-	home, _ := os.UserHomeDir()
-	if home != "" {
-		cached := WindowsISOPath(home, "en-us")
-		if info, err := os.Stat(cached); err == nil && info.Size() > 1024*1024 {
-			return cached
-		}
-	}
-
-	// 3. Assemble from ESD on the fly (needs -tags wimlib + genisoimage/hdiutil)
+	// 2. Assemble from ESD on the fly (needs -tags wimlib + genisoimage/hdiutil)
 	if esdPath := os.Getenv("DEVCELL_TEST_ESD_PATH"); esdPath != "" {
 		if _, err := os.Stat(esdPath); err != nil {
 			t.Fatalf("DEVCELL_TEST_ESD_PATH=%s: %v", esdPath, err)
@@ -650,9 +644,14 @@ func requireWindowsISO(t *testing.T) string {
 		return isoPath
 	}
 
-	t.Skip("no Windows ISO available — set DEVCELL_TEST_WINDOWS_ISO, " +
-		"DEVCELL_TEST_ESD_PATH, or run `cell init --engine=qemu`")
-	return ""
+	// 3. Download via MCT catalog / UUP dump (uses cache)
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+	path, err := DownloadWindowsISO(t.Context(), home, "en-us", false, NopObserver{})
+	if err != nil {
+		t.Skipf("could not obtain Windows ISO: %v", err)
+	}
+	return path
 }
 
 func repoRoot(_ *testing.T) string {
@@ -664,7 +663,7 @@ func testResultsDir(t *testing.T) string {
 	return testutil.TestResultsDir(t, nil)
 }
 
-func waitForSocket(t *testing.T, sockPath string, timeout time.Duration, resultsDir string) {
+func waitForSocket(t *testing.T, sockPath string, timeout time.Duration, ql *qemuLog) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
@@ -675,53 +674,46 @@ func waitForSocket(t *testing.T, sockPath string, timeout time.Duration, results
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
-	t.Fatalf("QMP socket %s did not appear within %v%s", sockPath, timeout, qemuLaunchHint(resultsDir))
+	t.Fatalf("QMP socket %s did not appear within %v%s", sockPath, timeout, qemuLaunchHint(ql))
 }
 
-// qemuOutput tees QEMU's stdout+stderr to the test log AND to
-// <resultsDir>/qemu.log.
-//
-// Without the file copy a QEMU that dies at launch leaves an EMPTY results
-// directory: the real reason scrolls past in the test output and nothing
-// survives for post-hoc analysis. That is exactly how
-// test/results/20260730T044854-TestWindowsISOBoot_TCG and
-// .../20260729T174705-TestWindowsUnattendedInstall_TCG became
-// indistinguishable from a firmware hang.
-// The argv is written as the first line so the log is self-contained: the exact
-// command, then everything QEMU said about it. Reproducing a failed run is a
-// copy-paste, not an archaeology exercise through the code that launched it.
-func qemuOutput(t *testing.T, resultsDir string, argv []string) io.Writer {
+type qemuLog struct {
+	bytes.Buffer
+}
+
+// qemuOutput tees QEMU's stdout+stderr into a buffer and the test log.
+// On cleanup it writes the captured output into run.json["qemu-output"].
+func qemuOutput(t *testing.T, resultsDir string, argv []string) *qemuLog {
 	t.Helper()
-	path := filepath.Join(resultsDir, "qemu.log")
-	f, err := os.Create(path)
-	if err != nil {
-		t.Logf("could not create %s: %v — QEMU output goes to the test log only", path, err)
-		return os.Stderr
-	}
-	t.Cleanup(func() { f.Close() })
-	writeQEMULogHeader(f, argv)
-	return io.MultiWriter(os.Stderr, f)
+	ql := &qemuLog{}
+	t.Cleanup(func() {
+		if ql.Len() > 0 {
+			updateRunJSON(t, resultsDir, map[string]any{
+				"qemu-output": ql.String(),
+			})
+		}
+	})
+	return ql
 }
 
-// writeQEMULogHeader emits the command line followed by a blank separator.
-func writeQEMULogHeader(w io.Writer, argv []string) {
-	fmt.Fprintf(w, "%s\n\n", strings.Join(argv, " "))
+func (ql *qemuLog) Write(p []byte) (int, error) {
+	os.Stderr.Write(p)
+	return ql.Buffer.Write(p)
 }
 
 // qemuLaunchHint turns a bare QMP timeout into the actual reason when QEMU
-// failed at launch rather than hanging. From the socket's point of view a port
-// collision and a firmware hang are identical.
-func qemuLaunchHint(resultsDir string) string {
-	b, err := os.ReadFile(filepath.Join(resultsDir, "qemu.log"))
-	if err != nil || len(b) == 0 {
+// failed at launch rather than hanging.
+func qemuLaunchHint(ql *qemuLog) string {
+	if ql == nil || ql.Len() == 0 {
 		return ""
 	}
-	for _, line := range strings.Split(string(b), "\n") {
+	output := ql.String()
+	for _, line := range strings.Split(output, "\n") {
 		if strings.Contains(line, "Could not set up host forwarding rule") {
-			return "\n  QEMU never started — a forwarded host port was already in use:\n  " + strings.TrimSpace(line)
+			return "\n  QEMU never started: a forwarded host port was already in use:\n  " + strings.TrimSpace(line)
 		}
 	}
-	for _, line := range strings.Split(string(b), "\n") {
+	for _, line := range strings.Split(output, "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), "qemu-system") {
 			return "\n  QEMU reported at launch:\n  " + strings.TrimSpace(line)
 		}
@@ -729,20 +721,26 @@ func qemuLaunchHint(resultsDir string) string {
 	return ""
 }
 
-// appendRunInfo records what a run actually was, next to its screenshots.
-// Append rather than overwrite so facts discovered after launch (query-kvm)
-// join the ones known at launch (argv).
-func appendRunInfo(t *testing.T, resultsDir, text string) {
+// updateRunJSON merges fields into resultsDir/run.json. It reads the existing
+// file (if any), applies the updates, and writes it back. Safe for incremental
+// additions (argv at launch, query-kvm after boot).
+func updateRunJSON(t *testing.T, resultsDir string, fields map[string]any) {
 	t.Helper()
-	f, err := os.OpenFile(filepath.Join(resultsDir, "run-info.txt"),
-		os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	path := filepath.Join(resultsDir, "run.json")
+	data := map[string]any{}
+	if b, err := os.ReadFile(path); err == nil {
+		json.Unmarshal(b, &data)
+	}
+	for k, v := range fields {
+		data[k] = v
+	}
+	b, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
-		t.Logf("WARNING: could not write run-info.txt: %v", err)
+		t.Logf("WARNING: could not marshal run.json: %v", err)
 		return
 	}
-	defer f.Close()
-	if _, err := f.WriteString(text); err != nil {
-		t.Logf("WARNING: could not append run-info.txt: %v", err)
+	if err := os.WriteFile(path, b, 0o644); err != nil {
+		t.Logf("WARNING: could not write run.json: %v", err)
 	}
 }
 
@@ -758,7 +756,7 @@ func assertAccel(t *testing.T, qmpSock, requestedAccel, resultsDir string) {
 		return
 	}
 	t.Logf("query-kvm: enabled=%v present=%v (requested %s)", kvmEnabled, kvmPresent, requestedAccel)
-	appendRunInfo(t, resultsDir, fmt.Sprintf("query-kvm: enabled=%v present=%v\n", kvmEnabled, kvmPresent))
+	updateRunJSON(t, resultsDir, map[string]any{"query-kvm": fmt.Sprintf("enabled=%v present=%v", kvmEnabled, kvmPresent)})
 
 	switch {
 	case strings.HasPrefix(requestedAccel, "kvm"):

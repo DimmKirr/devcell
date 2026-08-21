@@ -131,7 +131,7 @@ func testWindowsPreppedDiskBoot(t *testing.T, accel string) {
 	}()
 
 	qmpSock := QMPSocketPath(spec)
-	waitForSocket(t, qmpSock, 60*time.Second, resultsDir)
+	waitForSocket(t, qmpSock, 60*time.Second, qemuLog)
 	assertAccel(t, qmpSock, accel, resultsDir)
 
 	// --- test ---

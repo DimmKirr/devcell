@@ -119,7 +119,9 @@ func TestWindowsSetupDriverPhase(t *testing.T) {
 
 			argv := BuildInstallCommand(spec, winISO, answerImg)
 			argv[0] = qemuBin
-			appendRunInfo(t, resultsDir, "test:  "+t.Name()+"\nargv:  "+strings.Join(argv, " ")+"\n")
+			updateRunJSON(t, resultsDir, map[string]any{
+				"test": t.Name(), "qemu-args": strings.Join(argv, " "),
+			})
 
 			require.NoError(t, EnsureScreenshotDir(resultsDir, ScreenSourceQMP))
 
@@ -134,7 +136,7 @@ func TestWindowsSetupDriverPhase(t *testing.T) {
 				cmd.Wait()
 			}()
 
-			waitForSocket(t, qmpSock, 30*time.Second, resultsDir)
+			waitForSocket(t, qmpSock, 30*time.Second, qemuLog)
 			assertAccel(t, qmpSock, accel, resultsDir)
 
 			stop := make(chan struct{})

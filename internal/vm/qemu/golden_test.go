@@ -36,11 +36,8 @@ func TestGeneratedArtifacts_AreByteStable(t *testing.T) {
 		got  []byte
 		want string // sha256 of the rendered bytes
 	}{
-		// autounattend.xml hash updated 2026-08-13: specialize copies
-		// bootstrap to C:\ and FirstLogonCommands tries the fixed path
-		// first (CELL-418 bootstrap-never-ran fix).
 		{"autounattend.xml", GenerateAutounattendXML(cfg),
-			"c65a3d32b36d81c6ddc6f3c3e808e3bc95099cd9e66970246da2a6c0e3cd1295"},
+			"cda4911e1a517553946024387f65e529fc46f89921fc04f24eb65768212874ec"},
 		// bootstrap hash updated 2026-08-13: network check now includes
 		// Get-NetIPConfiguration, routing table, QEMU host ping, DNS
 		// resolution, and a verdict line.
@@ -51,7 +48,7 @@ func TestGeneratedArtifacts_AreByteStable(t *testing.T) {
 		{"devcell-diag.ps1", GenerateGuestDiagnosticsScript(),
 			"c9414853b704ca0414de91ad507904dc04a2fad68963fcffe11eb55768a132fa"},
 		{"winpe-agent", GenerateWinPEAgent(WinPEPayloadConfig{}),
-			"9362f5c2d9eb6cfa27520dccc212b424e2af738779611623e2c8a878169e86aa"},
+			"0eb2df43adcde32d6ae6b6a0135a4712ae71b066d20d1fc9861805ae88916f7c"},
 	} {
 		sum := hex.EncodeToString(func() []byte { h := sha256.Sum256(tc.got); return h[:] }())
 		require.Equal(t, tc.want, sum,

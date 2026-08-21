@@ -26,10 +26,10 @@ func TestGenerateWimBuilderScript_ContainsAllOps(t *testing.T) {
 
 	// Must use offline servicing (/Image:) not /Online.
 	assert.NotContains(t, script, "/Online")
-	assert.Contains(t, script, "/Image:C:\\mnt\\boot")
+	assert.Contains(t, script, "/Image:W:\\mnt\\boot")
 
 	// Must reference install.wim as the source.
-	assert.Contains(t, script, "/Source:C:\\mnt\\install")
+	assert.Contains(t, script, "/Source:W:\\mnt\\install")
 
 	// Must produce devcell.wim output.
 	assert.Contains(t, script, "devcell.wim")
@@ -62,7 +62,7 @@ func TestGenerateWimBuilderScript_PackageOp(t *testing.T) {
 		},
 	}
 	script := string(GenerateWimBuilderScript(cfg))
-	assert.Contains(t, script, "/Add-Package /PackagePath:C:\\mnt\\install\\")
+	assert.Contains(t, script, "/Add-Package /PackagePath:W:\\mnt\\install\\")
 	assert.Contains(t, script, "amd64_some_package.mum")
 }
 
@@ -87,17 +87,10 @@ func TestGenerateWimBuilderScript_ErrorHandling(t *testing.T) {
 	}
 	script := string(GenerateWimBuilderScript(cfg))
 
-	// Must handle missing Windows ISO.
 	assert.Contains(t, script, "sources\\install.wim")
 	assert.Contains(t, script, "Windows ISO not found")
-
-	// Must handle missing boot.wim on shared volume.
 	assert.Contains(t, script, "boot.wim not found")
-
-	// Must handle mount failures.
 	assert.Contains(t, script, "Failed to mount boot.wim")
-
-	// Must handle commit failure.
 	assert.Contains(t, script, "Failed to commit boot.wim")
 }
 
@@ -107,12 +100,10 @@ func TestGenerateWimBuilderScript_InternetCheckAndCapabilityRetry(t *testing.T) 
 	}
 	script := string(GenerateWimBuilderScript(cfg))
 
-	// Internet check
 	assert.Contains(t, script, "Checking internet connectivity")
-	assert.Contains(t, script, "ping -n 1 -w 3000")
-	assert.Contains(t, script, "set HAS_INET=")
+	assert.Contains(t, script, "Test-Connection")
+	assert.Contains(t, script, "$HasInet")
 
-	// Capability ops try offline first, then Windows Update
 	assert.Contains(t, script, "/LimitAccess")
 	assert.Contains(t, script, "failed offline")
 	assert.Contains(t, script, "Retrying")
@@ -126,9 +117,9 @@ func TestGenerateWimBuilderScript_DiskpartWorkVolume(t *testing.T) {
 	}
 	script := string(GenerateWimBuilderScript(cfg))
 
-	assert.Contains(t, script, "diskpart /s")
+	assert.Contains(t, script, "diskpart.exe /s")
 	assert.Contains(t, script, "format fs=ntfs quick")
-	assert.Contains(t, script, "assign letter=C")
+	assert.Contains(t, script, "assign letter=W")
 	assert.Contains(t, script, "diskpart failed")
 }
 
@@ -167,10 +158,8 @@ func TestGenerateWimBuilderScript_DefaultSourceAndTarget(t *testing.T) {
 	}
 	script := string(GenerateWimBuilderScript(cfg))
 
-	// Default source is boot.wim on the shared volume.
-	assert.Contains(t, script, `%SHARED%\boot.wim`)
-	// Default target is devcell.wim.
-	assert.Contains(t, script, `%SHARED%\devcell.wim`)
+	assert.Contains(t, script, `$Shared\boot.wim`)
+	assert.Contains(t, script, `$Shared\devcell.wim`)
 }
 
 func TestGenerateWimBuilderScript_CustomSourceWim(t *testing.T) {
@@ -180,11 +169,9 @@ func TestGenerateWimBuilderScript_CustomSourceWim(t *testing.T) {
 	}
 	script := string(GenerateWimBuilderScript(cfg))
 
-	// Must reference install.wim as the source to mount.
-	assert.Contains(t, script, `%SHARED%\install.wim`)
+	assert.Contains(t, script, `$Shared\install.wim`)
 	assert.Contains(t, script, "install.wim not found")
-	// Must NOT reference boot.wim as the source.
-	assert.NotContains(t, script, `%SHARED%\boot.wim`)
+	assert.NotContains(t, script, `$Shared\boot.wim`)
 }
 
 func TestGenerateWimBuilderScript_CustomTargetWim(t *testing.T) {
@@ -195,8 +182,7 @@ func TestGenerateWimBuilderScript_CustomTargetWim(t *testing.T) {
 	script := string(GenerateWimBuilderScript(cfg))
 
 	assert.Contains(t, script, `custom-output.wim`)
-	// Default source still applies.
-	assert.Contains(t, script, `%SHARED%\boot.wim`)
+	assert.Contains(t, script, `$Shared\boot.wim`)
 }
 
 func TestGenerateWimBuilderScript_SameSourceAndTarget_NoCopy(t *testing.T) {
@@ -207,8 +193,7 @@ func TestGenerateWimBuilderScript_SameSourceAndTarget_NoCopy(t *testing.T) {
 	}
 	script := string(GenerateWimBuilderScript(cfg))
 
-	// When source == target, skip the copy step — DISM committed in place.
-	assert.NotContains(t, script, "copy %SHARED%")
+	assert.NotContains(t, script, "Copy-Item \"$Shared\\devcell.wim\"")
 }
 
 func TestVirtIODriverPrepOps(t *testing.T) {
@@ -225,8 +210,8 @@ func TestGenerateWimBuilderScript_DriverOp(t *testing.T) {
 	}
 	script := string(GenerateWimBuilderScript(cfg))
 
-	assert.Contains(t, script, `/Add-Driver /Driver:%VIRTIO%\NetKVM\w11\ARM64 /Recurse`)
-	assert.Contains(t, script, "/Image:C:\\mnt\\boot")
+	assert.Contains(t, script, `/Add-Driver /Driver:"$VirtIO\NetKVM\w11\ARM64" /Recurse`)
+	assert.Contains(t, script, "/Image:W:\\mnt\\boot")
 }
 
 func TestGenerateWimBuilderScript_DriverOpProbesVirtioISO(t *testing.T) {
@@ -235,8 +220,8 @@ func TestGenerateWimBuilderScript_DriverOpProbesVirtioISO(t *testing.T) {
 	}
 	script := string(GenerateWimBuilderScript(cfg))
 
-	assert.Contains(t, script, "set VIRTIO=")
-	assert.Contains(t, script, `vioserial\w11\ARM64\vioser.inf set VIRTIO=`)
+	assert.Contains(t, script, "$VirtIO = $null")
+	assert.Contains(t, script, `vioserial\w11\ARM64\vioser.inf`)
 	assert.Contains(t, script, "virtio-win ISO not found")
 }
 
@@ -246,8 +231,21 @@ func TestGenerateWimBuilderScript_NoDriverOp_NoVirtioProbe(t *testing.T) {
 	}
 	script := string(GenerateWimBuilderScript(cfg))
 
-	assert.NotContains(t, script, "set VIRTIO=")
+	assert.NotContains(t, script, "$VirtIO = $null")
 	assert.NotContains(t, script, "virtio-win ISO not found")
+}
+
+func TestGenerateWimBuilderScript_DriversOnly_NoInstallWimMount(t *testing.T) {
+	cfg := WimPrepConfig{
+		Ops: VirtIODriverPrepOps(),
+	}
+	script := string(GenerateWimBuilderScript(cfg))
+
+	assert.NotContains(t, script, "Mounting install.wim")
+	assert.NotContains(t, script, "Unmounting install.wim")
+	assert.NotContains(t, script, "Windows ISO not found")
+	assert.Contains(t, script, "Mounting boot.wim")
+	assert.Contains(t, script, "Committing boot.wim")
 }
 
 func TestGenerateWimBuilderScript_DriverOpVerifiesDrivers(t *testing.T) {
@@ -266,10 +264,10 @@ func TestGenerateWimBuilderScript_MixedOps(t *testing.T) {
 	script := string(GenerateWimBuilderScript(cfg))
 
 	assert.Contains(t, script, "/Enable-Feature /FeatureName:Microsoft-Hyper-V")
-	assert.Contains(t, script, `/Add-Driver /Driver:%VIRTIO%\NetKVM\w11\ARM64 /Recurse`)
-	assert.Contains(t, script, `/Add-Driver /Driver:%VIRTIO%\vioserial\w11\ARM64 /Recurse`)
-	assert.Contains(t, script, `/Add-Driver /Driver:%VIRTIO%\vioscsi\w11\ARM64 /Recurse`)
-	assert.Contains(t, script, "set VIRTIO=")
+	assert.Contains(t, script, `/Add-Driver /Driver:"$VirtIO\NetKVM\w11\ARM64" /Recurse`)
+	assert.Contains(t, script, `/Add-Driver /Driver:"$VirtIO\vioserial\w11\ARM64" /Recurse`)
+	assert.Contains(t, script, `/Add-Driver /Driver:"$VirtIO\vioscsi\w11\ARM64" /Recurse`)
+	assert.Contains(t, script, "$VirtIO = $null")
 }
 
 func TestBuildWimBuilderArgv_VirtIOISO(t *testing.T) {
@@ -302,8 +300,35 @@ func TestBuildWimBuilderArgv_NoVirtIOISO(t *testing.T) {
 	assert.NotContains(t, joined, "cdrom2")
 }
 
+func TestBuildWimBuilderArgv_SCSI(t *testing.T) {
+	s := testSpec()
+	s.CDBus = "scsi"
+	wbs := WimBuilderSpec{
+		Spec:       s,
+		WinPEISO:   "/tmp/winpe.iso",
+		SharedImg:  "/tmp/shared.qcow2",
+		WindowsISO: "/tmp/windows.iso",
+		VirtIOISO:  "/tmp/virtio-win.iso",
+	}
+	argv := BuildWimBuilderArgv(wbs)
+	joined := strings.Join(argv, " ")
+
+	assert.Contains(t, joined, "virtio-scsi-pci,id="+CDBusID,
+		"SCSI bus controller must be present")
+	assert.Contains(t, joined, "scsi-cd,drive=cdrom0",
+		"WinPE ISO must be on scsi-cd")
+	assert.Contains(t, joined, "scsi-cd,drive=cdrom1",
+		"Windows ISO must be on scsi-cd")
+	assert.Contains(t, joined, "scsi-cd,drive=cdrom2",
+		"VirtIO ISO must be on scsi-cd")
+	assert.Contains(t, joined, "usb-storage,drive=usbfat0,removable=true,bus="+USBBusID+".0,bootindex=2",
+		"shared FAT volume must be on usb-storage with bootindex=2 for startup.nsh chainload")
+	assert.NotContains(t, joined, "usb-storage,drive=cdrom",
+		"ISOs must not be on usb-storage in SCSI mode")
+}
+
 func TestWimBuilderScriptCommand(t *testing.T) {
 	cmd := WimBuilderScriptCommand()
 	assert.Contains(t, cmd, WimBuilderScriptName)
-	assert.Contains(t, cmd, "%DEVCELL_VOL%")
+	assert.Contains(t, cmd, "$DevcellVol")
 }

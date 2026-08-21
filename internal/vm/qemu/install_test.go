@@ -188,7 +188,7 @@ func testWindowsUnattendedInstall(t *testing.T, accel string) {
 		}
 	}()
 
-	waitForSocket(t, qmpSock, 60*time.Second, resultsDir)
+	waitForSocket(t, qmpSock, 60*time.Second, qemuLog)
 	assertAccel(t, qmpSock, accel, resultsDir)
 
 	stats, err := QMPBlockStats(qmpSock)
@@ -525,12 +525,12 @@ func requireVirtioISO(t *testing.T) string {
 	}
 	home, err := os.UserHomeDir()
 	require.NoError(t, err)
-	cached := filepath.Join(home, ".devcell", "cache", "qemu", "virtio-win.iso")
-	if _, err := os.Stat(cached); err != nil {
-		t.Skipf("virtio-win ISO not found at %s — set DEVCELL_TEST_VIRTIO_ISO or download it "+
-			"(needed for the NetKVM network driver)", cached)
+
+	path, err := DownloadVirtioDrivers(t.Context(), home, false, NopObserver{})
+	if err != nil {
+		t.Skipf("could not obtain virtio-win ISO: %v", err)
 	}
-	return cached
+	return path
 }
 
 // installingSuffix marks a disk an install run is still writing to. Only a

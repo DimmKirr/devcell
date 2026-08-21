@@ -58,7 +58,7 @@ func TestGenerateAutounattendXML_ContainsVirtIODrivers(t *testing.T) {
 	assert.Contains(t, out, `viostor\w11\ARM64\viostor.inf`)
 	assert.Contains(t, out, `NetKVM\w11\ARM64\netkvm.inf`)
 	// One probing command per driver, at distinct Order values.
-	assert.Equal(t, 2, strings.Count(out, "pnputil /add-driver"))
+	assert.Equal(t, 2, strings.Count(out, "pnputil.exe /add-driver"))
 }
 
 func TestDefaultAutounattendConfig_NoVirtIODriversNeeded(t *testing.T) {
@@ -178,11 +178,13 @@ func TestGenerateAutounattendXML_AnswerDriversDrvloadBeforeMediaSearch(t *testin
 	xmlBytes := GenerateAutounattendXML(cfg)
 	s := string(xmlBytes)
 
-	assert.Contains(t, s, `drvload %l:\drivers\vioscsi\vioscsi.inf`,
-		"the INF must be drvloaded, letter-probed like the agent launcher")
+	assert.Contains(t, s, `drvload.exe`,
+		"the INF must be drvloaded via cmd.exe")
+	assert.Contains(t, s, `drivers\vioscsi\vioscsi.inf`,
+		"must reference the vioscsi INF")
 	assert.Contains(t, s, "exit /b 0",
-		"must force success — a non-zero exit in windowsPE aborts Setup")
-	assert.NotContains(t, s, `drvload %l:\drivers\vioscsi\vioscsi.sys`,
+		"must force success: a non-zero exit in windowsPE aborts Setup")
+	assert.NotContains(t, s, `vioscsi.sys`,
 		"only .inf files are drvloaded")
 	assert.Empty(t, ValidateUnattend(xmlBytes))
 }
@@ -213,7 +215,7 @@ func TestBuildAnswerVolume_ShipsAnswerDriversByteExact(t *testing.T) {
 func TestBuildAnswerVolume_ShipsAgentCommand(t *testing.T) {
 	cfg := DefaultAutounattendConfig()
 	cfg.WinPEAgent = true
-	cfg.AgentCommand = `drvload %DEVCELL_VOL%\$WinPEDriver$\vioscsi\vioscsi.inf & echo DRVLOAD_RC=%errorlevel%`
+	cfg.AgentCommand = `& drvload.exe "$DevcellVol\$WinPEDriver$\vioscsi\vioscsi.inf"; Write-Output "DRVLOAD_RC=$LASTEXITCODE"`
 	dest := filepath.Join(t.TempDir(), "answer.img")
 	require.NoError(t, BuildAnswerVolume(cfg, dest))
 
@@ -221,7 +223,7 @@ func TestBuildAnswerVolume_ShipsAgentCommand(t *testing.T) {
 	require.NoError(t, err)
 	firstLine, _, _ := strings.Cut(string(cmdFile), "\n")
 	assert.Equal(t, cfg.AgentCommand, strings.TrimRight(firstLine, "\r "),
-		"the agent reads the first line with set /p — it must be the command verbatim")
+		"the agent reads the first line via Get-Content — it must be the command verbatim")
 }
 
 func TestBuildAnswerVolume_NoAgentCommandFileWithoutCommand(t *testing.T) {
@@ -263,7 +265,7 @@ func TestGenerateAutounattendXML_CustomConfig(t *testing.T) {
 	assert.Contains(t, out, "<ComputerName>custom-host</ComputerName>")
 	assert.Contains(t, out, "<TimeZone>CET</TimeZone>")
 	assert.Contains(t, out, `custom\driver\custom.inf`)
-	assert.Equal(t, 1, strings.Count(out, "pnputil /add-driver"))
+	assert.Equal(t, 1, strings.Count(out, "pnputil.exe /add-driver"))
 }
 
 func TestGenerateAutounattendXML_ARM64Architecture(t *testing.T) {
@@ -703,12 +705,10 @@ func TestGenerateAutounattendXML_InstallsDriversInSpecialize(t *testing.T) {
 	out := string(GenerateAutounattendXML(cfg))
 
 	specialize := out[strings.Index(out, `pass="specialize"`):strings.Index(out, `pass="oobeSystem"`)]
-	assert.Contains(t, specialize, "pnputil /add-driver")
+	assert.Contains(t, specialize, "pnputil.exe /add-driver")
 	assert.Contains(t, specialize, `\NetKVM\w11\ARM64\netkvm.inf`)
-	assert.Contains(t, specialize, "if exist")
-	// A driver failure must degrade to "no network" (diagnosable via the
-	// first-logon report), never abort the install.
-	assert.Contains(t, specialize, "exit /b 0")
+	assert.Contains(t, specialize, "Test-Path")
+	assert.Contains(t, specialize, "exit 0")
 
 	deployIdx := strings.Index(specialize, `name="Microsoft-Windows-Deployment"`)
 	require.Positive(t, deployIdx)
@@ -723,9 +723,9 @@ func TestGenerateAutounattendXML_SpecializeCopiesBootstrapToC(t *testing.T) {
 
 	specialize := out[strings.Index(out, `pass="specialize"`):strings.Index(out, `pass="oobeSystem"`)]
 	assert.Contains(t, specialize, `devcell-bootstrap.ps1`)
-	assert.Contains(t, specialize, `copy /Y`)
+	assert.Contains(t, specialize, `Copy-Item`)
 	assert.Contains(t, specialize, `C:\devcell-bootstrap.ps1`)
-	assert.Contains(t, specialize, "exit /b 0",
+	assert.Contains(t, specialize, "exit 0",
 		"bootstrap copy must not abort the install if the source is missing")
 }
 
@@ -748,7 +748,7 @@ func TestGenerateAutounattendXML_SpecializeBootstrapOrderFollsDrivers(t *testing
 	specialize := out[strings.Index(out, `pass="specialize"`):strings.Index(out, `pass="oobeSystem"`)]
 
 	driverIdx := strings.Index(specialize, "pnputil")
-	copyIdx := strings.Index(specialize, `copy /Y`)
+	copyIdx := strings.Index(specialize, `Copy-Item`)
 	require.Positive(t, driverIdx)
 	require.Positive(t, copyIdx)
 	assert.Greater(t, copyIdx, driverIdx,

@@ -50,6 +50,11 @@ type AutounattendConfig struct {
 	// scanning back from the end, and unexpected trailing bytes make that
 	// inconsistent. The guest truncates to this length before extracting.
 	OpenSSHPayloadSize int
+	// PwshFiles is the extracted PowerShell 7 directory, keyed by answer-
+	// volume path (e.g. "/pwsh/pwsh.exe"). Stock WinPE has no powershell.exe;
+	// these files provide pwsh.exe which the bootstrap.cmd shim and the
+	// windowsPE agent launcher probe for at runtime.
+	PwshFiles map[string][]byte
 	// ImageName selects which image in install.wim to install. The Windows 11
 	// ARM64 media carries three (Home, Home Single Language, Pro); without a
 	// choice Setup stops to ask. Defaults to "Windows 11 Pro".
@@ -446,13 +451,13 @@ const autounattendTmplStr = `<?xml version="1.0" encoding="utf-8"?>
 {{- end}}
 {{- range $i, $d := .VirtIODrivers}}
         <!-- The driver CD's letter is unknowable in advance, so probe for the
-             INF on every plausible letter. "if exist" never fails, and the
-             trailing exit 0 means a broken driver degrades to "no network"
+             INF on every plausible letter. Test-Path never throws, and the
+             try/catch + exit 0 means a broken driver degrades to "no network"
              (visible in the first-logon diagnostics) instead of aborting the
              install. -->
         <RunSynchronousCommand wcm:action="add">
           <Order>{{addOrder $i 3}}</Order>
-          <Path>cmd /c (for %l in (C D E F G H I J K L) do @if exist %l:\{{$d.INFRelPath}} pnputil /add-driver %l:\{{$d.INFRelPath}} /install) &amp; exit /b 0</Path>
+          <Path>powershell.exe -ExecutionPolicy Bypass -Command "try { foreach ($l in 'C','D','E','F','G','H','I','J','K','L') { if (Test-Path \"${l}:\{{$d.INFRelPath}}\") { &amp; pnputil.exe /add-driver \"${l}:\{{$d.INFRelPath}}\" /install } } } catch {}; exit 0"</Path>
           <Description>{{$d.Description}}</Description>
         </RunSynchronousCommand>
 {{- end}}
@@ -463,7 +468,7 @@ const autounattendTmplStr = `<?xml version="1.0" encoding="utf-8"?>
              a fixed path. Same cannot-fail pattern as the driver probe. -->
         <RunSynchronousCommand wcm:action="add">
           <Order>{{.SpecializeBootstrapCopyOrder}}</Order>
-          <Path>cmd /c (for %l in (C D E F G H I J K L) do @if exist %l:\devcell-bootstrap.ps1 copy /Y %l:\devcell-bootstrap.ps1 C:\devcell-bootstrap.ps1) &amp; exit /b 0</Path>
+          <Path>powershell.exe -ExecutionPolicy Bypass -Command "try { foreach ($l in 'C','D','E','F','G','H','I','J','K','L') { if (Test-Path \"${l}:\devcell-bootstrap.ps1\") { Copy-Item \"${l}:\devcell-bootstrap.ps1\" C:\devcell-bootstrap.ps1 -Force; break } } } catch {}; exit 0"</Path>
           <Description>Copy bootstrap script to C:\ for reliable first-logon discovery</Description>
         </RunSynchronousCommand>
       </RunSynchronous>
@@ -669,6 +674,9 @@ func BuildAnswerVolume(cfg AutounattendConfig, destPath string) error {
 	}
 	if len(cfg.EFIBootLoader) > 0 {
 		extra["/EFI/BOOT/BOOTAA64.EFI"] = cfg.EFIBootLoader
+	}
+	for path, data := range cfg.PwshFiles {
+		extra[path] = data
 	}
 	return writeAnswerImage(GenerateAutounattendXML(cfg), extra, cfg.AnswerDrivers, destPath)
 }

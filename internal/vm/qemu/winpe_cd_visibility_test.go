@@ -184,7 +184,9 @@ func TestWinPECDVisibility(t *testing.T) {
 								argv = append(argv, "-D", qemuDebugLog)
 							}
 
-							appendRunInfo(t, resultsDir, "test:  "+t.Name()+"\nargv:  "+strings.Join(argv, " ")+"\n")
+							updateRunJSON(t, resultsDir, map[string]any{
+								"test": t.Name(), "qemu-args": strings.Join(argv, " "),
+							})
 
 							joinedArgv := strings.Join(argv, " ")
 							assert.Contains(t, joinedArgv, "-machine "+machine,
@@ -203,7 +205,7 @@ func TestWinPECDVisibility(t *testing.T) {
 								cmd.Wait()
 							}()
 
-							waitForSocket(t, qmpSock, 30*time.Second, resultsDir)
+							waitForSocket(t, qmpSock, 30*time.Second, qemuLog)
 							assertAccel(t, qmpSock, accel, resultsDir)
 
 							// Snapshot EL2 sysregs at boot to compare with stall state.

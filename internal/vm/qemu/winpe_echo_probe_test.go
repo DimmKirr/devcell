@@ -90,9 +90,12 @@ func TestWinPEEchoProbe(t *testing.T) {
 				GenerateWinPEShellINI_NoSetup(), 0644))
 			require.NoError(t, os.WriteFile(
 				filepath.Join(injectDir, "bootstrap.cmd"),
+				GenerateWinPEBootstrapCmd(), 0644))
+			require.NoError(t, os.WriteFile(
+				filepath.Join(injectDir, "bootstrap.ps1"),
 				GenerateWinPEBootstrap(payloadCfg), 0644))
 			require.NoError(t, os.WriteFile(
-				filepath.Join(injectDir, "agent.cmd"),
+				filepath.Join(injectDir, "agent.ps1"),
 				GenerateWinPEAgent(payloadCfg), 0644))
 
 			const viofsTag = "devcell-logs"
@@ -197,7 +200,9 @@ func TestWinPEEchoProbe(t *testing.T) {
 
 			argv := BuildWinPECommand(spec, winpeISO, answerImg)
 			argv[0] = qemuBin
-			appendRunInfo(t, resultsDir, "test:  "+t.Name()+"\nargv:  "+strings.Join(argv, " ")+"\n")
+			updateRunJSON(t, resultsDir, map[string]any{
+				"test": t.Name(), "qemu-args": strings.Join(argv, " "),
+			})
 			require.NoError(t, EnsureScreenshotDir(resultsDir, ScreenSourceQMP))
 
 			// ── 9. Boot and poll ──
@@ -212,7 +217,7 @@ func TestWinPEEchoProbe(t *testing.T) {
 				cmd.Wait()
 			}()
 
-			waitForSocket(t, qmpSock, 30*time.Second, resultsDir)
+			waitForSocket(t, qmpSock, 30*time.Second, qemuLog)
 			assertAccel(t, qmpSock, accel, resultsDir)
 
 			stop := make(chan struct{})

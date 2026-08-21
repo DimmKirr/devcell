@@ -61,6 +61,22 @@ func runBuildQemu(cellName, hostHome, baseDir, stack string, force, noCache, dry
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	defer signal.Stop(sigCh)
 
+	go func() {
+		select {
+		case <-sigCh:
+			ux.Debugf("caught signal — cancelling build context")
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+
+	runTS := time.Now().UTC().Format("20060102T150405Z")
+	runDir := filepath.Join(baseDir, ".scratch", "debug", runTS)
+	if err := os.MkdirAll(runDir, 0755); err != nil {
+		return fmt.Errorf("creating run debug dir: %w", err)
+	}
+	ux.Debugf("run debug dir: %s", runDir)
+
 	pr := &ux.PhaseRunner{}
 	obs := &phaseObserver{logf: ux.Debugf, runner: pr}
 
@@ -135,6 +151,29 @@ func runBuildQemu(cellName, hostHome, baseDir, stack string, force, noCache, dry
 		return err
 	}
 
+	// --- Phase 3c: PowerShell 7 for WinPE ---
+	// Stock WinPE lacks powershell.exe. The self-contained pwsh.exe ships on
+	// the answer volume so the bootstrap.cmd shim can launch PowerShell scripts.
+	var pwshFiles map[string][]byte
+	if err := pr.PhaseDetailed("Fetching PowerShell for WinPE", func() (string, error) {
+		zipPath, err := qemu.DownloadPwsh(ctx, hostHome, noCache, obs)
+		if err != nil {
+			return "", fmt.Errorf("downloading PowerShell: %w", err)
+		}
+		files, err := qemu.ExtractPwshFiles(zipPath)
+		if err != nil {
+			return "", fmt.Errorf("extracting PowerShell zip: %w", err)
+		}
+		pwshFiles = files
+		var totalSize int64
+		for _, data := range files {
+			totalSize += int64(len(data))
+		}
+		return fmt.Sprintf("%s (%d files, %.1f MB)", zipPath, len(files), float64(totalSize)/(1024*1024)), nil
+	}); err != nil {
+		return err
+	}
+
 	// --- Phase 4: Ensure Windows ISO ---
 	var windowsISO string
 	if err := pr.PhaseDetailed("Ensuring Windows ISO", func() (string, error) {
@@ -197,7 +236,7 @@ func runBuildQemu(cellName, hostHome, baseDir, stack string, force, noCache, dry
 			return fmt.Sprintf("cached: %s", cachedWim), nil
 		}
 
-		path, err := runWimBuilder(ctx, templateDir, windowsISO, virtioISO, obs)
+		path, err := runWimBuilder(ctx, templateDir, windowsISO, virtioISO, runDir, obs, pwshFiles)
 		if err != nil {
 			ux.Debugf("WIM builder failed: %v — build continues without devcell.wim", err)
 			return fmt.Sprintf("skipped: %v", err), nil
@@ -257,6 +296,7 @@ func runBuildQemu(cellName, hostHome, baseDir, stack string, force, noCache, dry
 			cfg.OpenSSHPayloadData = opensshPayload
 			cfg.OpenSSHPayloadSize = len(opensshPayload)
 		}
+		cfg.PwshFiles = pwshFiles
 
 		// ARM64 WinPE has no inbox vioscsi, so Setup cannot see the
 		// virtio-scsi installer CD without this drvload payload — the
@@ -306,11 +346,7 @@ func runBuildQemu(cellName, hostHome, baseDir, stack string, force, noCache, dry
 	// The two channels a guest can use before it has a network. Created up
 	// front so the firmware's very first line is captured — by the time a boot
 	// has failed, there is nothing left to attach to.
-	debugDir := filepath.Join(baseDir, ".context", "debug")
-	if err := os.MkdirAll(debugDir, 0755); err != nil {
-		return fmt.Errorf("creating debug dir: %w", err)
-	}
-	serialLog, guestProgressLog := qemuDiagnosticPaths(debugDir)
+	serialLog, guestProgressLog := qemuDiagnosticPaths(runDir)
 	ux.Debugf("serial log: %s", serialLog)
 	ux.Debugf("guest progress log: %s", guestProgressLog)
 	// Not just for --dry-run: the accelerator decides whether this build takes
@@ -324,7 +360,7 @@ func runBuildQemu(cellName, hostHome, baseDir, stack string, force, noCache, dry
 
 	buildSpec := qemu.Spec{
 		VMName:               "devcell-qemu-build",
-		CPUs:                 4,
+		CPUs:                 2,
 		SerialLogPath:        serialLog,
 		GuestProgressLogPath: guestProgressLog,
 		// Windows cells run WSL2/Hyper-V inside the guest, which needs more
@@ -378,18 +414,14 @@ func runBuildQemu(cellName, hostHome, baseDir, stack string, force, noCache, dry
 	}
 
 	go func() {
-		select {
-		case <-sigCh:
-			ux.Debugf("caught signal — stopping build VM")
-			stopVM()
-			cancel()
-		case <-ctx.Done():
-		}
+		<-ctx.Done()
+		ux.Debugf("context cancelled — stopping build VM")
+		stopVM()
 	}()
 
 	// --- Phase 10: Wait for SSH (installation + first-boot + SSH setup) ---
 	// Capture periodic screenshots via QMP while waiting for Windows install
-	screenshotDir := filepath.Join(baseDir, ".context", "debug", "screenshots")
+	screenshotDir := filepath.Join(runDir, "screenshots")
 	os.MkdirAll(screenshotDir, 0755)
 	screenshotStop := make(chan struct{})
 	go func() {
@@ -680,7 +712,7 @@ func runBuildQemu(cellName, hostHome, baseDir, stack string, force, noCache, dry
 	}
 
 	if err := runQemuDevEnvFinalize(ctx, pr, obs, buildSpec, kernelFW, fsdBin,
-		hostHome, baseDir, stack, modules, budget.SSHDeadline); err != nil {
+		hostHome, baseDir, stack, modules, budget.SSHDeadline, runDir); err != nil {
 		return err
 	}
 
@@ -693,12 +725,12 @@ func runBuildQemu(cellName, hostHome, baseDir, stack string, force, noCache, dry
 // base-profile image save. Separated so the phase list above stays readable.
 func runQemuDevEnvFinalize(ctx context.Context, pr *ux.PhaseRunner, obs qemu.Observer,
 	buildSpec qemu.Spec, kernelFW, fsdBin, hostHome, baseDir, stack string,
-	modules []string, sshDeadline time.Duration) error {
+	modules []string, sshDeadline time.Duration, runDir string) error {
 
 	const shareTag = "devcell"
 	const shareDrive = "Z:"
 	templateDir := qemu.TemplateDir(hostHome, stack, modules)
-	debugDir := filepath.Join(baseDir, ".context", "debug")
+	debugDir := filepath.Join(runDir, "devenv")
 
 	fin := qemu.FinalizeSpec(buildSpec, kernelFW)
 	fin.VirtioFSSocketPath = filepath.Join(templateDir, "virtiofs.sock")
@@ -797,12 +829,19 @@ func runQemuDevEnvFinalize(ctx context.Context, pr *ux.PhaseRunner, obs qemu.Obs
 // produce devcell.wim with Hyper-V, WSL2, OpenSSH, and virtio drivers
 // (NetKVM, vioserial, vioscsi) baked in. Returns the path to the cached
 // devcell.wim on success.
-func runWimBuilder(ctx context.Context, templateDir, windowsISO, virtioISO string, obs qemu.Observer) (string, error) {
+func runWimBuilder(ctx context.Context, templateDir, windowsISO, virtioISO, runDir string, obs qemu.Observer, pwshFiles map[string][]byte) (string, error) {
 	tmpDir, err := os.MkdirTemp("", "devcell-wim-builder-*")
 	if err != nil {
 		return "", fmt.Errorf("creating temp dir: %w", err)
 	}
 	defer os.RemoveAll(tmpDir)
+
+	wimDebugDir := filepath.Join(runDir, "wim-builder")
+	if err := os.MkdirAll(filepath.Join(wimDebugDir, "screenshots"), 0755); err != nil {
+		return "", fmt.Errorf("creating wim-builder debug dir: %w", err)
+	}
+	wimSerialLog := filepath.Join(wimDebugDir, "serial.log")
+	wimProgressLog := filepath.Join(wimDebugDir, "guest-progress.log")
 
 	// 1. Extract boot.wim and EFI boot files from Windows ISO
 	stageDir := filepath.Join(tmpDir, "stage")
@@ -810,10 +849,14 @@ func runWimBuilder(ctx context.Context, templateDir, windowsISO, virtioISO strin
 		return "", fmt.Errorf("extracting WinPE stage: %w", err)
 	}
 
-	// 2. Extract vioserial drivers for agent communication
+	// 2. Extract vioserial + vioscsi drivers for WinPE injection
 	vioserialDrivers, err := qemu.LoadWinPEVioserialDrivers(virtioISO)
 	if err != nil {
 		return "", fmt.Errorf("loading vioserial drivers: %w", err)
+	}
+	vioscsiDrivers, err := qemu.LoadWinPEStorageDrivers(virtioISO)
+	if err != nil {
+		return "", fmt.Errorf("loading vioscsi drivers: %w", err)
 	}
 
 	// 3. Read boot.wim and create the shared FAT volume
@@ -821,6 +864,19 @@ func runWimBuilder(ctx context.Context, templateDir, windowsISO, virtioISO strin
 	bootWimData, err := os.ReadFile(bootWimPath)
 	if err != nil {
 		return "", fmt.Errorf("reading boot.wim: %w", err)
+	}
+
+	// Extract BOOTAA64.EFI for the startup.nsh chainload path.
+	// EDK2 pflash can't read ISO9660 on SCSI CDs, so the FAT volume
+	// ships the bootloader and startup.nsh does the chainload.
+	var efiBootLoader []byte
+	if bl, err := qemu.InstallerBootloader(windowsISO); err != nil {
+		ux.Debugf("wim-builder: could not extract BOOTAA64.EFI: %v", err)
+	} else if _, err := qemu.ValidateBootloaderPE(bl); err != nil {
+		ux.Debugf("wim-builder: BOOTAA64.EFI validation failed: %v", err)
+	} else {
+		efiBootLoader = bl
+		ux.Debugf("wim-builder: embedded BOOTAA64.EFI (%d bytes) on shared volume", len(bl))
 	}
 
 	var ops []qemu.WimPrepOp
@@ -831,7 +887,7 @@ func runWimBuilder(ctx context.Context, templateDir, windowsISO, virtioISO strin
 	cfg := qemu.WimPrepConfig{
 		Ops: ops,
 	}
-	sharedFiles := qemu.SharedVolumeFiles(cfg)
+	sharedFiles := qemu.SharedVolumeFiles(cfg, efiBootLoader, pwshFiles)
 	sharedFiles["/boot.wim"] = bootWimData
 
 	sharedImg := filepath.Join(tmpDir, "shared.qcow2")
@@ -845,13 +901,15 @@ func runWimBuilder(ctx context.Context, templateDir, windowsISO, virtioISO strin
 		return "", fmt.Errorf("creating inject dir: %w", err)
 	}
 
-	for answerPath, data := range vioserialDrivers {
-		hostPath := filepath.Join(injectDir, filepath.FromSlash(answerPath))
-		if err := os.MkdirAll(filepath.Dir(hostPath), 0755); err != nil {
-			return "", err
-		}
-		if err := os.WriteFile(hostPath, data, 0644); err != nil {
-			return "", err
+	for _, driverSet := range []map[string][]byte{vioserialDrivers, vioscsiDrivers} {
+		for answerPath, data := range driverSet {
+			hostPath := filepath.Join(injectDir, filepath.FromSlash(answerPath))
+			if err := os.MkdirAll(filepath.Dir(hostPath), 0755); err != nil {
+				return "", err
+			}
+			if err := os.WriteFile(hostPath, data, 0644); err != nil {
+				return "", err
+			}
 		}
 	}
 
@@ -861,14 +919,19 @@ func runWimBuilder(ctx context.Context, templateDir, windowsISO, virtioISO strin
 		PollSeconds:  5,
 		SyncAgent:    true,
 	}
+	var driverINFs []string
 	if len(vioserialDrivers) > 0 {
-		payloadCfg.DriverINFs = []string{`X:\devcell\drivers\vioserial\vioser.inf`}
+		driverINFs = append(driverINFs, `X:\devcell\drivers\vioserial\vioser.inf`)
 	}
+	if len(vioscsiDrivers) > 0 {
+		driverINFs = append(driverINFs, `X:\devcell\drivers\vioscsi\vioscsi.inf`)
+	}
+	payloadCfg.DriverINFs = driverINFs
 
 	for name, gen := range map[string]func() []byte{
 		"winpeshl.ini":  func() []byte { return qemu.GenerateWinPEShellINI_NoSetup() },
-		"bootstrap.cmd": func() []byte { return qemu.GenerateWinPEBootstrap(payloadCfg) },
-		"agent.cmd":     func() []byte { return qemu.GenerateWinPEAgent(payloadCfg) },
+		"bootstrap.ps1": func() []byte { return qemu.GenerateWinPEBootstrap(payloadCfg) },
+		"agent.ps1":     func() []byte { return qemu.GenerateWinPEAgent(payloadCfg) },
 	} {
 		if err := os.WriteFile(filepath.Join(injectDir, name), gen(), 0644); err != nil {
 			return "", fmt.Errorf("writing %s: %w", name, err)
@@ -887,7 +950,7 @@ func runWimBuilder(ctx context.Context, templateDir, windowsISO, virtioISO strin
 
 	// 6. Build QEMU command
 	diskPath := filepath.Join(tmpDir, "scratch.qcow2")
-	if err := qemu.CreateDisk(diskPath, 4); err != nil {
+	if err := qemu.CreateDisk(diskPath, 8); err != nil {
 		return "", fmt.Errorf("creating scratch disk: %w", err)
 	}
 
@@ -898,15 +961,18 @@ func runWimBuilder(ctx context.Context, templateDir, windowsISO, virtioISO strin
 	}
 
 	spec := qemu.Spec{
-		VMName:       "devcell-wim-builder",
-		CPUs:         4,
-		MemoryGB:     4,
-		DiskPath:     diskPath,
-		FirmwarePath: firmwarePath,
-		VarsPath:     varsPath,
-		QMPSocketDir: tmpDir,
-		DisplayType:  "none",
-		NoReboot:     true,
+		VMName:               "devcell-wim-builder",
+		CPUs:                 2,
+		MemoryGB:             5,
+		DiskPath:             diskPath,
+		FirmwarePath:         firmwarePath,
+		VarsPath:             varsPath,
+		QMPSocketDir:         tmpDir,
+		DisplayType:          "none",
+		NoReboot:             true,
+		SerialLogPath:        wimSerialLog,
+		GuestProgressLogPath: wimProgressLog,
+		CDBus:                "scsi",
 	}
 	spec.ApplyDefaults()
 	if err := spec.Validate(); err != nil {
@@ -930,16 +996,20 @@ func runWimBuilder(ctx context.Context, templateDir, windowsISO, virtioISO strin
 
 	// 7. Boot builder VM and poll for completion
 	ux.Debugf("wim-builder: starting QEMU: %s", strings.Join(argv, " "))
+	ux.Debugf("wim-builder: serial log: %s", wimSerialLog)
+	ux.Debugf("wim-builder: screenshots: %s", filepath.Join(wimDebugDir, "screenshots"))
+	os.WriteFile(filepath.Join(wimDebugDir, "qemu-argv.txt"), []byte(strings.Join(argv, " \\\n  ")+"\n"), 0644)
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	if err := cmd.Start(); err != nil {
 		return "", fmt.Errorf("starting QEMU: %w", err)
 	}
-	defer func() {
+	killVM := func() {
 		cmd.Process.Kill()
 		cmd.Wait()
-	}()
+	}
+	defer killVM()
 
 	qmpSock := qemu.QMPSocketPath(spec)
 	// Wait for QMP socket
@@ -951,6 +1021,34 @@ func runWimBuilder(ctx context.Context, templateDir, windowsISO, virtioISO strin
 		time.Sleep(500 * time.Millisecond)
 	}
 
+	// Capture periodic screenshots from the wim-builder VM
+	wimScreenDir := filepath.Join(wimDebugDir, "screenshots")
+	wimScreenStop := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-wimScreenStop:
+				return
+			case <-ticker.C:
+				ts := time.Now().UTC().Format("20060102T150405Z")
+				ppmFile := filepath.Join(wimScreenDir, ts+".ppm")
+				if err := qemu.QMPScreendump(qmpSock, ppmFile); err != nil {
+					ux.Debugf("wim-builder screenshot failed: %v", err)
+					continue
+				}
+				pngFile := filepath.Join(wimScreenDir, ts+".png")
+				if err := qemu.ConvertPPMtoPNG(ppmFile, pngFile); err != nil {
+					ux.Debugf("wim-builder PPM->PNG failed: %v", err)
+				} else {
+					os.Remove(ppmFile)
+					ux.Debugf("wim-builder screenshot: %s", pngFile)
+				}
+			}
+		}
+	}()
+
 	const (
 		overallDeadline = 15 * time.Minute
 		pollInterval    = 15 * time.Second
@@ -960,16 +1058,25 @@ func runWimBuilder(ctx context.Context, templateDir, windowsISO, virtioISO strin
 	for time.Since(start) < overallDeadline {
 		select {
 		case <-ctx.Done():
+			close(wimScreenStop)
 			return "", ctx.Err()
 		case <-time.After(pollInterval):
 		}
 
+		elapsed := time.Since(start).Round(time.Second)
+		ux.Debugf("wim-builder: polling for completion (%s elapsed)", elapsed)
+
 		doneMarker = readFATFile(sharedImg, "/"+qemu.WimBuilderDoneFile)
 		if doneMarker != "" {
 			ux.Debugf("wim-builder: done marker: %q (after %s)",
-				strings.TrimSpace(doneMarker), time.Since(start).Round(time.Second))
+				strings.TrimSpace(doneMarker), elapsed)
 			break
 		}
+	}
+	select {
+	case <-wimScreenStop:
+	default:
+		close(wimScreenStop)
 	}
 
 	cmd.Process.Kill()

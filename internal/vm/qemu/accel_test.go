@@ -29,10 +29,16 @@ func TestResolveAccel_ExplicitOverrideWins(t *testing.T) {
 	assert.Contains(t, reason, "explicit")
 }
 
-func TestResolveAccel_DarwinUsesHVFRegardlessOfKVM(t *testing.T) {
-	// HVF is the host hypervisor on macOS; /dev/kvm never exists there.
-	accel, _ := ResolveAccel("", true, "darwin", badProbe)
+func TestResolveAccel_DarwinDefaultsTCG(t *testing.T) {
+	accel, reason := ResolveAccel("", true, "darwin", badProbe)
+	assert.Equal(t, DefaultTCGAccel, accel)
+	assert.Contains(t, reason, "TCG default on darwin")
+}
+
+func TestResolveAccel_DarwinExplicitHVF(t *testing.T) {
+	accel, reason := ResolveAccel("hvf", false, "darwin", badProbe)
 	assert.Equal(t, "hvf", accel)
+	assert.Contains(t, reason, "explicit")
 }
 
 func TestResolveAccel_LinuxKVMRequestedAndUsable(t *testing.T) {
@@ -134,8 +140,8 @@ func TestPreferredAccel_UsesKVMWhenUsable(t *testing.T) {
 	assert.NotContains(t, got, "tb-size", "tb-size alongside kvm is rejected by QEMU")
 }
 
-func TestPreferredAccel_DarwinUsesHVF(t *testing.T) {
-	assert.Equal(t, "hvf", preferredAccel("tcg,thread=multi", "darwin", badProbe))
+func TestPreferredAccel_DarwinUsesTCG(t *testing.T) {
+	assert.Equal(t, "tcg,thread=multi", preferredAccel("tcg,thread=multi", "darwin", badProbe))
 }
 
 // --- Spec.CPU override (single-variable CPU experiments) ---

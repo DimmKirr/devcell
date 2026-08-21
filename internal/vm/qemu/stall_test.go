@@ -1,11 +1,14 @@
 package qemu
 
 import (
-	"strings"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // Guest-stall detection. Measured against the real KVM failure, where the
@@ -89,28 +92,18 @@ func TestStallPollsForDuration(t *testing.T) {
 	assert.Equal(t, 2, StallPollsFor(1, 15), "a sub-interval budget still needs two samples")
 }
 
-// qemu.log must open with the exact command line that produced it. A log
-// holding only output cannot be replayed; the 20260730T122616 KVM run left a
-// 0-byte qemu.log, so the run was reconstructible only from the code state at
-// launch.
-func TestWriteQEMULogHeader_CommandLineComesFirst(t *testing.T) {
-	var buf strings.Builder
-	argv := []string{"qemu-system-aarch64", "-machine", "virt", "-accel", "kvm", "-drive", "file=/tmp/d.qcow2"}
-	writeQEMULogHeader(&buf, argv)
-	buf.WriteString("qemu-system-aarch64: some runtime warning\n")
+func TestUpdateRunJSON_MergesFields(t *testing.T) {
+	dir := t.TempDir()
+	updateRunJSON(t, dir, map[string]any{"test": "TestFoo", "qemu-args": "qemu -m 4G"})
+	updateRunJSON(t, dir, map[string]any{"query-kvm": "enabled=false present=true"})
 
-	lines := strings.Split(buf.String(), "\n")
-	assert.Equal(t, "qemu-system-aarch64 -machine virt -accel kvm -drive file=/tmp/d.qcow2", lines[0],
-		"line 1 must be the full, copy-pasteable command")
-	assert.Equal(t, "", lines[1], "a blank line must separate the command from its output")
-	assert.Equal(t, "qemu-system-aarch64: some runtime warning", lines[2],
-		"QEMU's own output must follow the header, not replace it")
-}
-
-func TestWriteQEMULogHeader_EmptyArgv(t *testing.T) {
-	var buf strings.Builder
-	writeQEMULogHeader(&buf, nil)
-	assert.Equal(t, "\n\n", buf.String(), "no argv still yields a well-formed header")
+	data, err := os.ReadFile(filepath.Join(dir, "run.json"))
+	require.NoError(t, err)
+	var m map[string]any
+	require.NoError(t, json.Unmarshal(data, &m))
+	assert.Equal(t, "TestFoo", m["test"])
+	assert.Equal(t, "qemu -m 4G", m["qemu-args"])
+	assert.Equal(t, "enabled=false present=true", m["query-kvm"])
 }
 
 // extractRegister parses QEMU's "info registers" text. The PC extraction was

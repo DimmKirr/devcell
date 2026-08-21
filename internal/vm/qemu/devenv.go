@@ -7,7 +7,7 @@ package qemu
 // All of these travel through PowerShellEncodedCommand, so quoting inside is
 // written for PowerShell alone with no transport escaping.
 //
-// Grounding (see .context/VIRTIO.md):
+// Grounding (see .scratch/VIRTIO.md):
 //   - qemu-ga has no ARM64 build; the x64 MSI under Win11's emulation is the
 //     confirmed-working path, and it needs the ARM64 vioserial driver first.
 //   - Every driver here has a native w11/ARM64 build on the virtio-win ISO,
@@ -55,7 +55,7 @@ func GenerateDriverTrustScript() string {
 // GenerateVirtioAgentInstallScript installs the ARM64 virtio drivers Windows
 // did not need during setup (vioserial, viofs, balloon, rng) and then the qemu
 // guest agent — the x64 MSI under Win11's emulation, since no ARM64 agent
-// build exists (see .context/VIRTIO.md).
+// build exists (see .scratch/VIRTIO.md).
 func GenerateVirtioAgentInstallScript() string {
 	return renderTemplate("devenv/virtio-agent-install.ps1.tmpl", nil)
 }

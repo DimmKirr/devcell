@@ -47,6 +47,7 @@ func TestBuildWindows(t *testing.T) {
 	fwPath := requireFirmware(t)
 	winISO := requireWindowsISO(t)
 	virtioISO := requireVirtioISO(t)
+	pwshFiles := requirePwshFiles(t)
 
 	if fwData, err := os.ReadFile(fwPath); err == nil {
 		h := sha256.Sum256(fwData)
@@ -191,7 +192,9 @@ func TestBuildWindows(t *testing.T) {
 			argv[0] = qemuBin
 
 			t.Logf("install command: %s", strings.Join(argv, " "))
-			appendRunInfo(t, resultsDir, "test:  "+t.Name()+"\nargv:  "+strings.Join(argv, " ")+"\n")
+			updateRunJSON(t, resultsDir, map[string]any{
+				"test": t.Name(), "qemu-args": strings.Join(argv, " "),
+			})
 
 			// --- Launch QEMU ---
 			require.NoError(t, EnsureScreenshotDir(resultsDir, ScreenSourceQMP))
@@ -209,7 +212,7 @@ func TestBuildWindows(t *testing.T) {
 				<-qemuDone
 			}()
 
-			waitForSocket(t, qmpSock, 30*time.Second, resultsDir)
+			waitForSocket(t, qmpSock, 30*time.Second, qemuLog)
 			assertAccel(t, qmpSock, accel, resultsDir)
 
 			if qtree, err := QMPHumanMonitor(qmpSock, "info qtree"); err == nil {
@@ -400,7 +403,14 @@ func buildAndVerifyDevcellWim(t *testing.T, qemuBin, fwPath, winISO, virtioISO, 
 	ops = append(ops, OpenSSHPrepOps()...)
 	ops = append(ops, VirtIODriverPrepOps()...)
 	prepCfg := WimPrepConfig{Ops: ops}
-	sharedFiles := SharedVolumeFiles(prepCfg)
+	var efiBootLoader []byte
+	if bl, err := InstallerBootloader(winISO); err == nil {
+		if _, err := ValidateBootloaderPE(bl); err == nil {
+			efiBootLoader = bl
+			t.Logf("BOOTAA64.EFI: %d bytes", len(bl))
+		}
+	}
+	sharedFiles := SharedVolumeFiles(prepCfg, efiBootLoader, pwshFiles)
 	sharedFiles["/boot.wim"] = bootWimData
 
 	sharedImg := filepath.Join(wimDir, "shared.qcow2")
@@ -432,9 +442,12 @@ func buildAndVerifyDevcellWim(t *testing.T, qemuBin, fwPath, winISO, virtioISO, 
 		GenerateWinPEShellINI_NoSetup(), 0644))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(injectDir, "bootstrap.cmd"),
+		GenerateWinPEBootstrapCmd(), 0644))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(injectDir, "bootstrap.ps1"),
 		GenerateWinPEBootstrap(payloadCfg), 0644))
 	require.NoError(t, os.WriteFile(
-		filepath.Join(injectDir, "agent.cmd"),
+		filepath.Join(injectDir, "agent.ps1"),
 		GenerateWinPEAgent(payloadCfg), 0644))
 
 	require.NoError(t, InjectWinPEPayload(bootWimPath, injectDir))
@@ -493,7 +506,9 @@ func buildAndVerifyDevcellWim(t *testing.T, qemuBin, fwPath, winISO, virtioISO, 
 	}
 	argv := BuildWimBuilderArgv(wbs)
 	argv[0] = qemuBin
-	appendRunInfo(t, resultsDir, "wim-builder:  "+t.Name()+"\nargv:  "+strings.Join(argv, " ")+"\n")
+	updateRunJSON(t, resultsDir, map[string]any{
+		"test": t.Name(), "qemu-args": strings.Join(argv, " "),
+	})
 
 	require.NoError(t, EnsureScreenshotDir(resultsDir, ScreenSourceQMP))
 
@@ -509,7 +524,7 @@ func buildAndVerifyDevcellWim(t *testing.T, qemuBin, fwPath, winISO, virtioISO, 
 		cmd.Wait()
 	}()
 
-	waitForSocket(t, qmpSock, 30*time.Second, resultsDir)
+	waitForSocket(t, qmpSock, 30*time.Second, wimLog)
 	assertAccel(t, qmpSock, strings.SplitN(accel, ",", 2)[0], resultsDir)
 
 	stop := make(chan struct{})

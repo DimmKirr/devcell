@@ -39,8 +39,9 @@ func PatchDevcellWim(wimPath string, imageNum int, registryPatches ...WimRegistr
 }
 
 // InjectWinPEPayload uses wimlib to inject WinPE agent files into boot.wim
-// image 2. The injectDir must contain winpeshl.ini, bootstrap.cmd, agent.cmd,
-// and optionally vioserial drivers under drivers/. The WIM is modified in-place.
+// image 2. The injectDir must contain winpeshl.ini, bootstrap.cmd,
+// bootstrap.ps1, agent.ps1, and optionally vioserial drivers under drivers/.
+// The WIM is modified in-place.
 func InjectWinPEPayload(bootWimPath, injectDir string, registryPatches ...WimRegistryPatch) error {
 	if !wimlib.Available() {
 		return fmt.Errorf("wimlib not available — build with -tags wimlib")

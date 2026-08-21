@@ -171,6 +171,6 @@ func TestVioserialDriverIncludedInSpecialize(t *testing.T) {
 		"specialize must install the vioserial driver so the bootstrap can write to the progress port")
 	assert.Contains(t, out, `NetKVM\w11\ARM64\netkvm.inf`,
 		"NetKVM must still be present")
-	assert.Equal(t, 2, strings.Count(out, "pnputil /add-driver"),
+	assert.Equal(t, 2, strings.Count(out, "pnputil.exe /add-driver"),
 		"one pnputil command per driver")
 }

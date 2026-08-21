@@ -28,10 +28,9 @@ func TestWinPEDiagCommand_ReadOnlyDiagnostics(t *testing.T) {
 	// (ERROR_NO_MORE_ITEMS — driver already loaded) after the agent's diag
 	// drvloaded the same INF that wpeinit had already picked up from
 	// $WinPEDriver$. The diagnostic must observe, never mutate.
-	assert.NotContains(t, qemu.WinPEDiagCommand, "drvload", "diag must not load drivers — it caused the double-load abort")
-	assert.NotContains(t, qemu.WinPEDiagCommand, "findstr", "findstr does not exist in this WinPE (run 20260812T144140)")
-	assert.Contains(t, qemu.WinPEDiagCommand, "diskpart")
-	assert.Contains(t, qemu.WinPEDiagCommand, `reg query HKLM\SYSTEM\CurrentControlSet\Services\vioscsi`)
+	assert.NotContains(t, qemu.WinPEDiagCommand, "drvload", "diag must not load drivers: it caused the double-load abort")
+	assert.Contains(t, qemu.WinPEDiagCommand, "diskpart.exe")
+	assert.Contains(t, qemu.WinPEDiagCommand, `reg.exe query HKLM\SYSTEM\CurrentControlSet\Services\vioscsi`)
 	assert.Contains(t, qemu.WinPEDiagCommand, "Panther")
-	assert.False(t, strings.Contains(qemu.WinPEDiagCommand, "\n"), "must stay a single line — the agent reads it with set /p")
+	assert.False(t, strings.Contains(qemu.WinPEDiagCommand, "\n"), "must stay a single line: the agent reads the first line via Get-Content")
 }

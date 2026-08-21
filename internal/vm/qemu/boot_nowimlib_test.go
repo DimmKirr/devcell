@@ -81,7 +81,9 @@ func TestEmptyDiskBoot_StallDetected(t *testing.T) {
 	argv = append(argv, "-d", "guest_errors,unimp", "-D", filepath.Join(resultsDir, "qemu-guest-errors.log"))
 
 	t.Logf("QEMU command: %v", argv)
-	appendRunInfo(t, resultsDir, "test:    "+t.Name()+"\naccel:   "+spec.Accel+"\nargv:    "+strings.Join(argv, " ")+"\n")
+	updateRunJSON(t, resultsDir, map[string]any{
+		"test": t.Name(), "accel": spec.Accel, "qemu-args": strings.Join(argv, " "),
+	})
 
 	exclusiveQEMU(t)
 	cmd := exec.Command(argv[0], argv[1:]...)
@@ -94,7 +96,7 @@ func TestEmptyDiskBoot_StallDetected(t *testing.T) {
 		cmd.Wait()
 	}()
 
-	waitForSocket(t, qmpSock, 30*time.Second, resultsDir)
+	waitForSocket(t, qmpSock, 30*time.Second, qemuLog)
 
 	const (
 		pollInterval = 10 * time.Second
@@ -214,7 +216,9 @@ func TestISOBootReachesBootloader(t *testing.T) {
 	argv = append(argv, "-d", "guest_errors,unimp", "-D", filepath.Join(resultsDir, "qemu-guest-errors.log"))
 
 	t.Logf("QEMU command: %v", argv)
-	appendRunInfo(t, resultsDir, "test:    "+t.Name()+"\naccel:   "+spec.Accel+"\nargv:    "+strings.Join(argv, " ")+"\n")
+	updateRunJSON(t, resultsDir, map[string]any{
+		"test": t.Name(), "accel": spec.Accel, "qemu-args": strings.Join(argv, " "),
+	})
 
 	exclusiveQEMU(t)
 	cmd := exec.Command(argv[0], argv[1:]...)
@@ -344,7 +348,9 @@ func TestISOBootWithStartupNSH(t *testing.T) {
 	argv = append(argv, "-d", "guest_errors,unimp", "-D", filepath.Join(resultsDir, "qemu-guest-errors.log"))
 
 	t.Logf("accel=%s  QEMU command: %v", spec.Accel, argv)
-	appendRunInfo(t, resultsDir, "test:    "+t.Name()+"\naccel:   "+spec.Accel+"\nargv:    "+strings.Join(argv, " ")+"\n")
+	updateRunJSON(t, resultsDir, map[string]any{
+		"test": t.Name(), "accel": spec.Accel, "qemu-args": strings.Join(argv, " "),
+	})
 
 	exclusiveQEMU(t)
 	cmd := exec.Command(argv[0], argv[1:]...)

@@ -92,9 +92,12 @@ func TestWinPEHyperVInjection(t *testing.T) {
 				GenerateWinPEShellINI_NoSetup(), 0644))
 			require.NoError(t, os.WriteFile(
 				filepath.Join(injectDir, "bootstrap.cmd"),
+				GenerateWinPEBootstrapCmd(), 0644))
+			require.NoError(t, os.WriteFile(
+				filepath.Join(injectDir, "bootstrap.ps1"),
 				GenerateWinPEBootstrap(payloadCfg), 0644))
 			require.NoError(t, os.WriteFile(
-				filepath.Join(injectDir, "agent.cmd"),
+				filepath.Join(injectDir, "agent.ps1"),
 				GenerateWinPEAgent(payloadCfg), 0644))
 			require.NoError(t, os.WriteFile(
 				filepath.Join(injectDir, WinPEHyperVDiagScriptName),
@@ -150,7 +153,9 @@ func TestWinPEHyperVInjection(t *testing.T) {
 
 			argv := BuildWinPECommand(spec, winpeISO, answerImg)
 			argv[0] = qemuBin
-			appendRunInfo(t, resultsDir, "test:  "+t.Name()+"\nargv:  "+strings.Join(argv, " ")+"\n")
+			updateRunJSON(t, resultsDir, map[string]any{
+				"test": t.Name(), "qemu-args": strings.Join(argv, " "),
+			})
 
 			require.NoError(t, EnsureScreenshotDir(resultsDir, ScreenSourceQMP))
 
@@ -511,7 +516,7 @@ func bootWinPEAndPoll(t *testing.T, argv []string, qmpSock, serialLog, answerImg
 		cmd.Wait()
 	}()
 
-	waitForSocket(t, qmpSock, 30*time.Second, resultsDir)
+	waitForSocket(t, qmpSock, 30*time.Second, qemuLog)
 
 	stop := make(chan struct{})
 	defer close(stop)

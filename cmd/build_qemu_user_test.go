@@ -52,7 +52,7 @@ func TestQemuBuildSSHUser_FallsBackToTheDefaultSessionUser(t *testing.T) {
 // The guest's own progress channel (virtio-serial) is the matching outbound path:
 // it is the only way a guest with no network reports on itself while installing.
 func TestQemuDiagnosticPaths_CaptureSerialAndGuestProgress(t *testing.T) {
-	serial, guestProgress := qemuDiagnosticPaths("/project/.context/debug")
+	serial, guestProgress := qemuDiagnosticPaths("/project/.scratch/debug/20260101T000000Z")
 
 	if serial == "" {
 		t.Fatal("the build must capture firmware serial output")
@@ -64,7 +64,7 @@ func TestQemuDiagnosticPaths_CaptureSerialAndGuestProgress(t *testing.T) {
 		t.Errorf("the two channels must not share a file: %s", serial)
 	}
 	for _, p := range []string{serial, guestProgress} {
-		if !strings.HasPrefix(p, "/project/.context/debug/") {
+		if !strings.HasPrefix(p, "/project/.scratch/debug/") {
 			t.Errorf("diagnostics belong under the debug directory, got %s", p)
 		}
 	}

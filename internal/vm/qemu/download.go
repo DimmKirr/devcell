@@ -1,6 +1,7 @@
 package qemu
 
 import (
+	"archive/zip"
 	"context"
 	"fmt"
 	"io"
@@ -22,6 +23,13 @@ const (
 	// WindowsISODownloadURL is the Microsoft page for downloading Windows 11 ARM64 ISO.
 	// Kept for the manual-download fallback message in ResolveWindowsISO.
 	WindowsISODownloadURL = "https://www.microsoft.com/en-us/software-download/windows11arm64"
+
+	// PwshVersion is the PowerShell 7 release shipped on the answer volume.
+	PwshVersion = "7.6.5"
+	// PwshReleaseURL is the direct GitHub download for the self-contained ARM64 zip.
+	PwshReleaseURL = "https://github.com/PowerShell/PowerShell/releases/download/v" + PwshVersion + "/PowerShell-" + PwshVersion + "-win-arm64.zip"
+	// PwshZipName is the cached zip filename.
+	PwshZipName = "pwsh-arm64.zip"
 )
 
 // WindowsISOPath returns the path to the cached Windows ISO for a given language.
@@ -382,4 +390,70 @@ func DownloadOpenSSH(ctx context.Context, home string, noCache bool, obs Observe
 		return "", fmt.Errorf("writing download marker: %w", err)
 	}
 	return dest, nil
+}
+
+// PwshZipPath returns the cached PowerShell 7 zip path.
+func PwshZipPath(home string) string {
+	return filepath.Join(CacheDir(home), PwshZipName)
+}
+
+// DownloadPwsh fetches the PowerShell 7 ARM64 self-contained zip if not cached.
+func DownloadPwsh(ctx context.Context, home string, noCache bool, obs Observer) (string, error) {
+	dest := PwshZipPath(home)
+	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
+		return "", fmt.Errorf("creating cache dir: %w", err)
+	}
+
+	if noCache {
+		obs.Logf("--no-cache: removing pwsh download marker")
+		os.Remove(dest + ".done")
+	}
+
+	if hasDownloadMarker(dest) {
+		if _, err := os.Stat(dest); err == nil {
+			obs.Logf("pwsh cache hit: %s", dest)
+			return dest, nil
+		}
+		obs.Logf("pwsh .done marker found but file missing — re-downloading")
+		os.Remove(dest + ".done")
+	}
+
+	obs.Logf("downloading PowerShell %s from %s", PwshVersion, PwshReleaseURL)
+	if err := downloadFile(ctx, PwshReleaseURL, dest, obs); err != nil {
+		return "", fmt.Errorf("downloading PowerShell release: %w", err)
+	}
+	if err := os.WriteFile(dest+".done", nil, 0644); err != nil {
+		return "", fmt.Errorf("writing download marker: %w", err)
+	}
+	return dest, nil
+}
+
+// ExtractPwshFiles reads a PowerShell zip and returns its contents as a map
+// keyed by answer-volume paths (e.g. "/pwsh/pwsh.exe"). The PwshVolDir
+// prefix is prepended automatically.
+func ExtractPwshFiles(zipPath string) (map[string][]byte, error) {
+	r, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return nil, fmt.Errorf("opening pwsh zip: %w", err)
+	}
+	defer r.Close()
+
+	files := make(map[string][]byte)
+	for _, f := range r.File {
+		if f.FileInfo().IsDir() {
+			continue
+		}
+		rc, err := f.Open()
+		if err != nil {
+			return nil, fmt.Errorf("opening %s in zip: %w", f.Name, err)
+		}
+		data, err := io.ReadAll(rc)
+		rc.Close()
+		if err != nil {
+			return nil, fmt.Errorf("reading %s from zip: %w", f.Name, err)
+		}
+		volPath := "/" + PwshVolDir + "/" + f.Name
+		files[volPath] = data
+	}
+	return files, nil
 }

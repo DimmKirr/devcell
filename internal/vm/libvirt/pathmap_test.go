@@ -109,8 +109,8 @@ func TestTranslateSpecPaths_AllFileFields(t *testing.T) {
 		DiskPath:             "/home/dmitry/.devcell/inst/disk.qcow2",
 		FirmwarePath:         "/home/dmitry/.devcell/fw/code.fd",
 		VarsPath:             "/home/dmitry/.devcell/inst/vars.fd",
-		SerialLogPath:        "/devcell-155/.context/serial.log",
-		GuestProgressLogPath: "/devcell-155/.context/progress.log",
+		SerialLogPath:        "/devcell-155/.scratch/serial.log",
+		GuestProgressLogPath: "/devcell-155/.scratch/progress.log",
 	}
 	out, err := TranslateSpecPaths(s, testMap())
 	if err != nil {
@@ -120,8 +120,8 @@ func TestTranslateSpecPaths_AllFileFields(t *testing.T) {
 		out.DiskPath:             "/Users/dmitry/.devcell/inst/disk.qcow2",
 		out.FirmwarePath:         "/Users/dmitry/.devcell/fw/code.fd",
 		out.VarsPath:             "/Users/dmitry/.devcell/inst/vars.fd",
-		out.SerialLogPath:        "/Users/dmitry/dev/dimmkirr/devcell/.context/serial.log",
-		out.GuestProgressLogPath: "/Users/dmitry/dev/dimmkirr/devcell/.context/progress.log",
+		out.SerialLogPath:        "/Users/dmitry/dev/dimmkirr/devcell/.scratch/serial.log",
+		out.GuestProgressLogPath: "/Users/dmitry/dev/dimmkirr/devcell/.scratch/progress.log",
 	}
 	for got, expect := range want {
 		if got != expect {

@@ -50,6 +50,7 @@ docs/
 .claude/*
 !.claude/rules/
 .context/
+.scratch/
 .envrc
 .idea/
 CLAUDE.local.md

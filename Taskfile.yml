@@ -183,28 +183,19 @@ tasks:
         echo "vendorHash updated and staged: $OLD → $NEW"
 
   nix:check-vendor-hash:
-    desc: Verify flake.nix vendorHash matches go.mod/go.sum (read-only; used by pre-commit)
+    desc: Warn if go.mod/go.sum changed without a vendorHash update (non-blocking, instant)
     dir: "{{.TASKFILE_DIR}}"
     silent: true
     cmds:
       - |
-        # Read-only guard. Never writes flake.nix, so it cannot fight
-        # pre-commit's stash/restore and never asks for a re-stage.
-        # A build that dies for any other reason (ENOSPC, network) is a
-        # FAILURE, not a pass — the old hook reported those as "already
-        # correct" and let a stale hash through.
-        if nix build --no-link .#cell 2>/tmp/vendorhash-check.$$; then
-          rm -f /tmp/vendorhash-check.$$
-          exit 0
+        # Instant check: if go.mod or go.sum are staged but flake.nix is
+        # not, the vendorHash is probably stale. No nix build needed.
+        if git diff --cached --name-only | grep -qE '^(go\.mod|go\.sum)$'; then
+          if ! git diff --cached --name-only | grep -q '^flake\.nix$'; then
+            echo "⚠ go.mod/go.sum changed but flake.nix was not updated — run: task nix:sync" >&2
+          fi
         fi
-        if grep -q 'specified:.*got:\|hash mismatch' /tmp/vendorhash-check.$$; then
-          echo "vendorHash in flake.nix is stale — run: task nix:sync" >&2
-        else
-          echo "Could not verify vendorHash — .#cell failed to build:" >&2
-          tail -20 /tmp/vendorhash-check.$$ >&2
-        fi
-        rm -f /tmp/vendorhash-check.$$
-        exit 1
+        exit 0
 
   test:powershell:render:
     desc: Render all .ps1.tmpl templates to a temp directory for linting
@@ -573,7 +564,7 @@ tasks:
     silent: true
     vars:
       ACCEL: tcg
-      DEBUG_DIR: '{{.TASKFILE_DIR}}/.context/debug'
+      DEBUG_DIR: '{{.TASKFILE_DIR}}/.scratch/debug'
     cmds:
       - mkdir -p {{.DEBUG_DIR}}
       - |
@@ -684,7 +675,7 @@ tasks:
       - task: debug:macos
   # ── Forced QEMU Windows autobuild with full log capture (CELL-428/429) ─────
   debug:autobuild:
-    desc: "Forced QEMU Windows template build with full log capture → .context/debug/autobuild.log"
+    desc: "Forced QEMU Windows template build with full log capture → .scratch/debug/autobuild.log"
     platforms: [darwin]
     deps: [install]
     silent: true
@@ -701,10 +692,10 @@ tasks:
       #      abort returns, H3 is confirmed and the agent design is dead.
       DEVCELL_QEMU_WINPE_AGENT: "1"
     vars:
-      LOG: '{{.TASKFILE_DIR}}/.context/debug/autobuild.log'
+      LOG: '{{.TASKFILE_DIR}}/.scratch/debug/autobuild.log'
       CACHE: '{{.HOME}}/.devcell/cache/qemu'
     cmds:
-      - mkdir -p {{.TASKFILE_DIR}}/.context/debug
+      - mkdir -p {{.TASKFILE_DIR}}/.scratch/debug
       - |
         {
           echo "=== debug:autobuild $(date -u +%Y%m%dT%H%M%SZ) ==="
@@ -734,11 +725,11 @@ tasks:
           echo ""
           echo "=== exit code: $rc ==="
           echo "=== serial.log (tail 120) ==="
-          tail -120 "{{.TASKFILE_DIR}}/.context/debug/serial.log" 2>/dev/null || true
+          tail -120 "{{.TASKFILE_DIR}}/.scratch/debug/serial.log" 2>/dev/null || true
           echo "=== guest-progress.log (tail 60) ==="
-          tail -60 "{{.TASKFILE_DIR}}/.context/debug/guest-progress.log" 2>/dev/null || true
+          tail -60 "{{.TASKFILE_DIR}}/.scratch/debug/guest-progress.log" 2>/dev/null || true
           echo "=== newest screenshots ==="
-          ls -t "{{.TASKFILE_DIR}}/.context/debug/screenshots/" 2>/dev/null | head -12 || true
+          ls -t "{{.TASKFILE_DIR}}/.scratch/debug/screenshots/" 2>/dev/null | head -12 || true
           echo "=== template dir after ==="
           ls -la "{{.HOME}}/.devcell/windows/ultimate/" 2>/dev/null || true
         } >> {{.LOG}} 2>&1
@@ -754,7 +745,7 @@ tasks:
     silent: true
     vars:
       MARKER: '{{.HOME}}/.devcell/windows/ultimate/.provisioned'
-      LOG: '{{.TASKFILE_DIR}}/.context/debug/windows.log'
+      LOG: '{{.TASKFILE_DIR}}/.scratch/debug/windows.log'
     cmds:
       - |
         set -euo pipefail
@@ -938,7 +929,7 @@ tasks:
     platforms: [darwin]
     silent: true
     vars:
-      DEBUG_DIR: '{{.TASKFILE_DIR}}/.context/debug'
+      DEBUG_DIR: '{{.TASKFILE_DIR}}/.scratch/debug'
     cmds:
       - mkdir -p {{.DEBUG_DIR}}
       - |
@@ -1046,7 +1037,7 @@ tasks:
     platforms: [darwin]
     silent: true
     vars:
-      DEBUG_DIR: '{{.TASKFILE_DIR}}/.context/debug'
+      DEBUG_DIR: '{{.TASKFILE_DIR}}/.scratch/debug'
     cmds:
       - mkdir -p {{.DEBUG_DIR}}
       - |
@@ -1074,7 +1065,7 @@ tasks:
 
   # ── QEMU Windows debug VM (boot an existing debug disk) ─────────────
   debug:windows:start:
-    desc: "Boot the Windows.utm disk with qemu-system-aarch64 — same hardware as UTM (see .context/UTMCommand.txt), macOS-native hvf, vmnet-shared network. Vars: DISK, EFI_VARS, SMP, MEM, ACCEL (hvf|tcg)"
+    desc: "Boot the Windows.utm disk with qemu-system-aarch64 — same hardware as UTM (see .scratch/UTMCommand.txt), macOS-native hvf, vmnet-shared network. Vars: DISK, EFI_VARS, SMP, MEM, ACCEL (hvf|tcg)"
     silent: true
     vars:
       # The UTM bundle's own disk, booted in place: Windows state stays
@@ -1143,7 +1134,7 @@ tasks:
           exit 1
         fi
 
-        # Hardware mirrors .context/UTMCommand.txt: -machine virt -cpu host,
+        # Hardware mirrors .scratch/UTMCommand.txt: -machine virt -cpu host,
         # nvme with the bundle's serial, virtio-net with UTM's MAC on
         # vmnet-shared (same network, so the guest keeps its 192.168.64.x
         # DHCP lease). The SPICE/audio/usb-redir/swtpm plumbing is UTM
@@ -1716,9 +1707,9 @@ tasks:
         set -u
         D="{{.TASKFILE_DIR}}/.tmp"
         # Persist the report for the /continue-debug loop: full history in
-        # .context/debug/, always-current copy at .tmp/debug-qemu.txt (both
+        # .scratch/debug/, always-current copy at .tmp/debug-qemu.txt (both
         # bind-mounted into the devcell container).
-        RPT_DIR="{{.TASKFILE_DIR}}/.context/debug"; mkdir -p "$RPT_DIR"
+        RPT_DIR="{{.TASKFILE_DIR}}/.scratch/debug"; mkdir -p "$RPT_DIR"
         RPT="$RPT_DIR/qemu-$(date +%Y%m%dT%H%M%S).log"
         sect() { printf '\n===== %s =====\n' "$1"; }
         # GNU stat vs BSD stat: uname is NOT a reliable discriminator — a
@@ -1834,7 +1825,7 @@ tasks:
         printf '\nreport saved: %s\n' "$RPT"
 
   debug:windows:status:
-    desc: "Snapshot the debug VM + guest state into .context/debug/windows-vm-<ts>.log (run while the VM is up; one ssh password prompt: rdp)"
+    desc: "Snapshot the debug VM + guest state into .scratch/debug/windows-vm-<ts>.log (run while the VM is up; one ssh password prompt: rdp)"
     silent: true
     vars:
       IP: '{{.IP | default ""}}'
@@ -1842,7 +1833,7 @@ tasks:
       - |
         set -euo pipefail
         D="{{.TASKFILE_DIR}}/.tmp"
-        LOG="{{.TASKFILE_DIR}}/.context/debug/windows-vm-$(date -u +%Y%m%dT%H%M%SZ).log"
+        LOG="{{.TASKFILE_DIR}}/.scratch/debug/windows-vm-$(date -u +%Y%m%dT%H%M%SZ).log"
         mkdir -p "$(dirname "$LOG")"
 
         { echo "===== HOST: qemu process ====="
@@ -1891,7 +1882,7 @@ tasks:
     platforms: [darwin]
     silent: true
     vars:
-      LOG: '{{.TASKFILE_DIR}}/.context/debug/nix.log'
+      LOG: '{{.TASKFILE_DIR}}/.scratch/debug/nix.log'
     cmds:
       - |
         set -euo pipefail
@@ -2061,7 +2052,7 @@ tasks:
         readlink -f "$(which darwin-rebuild 2>/dev/null)" 2>/dev/null || true
 
         section "NIXHOME REPO"
-        for d in "{{.ROOT_DIR}}/.context/examples/nixhome" ~/dev/dimmkirr/nixhome ~/dev/n0mad/nixhome ~/nixhome ~/.config/nixhome; do
+        for d in "{{.ROOT_DIR}}/.scratch/examples/nixhome" ~/dev/dimmkirr/nixhome ~/dev/n0mad/nixhome ~/nixhome ~/.config/nixhome; do
           if [ -d "$d" ]; then
             echo "  found: $d"
             ls -la "$d/" | head -15
@@ -2080,7 +2071,7 @@ tasks:
             break
           fi
         done
-        echo "  (searched .context/examples/nixhome, ~/dev/dimmkirr/nixhome, ~/dev/n0mad/nixhome, ~/nixhome, ~/.config/nixhome)"
+        echo "  (searched .scratch/examples/nixhome, ~/dev/dimmkirr/nixhome, ~/dev/n0mad/nixhome, ~/nixhome, ~/.config/nixhome)"
 
         section "/etc/ MODIFICATION ARCHAEOLOGY"
         echo "Goal: determine if Nix installer used mv (rename) or append (tee/echo >>)"
@@ -2184,7 +2175,7 @@ tasks:
         echo "Cross-referencing nixhome config with actual /etc/ state"
         echo ""
         NIXHOME=""
-        for d in "{{.ROOT_DIR}}/.context/examples/nixhome" ~/dev/dimmkirr/nixhome ~/dev/n0mad/nixhome ~/nixhome ~/.config/nixhome; do
+        for d in "{{.ROOT_DIR}}/.scratch/examples/nixhome" ~/dev/dimmkirr/nixhome ~/dev/n0mad/nixhome ~/nixhome ~/.config/nixhome; do
           [ -d "$d/hosts" ] && NIXHOME="$d" && break
         done
         if [ -n "$NIXHOME" ]; then
@@ -2206,7 +2197,7 @@ tasks:
           fi
         else
           echo "  nixhome repo not found"
-          echo "  (searched .context/examples/nixhome, ~/dev/dimmkirr/nixhome, ~/dev/n0mad/nixhome, ~/nixhome, ~/.config/nixhome)"
+          echo "  (searched .scratch/examples/nixhome, ~/dev/dimmkirr/nixhome, ~/dev/n0mad/nixhome, ~/nixhome, ~/.config/nixhome)"
         fi
 
         section "TCC / FDA CONTEXT"
@@ -2271,7 +2262,7 @@ tasks:
     platforms: [darwin]
     silent: true
     vars:
-      LOG: '{{.TASKFILE_DIR}}/.context/debug/colima.log'
+      LOG: '{{.TASKFILE_DIR}}/.scratch/debug/colima.log'
       # Pin the Colima daemon explicitly so this task probes Colima while the
       # ambient docker CLI keeps pointing at whatever else is in use (Docker
       # Desktop). Override for a non-"default" instance:

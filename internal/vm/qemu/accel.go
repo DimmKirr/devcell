@@ -39,11 +39,14 @@ func ProbeKVM() error { return probeDevice(KVMDevice) }
 //
 // Order of authority:
 //  1. an explicit Spec.Accel — callers (notably tests) always win;
-//  2. darwin — HVF is the host hypervisor and /dev/kvm never exists;
-//  3. `[cell] kvm = true` AND the device actually opens — KVM;
-//  4. otherwise TCG.
+//  2. `[cell] kvm = true` AND the device actually opens — KVM (linux only);
+//  3. otherwise TCG.
 //
-// Both conditions in (3) are load-bearing. Config alone is not enough: it
+// darwin used to default to HVF, but QEMU 11.x/HVF has USB xhci enumeration
+// bugs (CELL-427) that break WinPE boot. TCG is slower but reliable. Pass
+// Accel:"hvf" explicitly to opt back in.
+//
+// Both conditions in (2) are load-bearing. Config alone is not enough: it
 // describes intent, and a launch that trusts it on a host without nested
 // virtualization dies with "Could not access KVM kernel module". A usable
 // device alone is not enough either — config stays the authority, so an
@@ -52,16 +55,16 @@ func ResolveAccel(explicit string, kvmRequested bool, goos string, probe func() 
 	if explicit != "" {
 		return explicit, "explicit Spec.Accel override"
 	}
+	if goos != "darwin" && kvmRequested {
+		if err := probe(); err != nil {
+			return DefaultTCGAccel, fmt.Sprintf("software emulation: kvm requested but %s is unusable: %v", KVMDevice, err)
+		}
+		return accelerator(goos), fmt.Sprintf("hardware virtualization: kvm requested and %s opened", KVMDevice)
+	}
 	if goos == "darwin" {
-		return accelerator(goos), "darwin: HVF is the host hypervisor"
+		return DefaultTCGAccel, "software emulation: TCG default on darwin (pass Accel:\"hvf\" to override)"
 	}
-	if !kvmRequested {
-		return DefaultTCGAccel, "software emulation: set `[cell] kvm = true` (and pass --device=/dev/kvm) to use hardware virtualization"
-	}
-	if err := probe(); err != nil {
-		return DefaultTCGAccel, fmt.Sprintf("software emulation: kvm requested but %s is unusable: %v", KVMDevice, err)
-	}
-	return accelerator(goos), fmt.Sprintf("hardware virtualization: kvm requested and %s opened", KVMDevice)
+	return DefaultTCGAccel, "software emulation: set `[cell] kvm = true` (and pass --device=/dev/kvm) to use hardware virtualization"
 }
 
 // PreferredAccel returns hardware virtualization when the host can provide it,

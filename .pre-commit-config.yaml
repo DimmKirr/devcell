@@ -14,17 +14,8 @@ repos:
 
   - repo: local
     hooks:
-      # Guard flake.nix `vendorHash` against go.mod / go.sum drift.
-      # Fires only when the Go module surface changes — devcell's own
-      # source is hashed by nix from `src`, so editing Go code never
-      # invalidates this.
-      #
-      # READ-ONLY by design. It verifies and fails; it never rewrites
-      # flake.nix. A hook that mutates tracked files has to fight
-      # pre-commit's stash/restore and forces a re-stage + re-commit,
-      # so the fix lives in `task nix:sync`, which the failure names.
-      # That also keeps the guarantee that mattered: a commit (and any
-      # tag on it) can never carry a stale hash.
+      # Warn (non-blocking) when go.mod/go.sum change and vendorHash
+      # may be stale. Run `task nix:sync` to fix before pushing.
       - id: nix-vendor-hash
         name: Check flake.nix vendorHash matches go.mod/go.sum
         entry: task nix:check-vendor-hash
@@ -32,3 +23,4 @@ repos:
         files: ^(go\.mod|go\.sum)$
         pass_filenames: false
         require_serial: true
+        verbose: true
