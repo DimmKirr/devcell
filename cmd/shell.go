@@ -1,14 +1,28 @@
 package main
 
-import "github.com/spf13/cobra"
+import (
+	"context"
+	"fmt"
+	"os"
+	"os/exec"
+	"os/signal"
+	"syscall"
+
+	"github.com/DimmKirr/devcell/internal/config"
+	"github.com/DimmKirr/devcell/internal/runner"
+	"github.com/mattn/go-isatty"
+	"github.com/spf13/cobra"
+)
 
 var shellCmd = &cobra.Command{
 	Use:   "shell [-- command [args...]]",
 	Short: "Open an interactive shell in a devcell container",
 	Long: `Opens an interactive zsh shell inside a devcell container.
 
-The current working directory is mounted as /workspace. Optionally pass a
-command after -- to run it non-interactively instead of starting a shell.
+If a container is already running (from 'cell start'), attaches to it.
+Otherwise starts a new container. The current working directory is mounted
+as /workspace. Optionally pass a command after -- to run it
+non-interactively instead of starting a shell.
 
 Examples:
 
@@ -16,17 +30,31 @@ Examples:
     cell shell -- ls /workspace`,
 	DisableFlagParsing: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		// Find the -- separator. Everything after it is the command to run
-		// in the container; everything before it may be devcell flags.
+		applyOutputFlags()
+
+		c, err := config.LoadFromOS()
+		if err == nil && runner.ContainerRunning(context.Background(), c.ContainerName) {
+			binary := "zsh"
+			var execArgs []string
+			for i, a := range args {
+				if a == "--" {
+					rest := args[i+1:]
+					if len(rest) > 0 {
+						binary = rest[0]
+						execArgs = rest[1:]
+					}
+					break
+				}
+			}
+			return execIntoContainer(c.ContainerName, binary, execArgs)
+		}
+
+		// No running container: fall through to docker run.
 		for i, a := range args {
 			if a == "--" {
 				rest := args[i+1:]
 				cellFlags := args[:i]
 				if len(rest) > 0 {
-					// Copy into a fresh slice. `cellFlags` and `rest` share the
-					// args backing array; appending to cellFlags in place would
-					// overwrite rest[0] (the binary) with rest[1] before docker
-					// run sees it.
 					binary := rest[0]
 					userArgs := make([]string, 0, len(cellFlags)+len(rest)-1)
 					userArgs = append(userArgs, cellFlags...)
@@ -38,4 +66,46 @@ Examples:
 		}
 		return runAgent("zsh", nil, args, nil)
 	},
+}
+
+func execIntoContainer(containerName, binary string, args []string) error {
+	spec := runner.ExecSpec{
+		ContainerName: containerName,
+		Binary:        binary,
+		Args:          args,
+		TTY:           isatty.IsTerminal(os.Stdin.Fd()),
+	}
+	argv := runner.BuildExecArgv(spec)
+
+	if scanFlag("--dry-run") {
+		fmt.Println(shellJoin(argv))
+		return nil
+	}
+
+	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("exec into %s: %w", containerName, err)
+	}
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		for sig := range sigCh {
+			_ = cmd.Process.Signal(sig)
+		}
+	}()
+
+	waitErr := cmd.Wait()
+	signal.Stop(sigCh)
+	if waitErr != nil {
+		if exitErr, ok := waitErr.(*exec.ExitError); ok {
+			os.Exit(exitErr.ExitCode())
+		}
+		return waitErr
+	}
+	return nil
 }

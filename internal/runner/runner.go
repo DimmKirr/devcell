@@ -226,6 +226,7 @@ type RunSpec struct {
 	ThinImage    bool                // when true, mount devcell-nix-store volume for /nix
 	BootDir      string              // CELL-264: host-side boot dir for fsnotify sentinels; empty disables the bind-mount
 	TTY          bool                // allocate a pseudo-TTY (-it); set from isatty check on stdin
+	Detach       bool                // run container in detached mode (-d); set by `cell start`
 }
 
 func (s RunSpec) getenv(key string) string {
@@ -254,7 +255,9 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 	if cpu := spec.CellCfg.Docker.ResolvedCPULimit(); cpu != "0" {
 		dockerRunFlags = append(dockerRunFlags, "--cpus="+cpu)
 	}
-	if spec.TTY {
+	if spec.Detach {
+		dockerRunFlags = append(dockerRunFlags, "-d")
+	} else if spec.TTY {
 		dockerRunFlags = append(dockerRunFlags, "-it")
 	}
 	// KVM passthrough for QEMU guests (Windows cells). Must be --device, not
@@ -598,6 +601,15 @@ func RemoveOrphanedContainer(ctx context.Context, name string) error {
 		return fmt.Errorf("remove orphaned container %q: %w", name, err)
 	}
 	return nil
+}
+
+// ContainerRunning checks if a container with the given name is currently running.
+func ContainerRunning(ctx context.Context, name string) bool {
+	out, err := exec.CommandContext(ctx, "docker", "inspect", "--format", "{{.State.Status}}", name).Output()
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(out)) == "running"
 }
 
 // EnsureNetwork creates the devcell-network docker network if it doesn't exist.

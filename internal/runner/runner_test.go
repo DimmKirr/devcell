@@ -153,6 +153,29 @@ func TestArgv_ResourceLimitsZeroOmitsFlag(t *testing.T) {
 	}
 }
 
+// --- Detach mode ---
+
+func TestArgv_DetachFlag(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.Detach = true
+	})
+	if !hasArg(argv, "-d") {
+		t.Error("detach mode should add -d")
+	}
+	if hasArg(argv, "-it") {
+		t.Error("detach mode should not add -it")
+	}
+}
+
+func TestArgv_DetachKeepsRm(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.Detach = true
+	})
+	if !hasArg(argv, "--rm") {
+		t.Error("detach mode should keep --rm")
+	}
+}
+
 // --- Structure ---
 
 func TestArgv_StartsWithDockerRunFlags(t *testing.T) {

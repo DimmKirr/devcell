@@ -124,6 +124,8 @@ func init() {
 		opencodeCmd,
 		geminiCmd,
 		shellCmd,
+		startCmd,
+		stopCmd,
 		buildCmd,
 		initCmd,
 		vncCmd,
@@ -875,6 +877,7 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 		ThinImage:    thin,
 		BootDir:      bootDirEnv,
 		TTY:          isatty.IsTerminal(os.Stdin.Fd()),
+		Detach:       startDetach,
 	}
 	argv := runner.BuildArgv(spec, runner.OsFS, exec.LookPath)
 
@@ -884,6 +887,18 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 	}
 
 	cmd := exec.Command(argv[0], argv[1:]...)
+
+	if startDetach {
+		// Detached: docker run -d prints container ID and exits.
+		// Suppress stdout (container ID) and only show errors.
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("start container: %w", err)
+		}
+		fmt.Printf("Container %s started\n", c.ContainerName)
+		return nil
+	}
+
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
