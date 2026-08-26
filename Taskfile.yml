@@ -201,6 +201,16 @@ tasks:
         fi
         exit 0
 
+  nix:build:
+    desc: Build the cell package via nix and verify it runs — the real check that vendorHash/flake.nix are correct
+    dir: "{{.TASKFILE_DIR}}"
+    deps: [hm:generate]
+    cmds:
+      - |
+        set -e
+        OUT=$(nix build .#cell --no-link --print-out-paths)
+        "$OUT/bin/cell" --version
+
   test:powershell:render:
     desc: Render all .ps1.tmpl templates to a temp directory for linting
     dir: "{{.TASKFILE_DIR}}"
