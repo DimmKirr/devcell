@@ -188,11 +188,15 @@ tasks:
     silent: true
     cmds:
       - |
-        # Instant check: if go.mod or go.sum are staged but flake.nix is
-        # not, the vendorHash is probably stale. No nix build needed.
+        # Instant check: if go.mod or go.sum are staged, the vendorHash
+        # line in flake.nix must be part of the same staged diff. Merely
+        # touching flake.nix for an unrelated reason (e.g. an unrelated
+        # nix module edit riding in the same commit) is not enough — it
+        # previously produced a false "all good" on commit 96bee90. No
+        # nix build needed for this check.
         if git diff --cached --name-only | grep -qE '^(go\.mod|go\.sum)$'; then
-          if ! git diff --cached --name-only | grep -q '^flake\.nix$'; then
-            echo "⚠ go.mod/go.sum changed but flake.nix was not updated — run: task nix:sync" >&2
+          if ! git diff --cached -- flake.nix | grep -q '^[+-].*vendorHash'; then
+            echo "⚠ go.mod/go.sum changed but the vendorHash line in flake.nix was not updated — run: task nix:sync" >&2
           fi
         fi
         exit 0
