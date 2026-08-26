@@ -338,3 +338,114 @@ func extractEnvFromArgv(argv, key string) string {
 	}
 	return rest
 }
+
+// TestOpencode_OpenRouterFlag_InjectsEnv verifies "cell opencode --openrouter --dry-run"
+// forwards the resolved OPENROUTER_API_KEY and emits the built-in openrouter provider
+// (no npm override) in OPENCODE_CONFIG_CONTENT.
+func TestOpencode_OpenRouterFlag_InjectsEnv(t *testing.T) {
+	home := scaffoldedHome(t)
+
+	cfgDir := filepath.Join(home, ".config", "devcell")
+	tomlContent := `[cell]
+[llm.models]
+default = "openrouter/moonshotai/kimi-k3"
+[llm.models.providers.openrouter]
+models = ["moonshotai/kimi-k3", "deepseek/deepseek-v4-pro"]
+`
+	if err := os.WriteFile(filepath.Join(cfgDir, "devcell.toml"), []byte(tomlContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(binaryPath, "opencode", "--openrouter", "--dry-run")
+	cmd.Dir = home
+	cmd.Env = append(os.Environ(), "DEVCELL_BUNK=1", "HOME="+home, "OPENROUTER_API_KEY=sk-or-test-key")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("opencode --openrouter --dry-run failed: %v\noutput: %s", err, out)
+	}
+
+	argv := string(out)
+	if !strings.Contains(argv, "OPENROUTER_API_KEY=sk-or-test-key") {
+		t.Errorf("expected OPENROUTER_API_KEY=sk-or-test-key in argv:\n%s", argv)
+	}
+
+	jsonStr := extractEnvFromArgv(argv, "OPENCODE_CONFIG_CONTENT")
+	if jsonStr == "" {
+		t.Fatal("could not extract OPENCODE_CONFIG_CONTENT value")
+	}
+	var parsed map[string]interface{}
+	if err := json.Unmarshal([]byte(jsonStr), &parsed); err != nil {
+		t.Fatalf("invalid JSON: %v\ncontent: %s", err, jsonStr)
+	}
+
+	// Default model keeps the openrouter/ prefix (opencode's provider/model format).
+	if parsed["model"] != "openrouter/moonshotai/kimi-k3" {
+		t.Errorf("expected model openrouter/moonshotai/kimi-k3, got: %v", parsed["model"])
+	}
+
+	provider, ok := parsed["provider"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("provider not a map: %v", parsed["provider"])
+	}
+	or, ok := provider["openrouter"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("openrouter provider not found: %v", provider)
+	}
+	// Built-in provider: no npm override, opencode supplies its own SDK + baseURL.
+	if _, hasNPM := or["npm"]; hasNPM {
+		t.Errorf("openrouter provider must not override npm (built-in provider), got: %v", or["npm"])
+	}
+	models, ok := or["models"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("openrouter models not a map: %v", or["models"])
+	}
+	if _, ok := models["moonshotai/kimi-k3"]; !ok {
+		t.Errorf("moonshotai/kimi-k3 not in models: %v", models)
+	}
+	if _, ok := models["deepseek/deepseek-v4-pro"]; !ok {
+		t.Errorf("deepseek/deepseek-v4-pro not in models: %v", models)
+	}
+}
+
+// TestOpencode_ConfigUseOpenRouter_InjectsEnv verifies [llm] use_openrouter=true
+// activates openrouter mode without the flag.
+func TestOpencode_ConfigUseOpenRouter_InjectsEnv(t *testing.T) {
+	home := scaffoldedHome(t)
+
+	cfgDir := filepath.Join(home, ".config", "devcell")
+	tomlContent := `[cell]
+[llm]
+use_openrouter = true
+`
+	if err := os.WriteFile(filepath.Join(cfgDir, "devcell.toml"), []byte(tomlContent), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(binaryPath, "opencode", "--dry-run")
+	cmd.Dir = home
+	cmd.Env = append(os.Environ(), "DEVCELL_BUNK=1", "HOME="+home, "OPENROUTER_API_KEY=sk-or-test-key")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("opencode --dry-run failed: %v\noutput: %s", err, out)
+	}
+
+	if !strings.Contains(string(out), "OPENROUTER_API_KEY=sk-or-test-key") {
+		t.Errorf("expected OPENROUTER_API_KEY=sk-or-test-key in argv:\n%s", out)
+	}
+}
+
+// TestOpencode_OpenRouterNoKey_Error verifies a missing OPENROUTER_API_KEY fails the boot.
+func TestOpencode_OpenRouterNoKey_Error(t *testing.T) {
+	home := scaffoldedHome(t)
+
+	cmd := exec.Command(binaryPath, "opencode", "--openrouter", "--dry-run")
+	cmd.Dir = home
+	cmd.Env = []string{"DEVCELL_BUNK=1", "HOME=" + home, "PATH=" + os.Getenv("PATH")}
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected error when OPENROUTER_API_KEY is missing, but got success:\n%s", out)
+	}
+	if !strings.Contains(string(out), "OPENROUTER_API_KEY") {
+		t.Errorf("expected error mentioning OPENROUTER_API_KEY, got:\n%s", out)
+	}
+}

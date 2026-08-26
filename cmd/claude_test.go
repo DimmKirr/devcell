@@ -386,6 +386,54 @@ models = ["moonshotai/kimi-k3", "google/gemini-2.5-pro", "x-ai/grok-4.6"]
 	}
 }
 
+// TestClaude_BaseEnv_DisableMouse verifies that CLAUDE_CODE_DISABLE_MOUSE=1
+// is always injected (all modes), so tmux text selection works.
+func TestClaude_BaseEnv_DisableMouse(t *testing.T) {
+	home := scaffoldedHome(t)
+
+	cmd := exec.Command(binaryPath, "claude", "--dry-run")
+	cmd.Dir = home
+	cmd.Env = append(os.Environ(), "DEVCELL_BUNK=1", "HOME="+home)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("claude --dry-run failed: %v\noutput: %s", err, out)
+	}
+
+	argv := string(out)
+	if !strings.Contains(argv, "CLAUDE_CODE_DISABLE_MOUSE=1") {
+		t.Errorf("expected CLAUDE_CODE_DISABLE_MOUSE=1 in argv:\n%s", argv)
+	}
+}
+
+// TestClaude_BaseEnv_DisableNonessentialTraffic verifies the telemetry kill-switch
+// is present in every mode, not just ollama.
+func TestClaude_BaseEnv_DisableNonessentialTraffic(t *testing.T) {
+	home := scaffoldedHome(t)
+
+	cases := []struct {
+		name string
+		args []string
+		env  []string
+	}{
+		{name: "default", args: []string{"claude", "--dry-run"}},
+		{name: "openrouter", args: []string{"claude", "--openrouter", "--dry-run"}, env: []string{"OPENROUTER_API_KEY=sk-or-test-key"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cmd := exec.Command(binaryPath, tc.args...)
+			cmd.Dir = home
+			cmd.Env = append(append(os.Environ(), "DEVCELL_BUNK=1", "HOME="+home), tc.env...)
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("claude %v failed: %v\noutput: %s", tc.args, err, out)
+			}
+			if !strings.Contains(string(out), "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1") {
+				t.Errorf("expected CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 in argv:\n%s", out)
+			}
+		})
+	}
+}
+
 // TestClaude_OllamaWithUserArgs verifies that --ollama + user args work together.
 func TestClaude_OllamaWithUserArgs(t *testing.T) {
 	home := scaffoldedHome(t)

@@ -247,7 +247,13 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 		argv = append(argv, "op", "run", "--")
 	}
 
-	dockerRunFlags := []string{"--rm", "--shm-size=1g", "--device=/dev/fuse"}
+	dockerRunFlags := []string{"--rm", "--shm-size=" + spec.CellCfg.Docker.ResolvedShmSize(), "--device=/dev/fuse"}
+	if mem := spec.CellCfg.Docker.ResolvedMemLimit(); mem != "0" {
+		dockerRunFlags = append(dockerRunFlags, "--memory="+mem)
+	}
+	if cpu := spec.CellCfg.Docker.ResolvedCPULimit(); cpu != "0" {
+		dockerRunFlags = append(dockerRunFlags, "--cpus="+cpu)
+	}
 	if spec.TTY {
 		dockerRunFlags = append(dockerRunFlags, "-it")
 	}
@@ -259,10 +265,27 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 	if spec.CellCfg.Cell.ResolvedKVM() {
 		dockerRunFlags = append(dockerRunFlags, "--device=/dev/kvm")
 	}
-	for _, cap := range spec.CellCfg.Cell.DockerCapAdd {
+	for _, cap := range spec.CellCfg.Docker.CapAdd {
 		dockerRunFlags = append(dockerRunFlags, "--cap-add="+cap)
 	}
-	if spec.CellCfg.Cell.DockerPrivileged {
+	wgEnabled := cfg.WireguardEnabled(spec.CellCfg)
+	if wgEnabled && !spec.CellCfg.Docker.Privileged {
+		hasNetAdmin := false
+		for _, cap := range spec.CellCfg.Docker.CapAdd {
+			if cap == "NET_ADMIN" {
+				hasNetAdmin = true
+				break
+			}
+		}
+		if !hasNetAdmin {
+			dockerRunFlags = append(dockerRunFlags, "--cap-add=NET_ADMIN")
+		}
+	}
+	if wgEnabled {
+		dockerRunFlags = append(dockerRunFlags, "--device=/dev/net/tun")
+		dockerRunFlags = append(dockerRunFlags, "--sysctl", "net.ipv4.conf.all.src_valid_mark=1")
+	}
+	if spec.CellCfg.Docker.Privileged {
 		dockerRunFlags = append(dockerRunFlags, "--privileged")
 	}
 	argv = append(argv, "docker", "run")
@@ -451,6 +474,7 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 	v(c.HostHome + "/.claude/agents:/home/" + c.HostUser + "/.claude/agents:ro")
 	v(c.HostHome + "/.claude/skills:/home/" + c.HostUser + "/.claude/skills")
 	v(c.HostHome + "/.agents:/home/" + c.HostUser + "/.agents:ro")
+	v(c.HostHome + "/.claude/agents:/home/" + c.HostUser + "/.config/opencode/agents:ro")
 	v(c.ConfigDir + ":/etc/devcell/config")
 	v(c.ConfigDir + ":/home/" + c.HostUser + "/.config/devcell")
 
@@ -482,6 +506,7 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 		"/home/" + c.HostUser + "/.claude/agents":   true,
 		"/home/" + c.HostUser + "/.claude/skills":   true,
 		"/home/" + c.HostUser + "/.agents":          true,
+		"/home/" + c.HostUser + "/.config/opencode/agents":    true,
 		"/etc/devcell/config":                  true,
 		"/home/" + c.HostUser + "/.config/devcell":  true,
 	}
@@ -515,6 +540,13 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 	if spec.CellCfg.GUI.ResolvedEnabled() {
 		argv = append(argv, "-p", publishPrefix+c.VNCPort+":5900")
 		argv = append(argv, "-p", publishPrefix+c.RDPPort+":3389")
+	}
+
+	// Wireguard env + config mount
+	if wgEnabled {
+		argv = append(argv, "-e", "DEVCELL_WG_ENABLED=1")
+		wgDir := filepath.Join(c.CellHome, ".wg")
+		argv = append(argv, "-v", wgDir+":/home/"+c.HostUser+"/.devcell/"+c.CellName+"/.wg:ro")
 	}
 
 	// In-memory secrets mount — Playwright MCP reads .secrets-playwright from here
@@ -1119,4 +1151,57 @@ func envOrDefaultFn(getenv func(string) string, key, def string) string {
 		return v
 	}
 	return def
+}
+
+// PrepareWireguard writes WireGuard config files for each enabled entry
+// to <cellHome>/.wg/<name>.conf. PrivateKey lines are stripped from the
+// config; a PostUp directive loads the key from /run/secrets/wg-private-key
+// at runtime. No-op when no entries are enabled.
+func PrepareWireguard(cellHome string, cellCfg cfg.CellConfig) error {
+	if !cfg.WireguardEnabled(cellCfg) {
+		return nil
+	}
+	wgDir := filepath.Join(cellHome, ".wg")
+	if err := os.MkdirAll(wgDir, 0700); err != nil {
+		return fmt.Errorf("create wireguard dir: %w", err)
+	}
+	for _, entry := range cellCfg.Wireguard {
+		if !entry.Enabled {
+			continue
+		}
+		conf := rewriteWireguardConfig(entry.Config)
+		path := filepath.Join(wgDir, entry.Name+".conf")
+		if err := os.WriteFile(path, []byte(conf), 0600); err != nil {
+			return fmt.Errorf("write %s: %w", path, err)
+		}
+	}
+	return nil
+}
+
+// rewriteWireguardConfig strips PrivateKey from [Interface] and adds a
+// PostUp directive that loads the key from /run/secrets/wg-private-key.
+func rewriteWireguardConfig(raw string) string {
+	var out strings.Builder
+	inInterface := false
+	postUpAdded := false
+	for _, line := range strings.Split(raw, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+			section := strings.TrimSpace(trimmed[1 : len(trimmed)-1])
+			if inInterface && !postUpAdded {
+				out.WriteString("PostUp = wg set %i private-key /run/secrets/wg-private-key\n")
+				postUpAdded = true
+			}
+			inInterface = section == "Interface"
+		}
+		if inInterface && strings.HasPrefix(trimmed, "PrivateKey") {
+			continue
+		}
+		out.WriteString(line)
+		out.WriteByte('\n')
+	}
+	if inInterface && !postUpAdded {
+		out.WriteString("PostUp = wg set %i private-key /run/secrets/wg-private-key\n")
+	}
+	return strings.TrimRight(out.String(), "\n") + "\n"
 }

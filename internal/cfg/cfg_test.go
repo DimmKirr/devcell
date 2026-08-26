@@ -811,6 +811,161 @@ func contains(s, sub string) bool {
 	return len(s) >= len(sub) && len(sub) > 0 && strings.Contains(s, sub)
 }
 
+// --- [docker] section ---
+
+func TestLoadFile_DockerSection(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[docker]
+privileged = true
+cap_add = ["SYS_ADMIN", "NET_ADMIN"]
+mem_limit = "8g"
+cpu_limit = "4"
+shm_size = "2g"
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.Docker.Privileged {
+		t.Error("privileged: want true")
+	}
+	if len(c.Docker.CapAdd) != 2 || c.Docker.CapAdd[0] != "SYS_ADMIN" || c.Docker.CapAdd[1] != "NET_ADMIN" {
+		t.Errorf("cap_add: want [SYS_ADMIN NET_ADMIN], got %v", c.Docker.CapAdd)
+	}
+	if c.Docker.MemLimit != "8g" {
+		t.Errorf("mem_limit: want 8g, got %q", c.Docker.MemLimit)
+	}
+	if c.Docker.CPULimit != "4" {
+		t.Errorf("cpu_limit: want 4, got %q", c.Docker.CPULimit)
+	}
+	if c.Docker.ShmSize != "2g" {
+		t.Errorf("shm_size: want 2g, got %q", c.Docker.ShmSize)
+	}
+}
+
+func TestDockerSection_ResolvedMemLimit_Default(t *testing.T) {
+	t.Setenv("DEVCELL_DOCKER_MEM_LIMIT", "")
+	got := cfg.DockerSection{}.ResolvedMemLimit()
+	if got != "4g" {
+		t.Errorf("want default 4g, got %q", got)
+	}
+}
+
+func TestDockerSection_ResolvedMemLimit_TOML(t *testing.T) {
+	t.Setenv("DEVCELL_DOCKER_MEM_LIMIT", "")
+	got := cfg.DockerSection{MemLimit: "16g"}.ResolvedMemLimit()
+	if got != "16g" {
+		t.Errorf("want 16g from toml, got %q", got)
+	}
+}
+
+func TestDockerSection_ResolvedMemLimit_EnvWins(t *testing.T) {
+	t.Setenv("DEVCELL_DOCKER_MEM_LIMIT", "32g")
+	got := cfg.DockerSection{MemLimit: "16g"}.ResolvedMemLimit()
+	if got != "32g" {
+		t.Errorf("env should win over toml, got %q", got)
+	}
+}
+
+func TestDockerSection_ResolvedMemLimit_ZeroUncaps(t *testing.T) {
+	t.Setenv("DEVCELL_DOCKER_MEM_LIMIT", "")
+	got := cfg.DockerSection{MemLimit: "0"}.ResolvedMemLimit()
+	if got != "0" {
+		t.Errorf("want 0 (uncapped), got %q", got)
+	}
+}
+
+func TestDockerSection_ResolvedCPULimit_Default(t *testing.T) {
+	t.Setenv("DEVCELL_DOCKER_CPU_LIMIT", "")
+	got := cfg.DockerSection{}.ResolvedCPULimit()
+	if got != "2" {
+		t.Errorf("want default 2, got %q", got)
+	}
+}
+
+func TestDockerSection_ResolvedCPULimit_TOML(t *testing.T) {
+	t.Setenv("DEVCELL_DOCKER_CPU_LIMIT", "")
+	got := cfg.DockerSection{CPULimit: "8"}.ResolvedCPULimit()
+	if got != "8" {
+		t.Errorf("want 8 from toml, got %q", got)
+	}
+}
+
+func TestDockerSection_ResolvedCPULimit_EnvWins(t *testing.T) {
+	t.Setenv("DEVCELL_DOCKER_CPU_LIMIT", "16")
+	got := cfg.DockerSection{CPULimit: "8"}.ResolvedCPULimit()
+	if got != "16" {
+		t.Errorf("env should win over toml, got %q", got)
+	}
+}
+
+func TestDockerSection_ResolvedShmSize_Default(t *testing.T) {
+	t.Setenv("DEVCELL_DOCKER_SHM_SIZE", "")
+	got := cfg.DockerSection{}.ResolvedShmSize()
+	if got != "1g" {
+		t.Errorf("want default 1g, got %q", got)
+	}
+}
+
+func TestDockerSection_ResolvedShmSize_TOML(t *testing.T) {
+	t.Setenv("DEVCELL_DOCKER_SHM_SIZE", "")
+	got := cfg.DockerSection{ShmSize: "4g"}.ResolvedShmSize()
+	if got != "4g" {
+		t.Errorf("want 4g from toml, got %q", got)
+	}
+}
+
+func TestDockerSection_ResolvedShmSize_EnvWins(t *testing.T) {
+	t.Setenv("DEVCELL_DOCKER_SHM_SIZE", "8g")
+	got := cfg.DockerSection{ShmSize: "4g"}.ResolvedShmSize()
+	if got != "8g" {
+		t.Errorf("env should win over toml, got %q", got)
+	}
+}
+
+func TestMerge_DockerProjectWins(t *testing.T) {
+	global := cfg.CellConfig{Docker: cfg.DockerSection{MemLimit: "4g", CPULimit: "2", ShmSize: "1g", CapAdd: []string{"SYS_ADMIN"}}}
+	project := cfg.CellConfig{Docker: cfg.DockerSection{Privileged: true, CapAdd: []string{"NET_ADMIN"}, MemLimit: "16g", CPULimit: "8"}}
+	merged := cfg.Merge(global, project)
+	if !merged.Docker.Privileged {
+		t.Error("privileged: project true should win")
+	}
+	if len(merged.Docker.CapAdd) != 2 {
+		t.Errorf("cap_add: want union [SYS_ADMIN NET_ADMIN], got %v", merged.Docker.CapAdd)
+	}
+	if merged.Docker.MemLimit != "16g" {
+		t.Errorf("mem_limit: project should win, got %q", merged.Docker.MemLimit)
+	}
+	if merged.Docker.CPULimit != "8" {
+		t.Errorf("cpu_limit: project should win, got %q", merged.Docker.CPULimit)
+	}
+	if merged.Docker.ShmSize != "1g" {
+		t.Errorf("shm_size: global should be kept when project empty, got %q", merged.Docker.ShmSize)
+	}
+}
+
+func TestMerge_DockerGlobalKeptWhenProjectEmpty(t *testing.T) {
+	global := cfg.CellConfig{Docker: cfg.DockerSection{CapAdd: []string{"SYS_ADMIN"}, MemLimit: "8g", CPULimit: "4", ShmSize: "2g"}}
+	project := cfg.CellConfig{}
+	merged := cfg.Merge(global, project)
+	if merged.Docker.Privileged {
+		t.Error("privileged: should stay false when neither sets it")
+	}
+	if len(merged.Docker.CapAdd) != 1 || merged.Docker.CapAdd[0] != "SYS_ADMIN" {
+		t.Errorf("cap_add: global should be preserved, got %v", merged.Docker.CapAdd)
+	}
+	if merged.Docker.MemLimit != "8g" {
+		t.Errorf("mem_limit: global should be preserved, got %q", merged.Docker.MemLimit)
+	}
+	if merged.Docker.CPULimit != "4" {
+		t.Errorf("cpu_limit: global should be preserved, got %q", merged.Docker.CPULimit)
+	}
+	if merged.Docker.ShmSize != "2g" {
+		t.Errorf("shm_size: global should be preserved, got %q", merged.Docker.ShmSize)
+	}
+}
+
 // --- Git section ---
 
 func TestLoadFile_GitSection(t *testing.T) {
@@ -1613,6 +1768,102 @@ func TestMerge_HostnameInheritsGlobal(t *testing.T) {
 	got := cfg.Merge(global, project)
 	if got.Cell.Hostname != "from-global" {
 		t.Errorf("global hostname must survive when project leaves it empty; got %q", got.Cell.Hostname)
+	}
+}
+
+// --- DefaultCommand ---
+
+func TestLoadFile_DefaultCommand(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[cell]
+default_command = "claude"
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Cell.DefaultCommand != "claude" {
+		t.Errorf("want claude, got %q", c.Cell.DefaultCommand)
+	}
+}
+
+func TestResolvedDefaultCommand_Empty(t *testing.T) {
+	t.Setenv("DEVCELL_DEFAULT_COMMAND", "")
+	got := cfg.CellSection{}.ResolvedDefaultCommand()
+	if got != "" {
+		t.Errorf("want empty, got %q", got)
+	}
+}
+
+func TestResolvedDefaultCommand_TOML(t *testing.T) {
+	t.Setenv("DEVCELL_DEFAULT_COMMAND", "")
+	got := cfg.CellSection{DefaultCommand: "shell"}.ResolvedDefaultCommand()
+	if got != "shell" {
+		t.Errorf("want shell, got %q", got)
+	}
+}
+
+func TestResolvedDefaultCommand_EnvOverridesTOML(t *testing.T) {
+	t.Setenv("DEVCELL_DEFAULT_COMMAND", "codex")
+	got := cfg.CellSection{DefaultCommand: "shell"}.ResolvedDefaultCommand()
+	if got != "codex" {
+		t.Errorf("env should win over toml, got %q", got)
+	}
+}
+
+func TestMerge_DefaultCommandProjectWins(t *testing.T) {
+	global := cfg.CellConfig{Cell: cfg.CellSection{DefaultCommand: "shell"}}
+	project := cfg.CellConfig{Cell: cfg.CellSection{DefaultCommand: "claude"}}
+	got := cfg.Merge(global, project)
+	if got.Cell.DefaultCommand != "claude" {
+		t.Errorf("project default_command must override global; got %q", got.Cell.DefaultCommand)
+	}
+}
+
+func TestMerge_DefaultCommandInheritsGlobal(t *testing.T) {
+	global := cfg.CellConfig{Cell: cfg.CellSection{DefaultCommand: "shell"}}
+	project := cfg.CellConfig{}
+	got := cfg.Merge(global, project)
+	if got.Cell.DefaultCommand != "shell" {
+		t.Errorf("global default_command must survive when project leaves it empty; got %q", got.Cell.DefaultCommand)
+	}
+}
+
+func TestApplyEnv_DefaultCommand(t *testing.T) {
+	c := cfg.CellConfig{Cell: cfg.CellSection{DefaultCommand: "shell"}}
+	cfg.ApplyEnv(&c, func(k string) string {
+		if k == "DEVCELL_DEFAULT_COMMAND" {
+			return "claude"
+		}
+		return ""
+	})
+	if c.Cell.DefaultCommand != "claude" {
+		t.Errorf("ApplyEnv should override default_command; got %q", c.Cell.DefaultCommand)
+	}
+}
+
+func TestValidateDefaultCommand_Valid(t *testing.T) {
+	for _, cmd := range cfg.KnownDefaultCommands() {
+		if err := cfg.ValidateDefaultCommand(cmd); err != nil {
+			t.Errorf("valid command %q should not error: %v", cmd, err)
+		}
+	}
+}
+
+func TestValidateDefaultCommand_Empty(t *testing.T) {
+	if err := cfg.ValidateDefaultCommand(""); err != nil {
+		t.Errorf("empty should be valid: %v", err)
+	}
+}
+
+func TestValidateDefaultCommand_Invalid(t *testing.T) {
+	err := cfg.ValidateDefaultCommand("notacommand")
+	if err == nil {
+		t.Fatal("expected error for invalid command")
+	}
+	if !strings.Contains(err.Error(), "notacommand") {
+		t.Errorf("error should mention the invalid command: %v", err)
 	}
 }
 
@@ -2511,5 +2762,287 @@ func TestMerge_NixPackagesGlobalSurvivesNilProject(t *testing.T) {
 	merged := cfg.Merge(global, cfg.CellConfig{})
 	if len(merged.Packages.Nix.Stable) != 1 || merged.Packages.Nix.Stable[0] != "tmux" {
 		t.Errorf("global nix stable should survive nil project, got %v", merged.Packages.Nix.Stable)
+	}
+}
+
+// --- Wireguard ---
+
+func TestLoadFile_WireguardSection(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[[wireguard]]
+name = "proton-pt"
+enabled = true
+config = """
+[Interface]
+Address = 10.2.0.2/32
+"""
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Wireguard) != 1 {
+		t.Fatalf("expected 1 wireguard entry, got %d", len(c.Wireguard))
+	}
+	wg := c.Wireguard[0]
+	if wg.Name != "proton-pt" {
+		t.Errorf("name: want proton-pt, got %q", wg.Name)
+	}
+	if !wg.Enabled {
+		t.Error("expected enabled=true")
+	}
+	if !strings.Contains(wg.Config, "10.2.0.2/32") {
+		t.Errorf("config should contain address, got %q", wg.Config)
+	}
+}
+
+func TestLoadFile_WireguardMultiple(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[[wireguard]]
+name = "tunnel-a"
+enabled = true
+config = "config-a"
+
+[[wireguard]]
+name = "tunnel-b"
+enabled = false
+config = "config-b"
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Wireguard) != 2 {
+		t.Fatalf("expected 2 wireguard entries, got %d", len(c.Wireguard))
+	}
+	if c.Wireguard[0].Name != "tunnel-a" || c.Wireguard[1].Name != "tunnel-b" {
+		t.Errorf("unexpected names: %q, %q", c.Wireguard[0].Name, c.Wireguard[1].Name)
+	}
+	if !c.Wireguard[0].Enabled || c.Wireguard[1].Enabled {
+		t.Error("expected first enabled, second disabled")
+	}
+}
+
+func TestValidateWireguard_EnabledRequiresConfig(t *testing.T) {
+	c := cfg.CellConfig{
+		Wireguard: []cfg.WireguardEntry{{Name: "test", Enabled: true, Config: ""}},
+	}
+	err := cfg.ValidateWireguard(c)
+	if err == nil {
+		t.Fatal("expected error when enabled=true but config is empty")
+	}
+	if !strings.Contains(err.Error(), "config") {
+		t.Errorf("error should mention config, got: %v", err)
+	}
+}
+
+func TestValidateWireguard_EnabledRequiresName(t *testing.T) {
+	c := cfg.CellConfig{
+		Wireguard: []cfg.WireguardEntry{{Name: "", Enabled: true, Config: "some config"}},
+	}
+	err := cfg.ValidateWireguard(c)
+	if err == nil {
+		t.Fatal("expected error when enabled=true but name is empty")
+	}
+	if !strings.Contains(err.Error(), "name") {
+		t.Errorf("error should mention name, got: %v", err)
+	}
+}
+
+func TestValidateWireguard_DisabledSkipsValidation(t *testing.T) {
+	c := cfg.CellConfig{
+		Wireguard: []cfg.WireguardEntry{{Name: "", Enabled: false, Config: ""}},
+	}
+	if err := cfg.ValidateWireguard(c); err != nil {
+		t.Errorf("disabled entry should not be validated, got: %v", err)
+	}
+}
+
+func TestValidateWireguard_NoEntries(t *testing.T) {
+	c := cfg.CellConfig{}
+	if err := cfg.ValidateWireguard(c); err != nil {
+		t.Errorf("no wireguard entries should pass validation, got: %v", err)
+	}
+}
+
+func TestMerge_WireguardAccumulates(t *testing.T) {
+	global := cfg.CellConfig{
+		Wireguard: []cfg.WireguardEntry{{Name: "global-tun", Enabled: true, Config: "g"}},
+	}
+	project := cfg.CellConfig{
+		Wireguard: []cfg.WireguardEntry{{Name: "project-tun", Enabled: true, Config: "p"}},
+	}
+	merged := cfg.Merge(global, project)
+	if len(merged.Wireguard) != 2 {
+		t.Fatalf("expected 2 wireguard entries after merge, got %d", len(merged.Wireguard))
+	}
+	if merged.Wireguard[0].Name != "global-tun" || merged.Wireguard[1].Name != "project-tun" {
+		t.Errorf("unexpected order: %q, %q", merged.Wireguard[0].Name, merged.Wireguard[1].Name)
+	}
+}
+
+func TestMerge_WireguardDedupByName(t *testing.T) {
+	global := cfg.CellConfig{
+		Wireguard: []cfg.WireguardEntry{{Name: "tun", Enabled: false, Config: "old"}},
+	}
+	project := cfg.CellConfig{
+		Wireguard: []cfg.WireguardEntry{{Name: "tun", Enabled: true, Config: "new"}},
+	}
+	merged := cfg.Merge(global, project)
+	if len(merged.Wireguard) != 1 {
+		t.Fatalf("expected dedup to 1 entry, got %d", len(merged.Wireguard))
+	}
+	if !merged.Wireguard[0].Enabled || merged.Wireguard[0].Config != "new" {
+		t.Error("project entry should win on name conflict")
+	}
+}
+
+func TestWireguardEnabled_NoneEnabled(t *testing.T) {
+	c := cfg.CellConfig{
+		Wireguard: []cfg.WireguardEntry{{Name: "tun", Enabled: false, Config: "c"}},
+	}
+	if cfg.WireguardEnabled(c) {
+		t.Error("expected WireguardEnabled=false when no entry is enabled")
+	}
+}
+
+func TestWireguardEnabled_OneEnabled(t *testing.T) {
+	c := cfg.CellConfig{
+		Wireguard: []cfg.WireguardEntry{{Name: "tun", Enabled: true, Config: "c"}},
+	}
+	if !cfg.WireguardEnabled(c) {
+		t.Error("expected WireguardEnabled=true when an entry is enabled")
+	}
+}
+
+func TestWireguardEnabled_Empty(t *testing.T) {
+	c := cfg.CellConfig{}
+	if cfg.WireguardEnabled(c) {
+		t.Error("expected WireguardEnabled=false when no wireguard entries")
+	}
+}
+
+func TestValidateWireguard_ValidProtonVPNConfig(t *testing.T) {
+	c := cfg.CellConfig{
+		Wireguard: []cfg.WireguardEntry{{
+			Name:    "proton-pt",
+			Enabled: true,
+			Config: `[Interface]
+Address = 10.2.0.2/32, 2a07:b944::2:2/128
+DNS = 10.2.0.1, 2a07:b944::2:1
+PostUp = wg set %i private-key /run/secrets/wg-private-key
+
+[Peer]
+PublicKey = fkBdrgo6NaOI9ICRd+i2mDbieKUzEXkj4vX3ItZ+5lM=
+AllowedIPs = 0.0.0.0/0, ::/0
+Endpoint = 79.127.131.222:51820
+PersistentKeepalive = 25`,
+		}},
+	}
+	if err := cfg.ValidateWireguard(c); err != nil {
+		t.Fatalf("valid ProtonVPN config should pass, got: %v", err)
+	}
+}
+
+func TestValidateWireguard_MissingPeer(t *testing.T) {
+	c := cfg.CellConfig{
+		Wireguard: []cfg.WireguardEntry{{
+			Name:    "no-peer",
+			Enabled: true,
+			Config: `[Interface]
+Address = 10.2.0.2/32
+DNS = 10.2.0.1`,
+		}},
+	}
+	err := cfg.ValidateWireguard(c)
+	if err == nil {
+		t.Fatal("expected error when config has no [Peer] section")
+	}
+	if !strings.Contains(err.Error(), "peer") && !strings.Contains(err.Error(), "Peer") {
+		t.Errorf("error should mention peer, got: %v", err)
+	}
+}
+
+func TestValidateWireguard_MissingPublicKey(t *testing.T) {
+	c := cfg.CellConfig{
+		Wireguard: []cfg.WireguardEntry{{
+			Name:    "no-pubkey",
+			Enabled: true,
+			Config: `[Interface]
+Address = 10.2.0.2/32
+
+[Peer]
+Endpoint = 1.2.3.4:51820
+AllowedIPs = 0.0.0.0/0`,
+		}},
+	}
+	err := cfg.ValidateWireguard(c)
+	if err == nil {
+		t.Fatal("expected error when peer has no PublicKey")
+	}
+	if !strings.Contains(err.Error(), "PublicKey") {
+		t.Errorf("error should mention PublicKey, got: %v", err)
+	}
+}
+
+func TestValidateWireguard_InvalidPublicKey(t *testing.T) {
+	c := cfg.CellConfig{
+		Wireguard: []cfg.WireguardEntry{{
+			Name:    "bad-key",
+			Enabled: true,
+			Config: `[Interface]
+Address = 10.2.0.2/32
+
+[Peer]
+PublicKey = not-valid-base64!!!
+AllowedIPs = 0.0.0.0/0`,
+		}},
+	}
+	err := cfg.ValidateWireguard(c)
+	if err == nil {
+		t.Fatal("expected error for invalid base64 PublicKey")
+	}
+}
+
+func TestValidateWireguard_MissingAddress(t *testing.T) {
+	c := cfg.CellConfig{
+		Wireguard: []cfg.WireguardEntry{{
+			Name:    "no-addr",
+			Enabled: true,
+			Config: `[Interface]
+DNS = 10.2.0.1
+
+[Peer]
+PublicKey = fkBdrgo6NaOI9ICRd+i2mDbieKUzEXkj4vX3ItZ+5lM=
+AllowedIPs = 0.0.0.0/0`,
+		}},
+	}
+	err := cfg.ValidateWireguard(c)
+	if err == nil {
+		t.Fatal("expected error when config has no Address")
+	}
+	if !strings.Contains(err.Error(), "Address") {
+		t.Errorf("error should mention Address, got: %v", err)
+	}
+}
+
+func TestValidateWireguard_PrivateKeyNotRequired(t *testing.T) {
+	c := cfg.CellConfig{
+		Wireguard: []cfg.WireguardEntry{{
+			Name:    "no-privkey",
+			Enabled: true,
+			Config: `[Interface]
+Address = 10.2.0.2/32
+PostUp = wg set %i private-key /run/secrets/wg-private-key
+
+[Peer]
+PublicKey = fkBdrgo6NaOI9ICRd+i2mDbieKUzEXkj4vX3ItZ+5lM=
+AllowedIPs = 0.0.0.0/0`,
+		}},
+	}
+	if err := cfg.ValidateWireguard(c); err != nil {
+		t.Fatalf("PrivateKey should not be required (loaded via PostUp), got: %v", err)
 	}
 }

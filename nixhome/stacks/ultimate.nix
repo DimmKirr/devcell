@@ -23,6 +23,7 @@
     ../modules/travel.nix
     ../modules/vm.nix
     ../modules/wine.nix
+    ../modules/wireguard.nix
   ];
 
   # Enable every opt-in module imported above (or transitively via fullstack).
@@ -39,5 +40,6 @@
   devcell.modules.travel.enable = true;
   devcell.modules.vm.enable = true;
   devcell.modules.wine.enable = true;
+  devcell.modules.wireguard.enable = true;
   devcell.modules.plex.enable = true;  # from ../modules/media
 }

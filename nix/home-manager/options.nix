@@ -22,8 +22,6 @@ in
     engine = opt types.str;
     vagrant_provider = opt types.str;
     vagrant_box = opt types.str;
-    docker_privileged = opt types.bool;
-    docker_cap_add = opt (types.listOf types.str);
     kvm = opt types.bool;
     per_cell_image = opt types.bool;
     hostname = opt types.str;
@@ -46,6 +44,14 @@ in
     libvirt_uri = opt types.str;
     libvirt_path_map = opt (types.attrsOf types.str);
     qemu_project_sync = opt types.str;
+    default_command = opt types.str;
+  };
+  docker = {
+    privileged = opt types.bool;
+    cap_add = opt (types.listOf types.str);
+    mem_limit = opt types.str;
+    cpu_limit = opt types.str;
+    shm_size = opt types.str;
   };
   build = {
     memory = opt types.str;
@@ -117,4 +123,11 @@ in
       edge = opt (types.listOf types.str);
     };
   };
+  wireguard = opt (types.listOf (types.submodule {
+    options = {
+      name = opt types.str;
+      enabled = opt types.bool;
+      config = opt types.str;
+    };
+  }));
 }

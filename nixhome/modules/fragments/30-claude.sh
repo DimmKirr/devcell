@@ -19,11 +19,19 @@ merge_claude_settings() {
     ls -t "${target_file}.backup-"* 2>/dev/null | tail -n +6 | xargs rm -f 2>/dev/null || true
     log "Merging Claude settings (preserving existing configuration)"
     local temp_file=$(mktemp)
-    jq -s '
-      if .[0].hooks.PermissionRequest then .[0]
-      else .[0] * .[1]
-      end
-    ' "$target_file" "$template_file" > "$temp_file" 2>/dev/null
+    # When routed through a third-party gateway (OpenRouter), strip the
+    # PermissionRequest hook entirely: non-Anthropic models interpret hook
+    # responses as user messages and abort in-flight tool calls.
+    if [ "${ANTHROPIC_BASE_URL:-}" = "https://openrouter.ai/api" ]; then
+        jq -s '(.[0] * .[1]) | del(.hooks.PermissionRequest)' \
+            "$target_file" "$template_file" > "$temp_file" 2>/dev/null
+    else
+        jq -s '
+          if .[0].hooks.PermissionRequest then .[0]
+          else .[0] * .[1]
+          end
+        ' "$target_file" "$template_file" > "$temp_file" 2>/dev/null
+    fi
     if [ $? -eq 0 ] && [ -s "$temp_file" ] && jq empty "$temp_file" 2>/dev/null; then
         mv "$temp_file" "$target_file"
         grep -q "PermissionRequest" "$target_file" \

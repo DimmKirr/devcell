@@ -32,7 +32,7 @@ Examples:
     cell codex --model o3`,
 	DisableFlagParsing: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		extraFlags, extraEnv := codexOllamaConfig()
+		extraFlags, extraEnv := codexProviderConfig()
 		return runAgent("codex",
 			append([]string{"--dangerously-bypass-approvals-and-sandbox"}, extraFlags...),
 			args, extraEnv)
@@ -59,21 +59,32 @@ func init() {
 	codexCmd.AddCommand(codexResumeCmd)
 }
 
-// codexOllamaConfig returns extra CLI flags and env vars when ollama mode is
-// active (use_ollama=true in devcell.toml, or --ollama flag).
-// Returns nil, nil when ollama is not configured — Codex runs normally.
-func codexOllamaConfig() (flags []string, env map[string]string) {
+// codexProviderConfig returns extra CLI flags and env vars for the active
+// provider mode. OpenRouter (--openrouter or use_openrouter=true) wins over
+// ollama; with neither configured Codex runs normally against the cloud
+// provider. Returns nil, nil in that default case.
+func codexProviderConfig() (flags []string, env map[string]string) {
 	dbg := scanFlag("--debug")
 	useOllama := scanFlag("--ollama")
+	useOpenRouter := scanFlag("--openrouter")
 
 	var model string
-	if !useOllama {
-		c, err := config.LoadFromOS()
-		if err == nil {
-			cellCfg := cfg.LoadFromOS(c.ConfigDir, c.BaseDir)
+	var models cfg.LLMModelsSection
+	c, err := config.LoadFromOS()
+	if err == nil {
+		cellCfg := cfg.LoadFromOS(c.ConfigDir, c.BaseDir)
+		if !useOllama {
 			useOllama = cellCfg.LLM.UseOllama
-			model = cellCfg.LLM.Models.Default
 		}
+		if !useOpenRouter {
+			useOpenRouter = cellCfg.LLM.UseOpenRouter
+		}
+		model = cellCfg.LLM.Models.Default
+		models = cellCfg.LLM.Models
+	}
+
+	if useOpenRouter {
+		return codexOpenRouterConfig(model, models, dbg)
 	}
 
 	if !useOllama {
@@ -92,4 +103,28 @@ func codexOllamaConfig() (flags []string, env map[string]string) {
 	return flags, map[string]string{
 		"CODEX_OSS_BASE_URL": "http://host.docker.internal:11434/v1",
 	}
+}
+
+// codexOpenRouterConfig returns -c config overrides that point Codex at
+// OpenRouter's OpenAI-compat endpoint. Codex needs wire_api=responses —
+// OpenRouter translates to Chat Completions for models that lack native
+// Responses support. The API key is resolved lazily (after 1Password) via
+// FillOpenRouterKey, requested by the empty OPENROUTER_API_KEY placeholder.
+func codexOpenRouterConfig(configModel string, models cfg.LLMModelsSection, dbg bool) (flags []string, env map[string]string) {
+	if dbg {
+		fmt.Fprintf(os.Stderr, " codex: openrouter mode enabled\n")
+	}
+
+	flags = []string{
+		"-c", "model_provider=openrouter",
+		"-c", "model_providers.openrouter.name=OpenRouter",
+		"-c", "model_providers.openrouter.base_url=" + openRouterOpenAIBaseURL,
+		"-c", "model_providers.openrouter.env_key=OPENROUTER_API_KEY",
+		"-c", "model_providers.openrouter.wire_api=responses",
+	}
+	if model := resolveOpenRouterModel(configModel, models, dbg); model != "" {
+		flags = append(flags, "--model", model)
+	}
+
+	return flags, map[string]string{"OPENROUTER_API_KEY": ""}
 }

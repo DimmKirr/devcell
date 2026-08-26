@@ -1,6 +1,7 @@
 package cfg
 
 import (
+	"encoding/base64"
 	"fmt"
 	"os"
 	"runtime"
@@ -9,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+	wg "github.com/hydrz/wireguard"
 )
 
 // DefaultRegistry is the default container registry for devcell images.
@@ -40,8 +42,6 @@ type CellSection struct {
 	Engine          string   `toml:"engine"`            // execution engine: "docker" (default) or "vagrant"
 	VagrantProvider string   `toml:"vagrant_provider"`  // vagrant provider: "utm" (default) or "libvirt"
 	VagrantBox      string   `toml:"vagrant_box"`       // vagrant box name override (default: "utm/bookworm")
-	DockerPrivileged  bool     `toml:"docker_privileged"`   // run container with --privileged; default: false
-	DockerCapAdd      []string `toml:"docker_cap_add"`      // extra Linux capabilities (e.g. ["SYS_ADMIN"]); default: none
 	KVM               *bool    `toml:"kvm"`                 // pass the daemon host's /dev/kvm into the container so QEMU gets hardware accel instead of TCG; default: false; env: DEVCELL_KVM
 	PerCellImage   *bool    `toml:"per_cell_image"`   // tag user image per cell instead of per stack; default: false
 	Hostname          string   `toml:"hostname"`            // override container hostname; default: computed "cell-<basename>-<bunk>"; env: DEVCELL_HOSTNAME
@@ -64,6 +64,7 @@ type CellSection struct {
 	LibvirtURI        string   `toml:"libvirt_uri"`         // libvirtd connection URI for the libvirt engine; default: DefaultLibvirtURI; env: DEVCELL_LIBVIRT_URI
 	LibvirtPathMap    map[string]string `toml:"libvirt_path_map"` // container prefix -> host prefix rewrites for domain XML paths (CELL-375); empty = CLI runs on the host
 	QemuProjectSync   string   `toml:"qemu_project_sync"`   // project sync for qemu/libvirt engines: "push" (default), "two-way", "off"; env: DEVCELL_QEMU_PROJECT_SYNC (CELL-383)
+	DefaultCommand    string   `toml:"default_command"`     // subcommand to run when `cell` is invoked with no args; env: DEVCELL_DEFAULT_COMMAND
 }
 
 // ResolvedQemuProjectSync returns the effective project sync mode:
@@ -86,6 +87,44 @@ func (c CellSection) ResolvedQemuProjectSync() string {
 		return v
 	}
 	return "push"
+}
+
+var knownDefaultCommands = []string{
+	"claude", "codex", "opencode", "gemini", "shell",
+	"build", "init", "vnc", "rdp", "models", "modules",
+	"serve", "auth", "telemetry",
+}
+
+// KnownDefaultCommands returns the list of valid default_command values.
+func KnownDefaultCommands() []string {
+	out := make([]string, len(knownDefaultCommands))
+	copy(out, knownDefaultCommands)
+	return out
+}
+
+// ResolvedDefaultCommand returns the effective default command: env > toml > "".
+func (c CellSection) ResolvedDefaultCommand() string {
+	if v := os.Getenv("DEVCELL_DEFAULT_COMMAND"); v != "" {
+		return v
+	}
+	return c.DefaultCommand
+}
+
+// ValidateDefaultCommand checks that default_command is a known subcommand name.
+// Empty is valid (no default, shows help).
+func ValidateDefaultCommand(cmd string) error {
+	if cmd == "" {
+		return nil
+	}
+	for _, c := range knownDefaultCommands {
+		if c == cmd {
+			return nil
+		}
+	}
+	sorted := make([]string, len(knownDefaultCommands))
+	copy(sorted, knownDefaultCommands)
+	sort.Strings(sorted)
+	return fmt.Errorf("unknown default_command %q; available commands: %s", cmd, strings.Join(sorted, ", "))
 }
 
 // ResolvedLibvirtURI returns the effective libvirtd URI: env > toml > default.
@@ -572,6 +611,49 @@ func (s StealthSection) ResolvedUserAgent() string {
 	return "Mozilla/5.0 (" + platformUA + ") AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"
 }
 
+// DockerSection holds [docker] config for runtime container resource limits.
+// Values follow the same env > toml > default resolution chain as other sections.
+type DockerSection struct {
+	Privileged bool     `toml:"privileged"` // run container with --privileged; default: false
+	CapAdd     []string `toml:"cap_add"`    // extra Linux capabilities (e.g. ["SYS_ADMIN"]); default: none
+	MemLimit   string   `toml:"mem_limit"`  // docker --memory ceiling (e.g. "4g"); "0" = uncapped; env: DEVCELL_DOCKER_MEM_LIMIT
+	CPULimit   string   `toml:"cpu_limit"`  // docker --cpus quota (e.g. "2"); "0" = no quota; env: DEVCELL_DOCKER_CPU_LIMIT
+	ShmSize    string   `toml:"shm_size"`   // docker --shm-size (e.g. "1g"); env: DEVCELL_DOCKER_SHM_SIZE
+}
+
+// ResolvedMemLimit returns the effective memory limit: env > toml > default "4g".
+func (d DockerSection) ResolvedMemLimit() string {
+	if v := os.Getenv("DEVCELL_DOCKER_MEM_LIMIT"); v != "" {
+		return v
+	}
+	if d.MemLimit != "" {
+		return d.MemLimit
+	}
+	return "4g"
+}
+
+// ResolvedCPULimit returns the effective CPU limit: env > toml > default "2".
+func (d DockerSection) ResolvedCPULimit() string {
+	if v := os.Getenv("DEVCELL_DOCKER_CPU_LIMIT"); v != "" {
+		return v
+	}
+	if d.CPULimit != "" {
+		return d.CPULimit
+	}
+	return "2"
+}
+
+// ResolvedShmSize returns the effective shm size: env > toml > default "1g".
+func (d DockerSection) ResolvedShmSize() string {
+	if v := os.Getenv("DEVCELL_DOCKER_SHM_SIZE"); v != "" {
+		return v
+	}
+	if d.ShmSize != "" {
+		return d.ShmSize
+	}
+	return "1g"
+}
+
 // BuildSection holds [build] config for thin-build resource ceilings.
 // Values feed the same resolution chain as the env vars; an explicit env var
 // always wins over TOML (env > toml > derived default).
@@ -684,22 +766,31 @@ func (g GUISection) ResolvedFramebufferResolution() string {
 	return fmt.Sprintf("%dx%dx%s", w*scale, h*scale, depth)
 }
 
+// WireguardEntry holds one [[wireguard]] table-array entry.
+type WireguardEntry struct {
+	Name    string `toml:"name"`
+	Enabled bool   `toml:"enabled"`
+	Config  string `toml:"config"`
+}
+
 // CellConfig is the merged configuration from all TOML layers.
 type CellConfig struct {
-	Cell     CellSection
-	Build    BuildSection   `toml:"build"`
-	Nix      NixSection     `toml:"nix"`
-	LLM      LLMSection     `toml:"llm"`
-	Git      GitSection     `toml:"git"`
-	Ports    PortsSection   `toml:"ports"`
-	Op       OpSection      `toml:"op"`
-	Aws      AwsSection     `toml:"aws"`
-	Stealth  StealthSection `toml:"stealth"`
-	GUI      GUISection     `toml:"gui"`
-	Env      map[string]string
-	Mise     map[string]string `toml:"mise"` // [mise] — keys map to MISE_<UPPER_KEY> env vars
-	Volumes  []VolumeMount
-	Packages PackagesSection
+	Cell      CellSection
+	Docker    DockerSection  `toml:"docker"`
+	Build     BuildSection   `toml:"build"`
+	Nix       NixSection     `toml:"nix"`
+	LLM       LLMSection     `toml:"llm"`
+	Git       GitSection     `toml:"git"`
+	Ports     PortsSection   `toml:"ports"`
+	Op        OpSection      `toml:"op"`
+	Aws       AwsSection     `toml:"aws"`
+	Stealth   StealthSection `toml:"stealth"`
+	GUI       GUISection     `toml:"gui"`
+	Env       map[string]string
+	Mise      map[string]string `toml:"mise"` // [mise] — keys map to MISE_<UPPER_KEY> env vars
+	Volumes   []VolumeMount
+	Packages  PackagesSection
+	Wireguard []WireguardEntry `toml:"wireguard"`
 }
 
 // LoadFile parses a TOML file into CellConfig.
@@ -816,12 +907,6 @@ func Merge(global, project CellConfig) CellConfig {
 	} else {
 		out.Cell.Modules = unionDedupStrings(global.Cell.Modules, project.Cell.Modules)
 	}
-	if project.Cell.DockerPrivileged {
-		out.Cell.DockerPrivileged = true
-	}
-	if len(project.Cell.DockerCapAdd) > 0 {
-		out.Cell.DockerCapAdd = unionDedupStrings(global.Cell.DockerCapAdd, project.Cell.DockerCapAdd)
-	}
 	if project.Cell.KVM != nil {
 		out.Cell.KVM = project.Cell.KVM
 	}
@@ -878,6 +963,9 @@ func Merge(global, project CellConfig) CellConfig {
 	}
 	if project.Cell.QemuProjectSync != "" {
 		out.Cell.QemuProjectSync = project.Cell.QemuProjectSync
+	}
+	if project.Cell.DefaultCommand != "" {
+		out.Cell.DefaultCommand = project.Cell.DefaultCommand
 	}
 	// Path map accumulates like Env: global entries plus project entries,
 	// project winning on the same key.
@@ -959,6 +1047,24 @@ func Merge(global, project CellConfig) CellConfig {
 	}
 	if project.Build.Cores != 0 {
 		out.Build.Cores = project.Build.Cores
+	}
+
+	// Docker: project wins when non-empty / true
+	out.Docker = global.Docker
+	if project.Docker.Privileged {
+		out.Docker.Privileged = true
+	}
+	if len(project.Docker.CapAdd) > 0 {
+		out.Docker.CapAdd = unionDedupStrings(global.Docker.CapAdd, project.Docker.CapAdd)
+	}
+	if project.Docker.MemLimit != "" {
+		out.Docker.MemLimit = project.Docker.MemLimit
+	}
+	if project.Docker.CPULimit != "" {
+		out.Docker.CPULimit = project.Docker.CPULimit
+	}
+	if project.Docker.ShmSize != "" {
+		out.Docker.ShmSize = project.Docker.ShmSize
 	}
 
 	// Nix: project wins when non-empty
@@ -1079,6 +1185,23 @@ func Merge(global, project CellConfig) CellConfig {
 		}
 	}
 
+	// Wireguard: accumulate, project wins on name conflict.
+	if len(global.Wireguard) > 0 || len(project.Wireguard) > 0 {
+		seen := make(map[string]int, len(global.Wireguard))
+		for _, wg := range global.Wireguard {
+			seen[wg.Name] = len(out.Wireguard)
+			out.Wireguard = append(out.Wireguard, wg)
+		}
+		for _, wg := range project.Wireguard {
+			if idx, ok := seen[wg.Name]; ok {
+				out.Wireguard[idx] = wg
+			} else {
+				seen[wg.Name] = len(out.Wireguard)
+				out.Wireguard = append(out.Wireguard, wg)
+			}
+		}
+	}
+
 	migrateGUIField(&out)
 	return out
 }
@@ -1097,6 +1220,9 @@ func ApplyEnv(c *CellConfig, getenv func(string) string) {
 	if v := getenv("DEVCELL_PER_SESSION_IMAGE"); v == "true" || v == "1" {
 		b := true
 		c.Cell.PerCellImage = &b
+	}
+	if v := getenv("DEVCELL_DEFAULT_COMMAND"); v != "" {
+		c.Cell.DefaultCommand = v
 	}
 }
 
@@ -1186,6 +1312,53 @@ func ValidateStack(stack string) error {
 	copy(sorted, knownStacks)
 	sort.Strings(sorted)
 	return fmt.Errorf("unknown stack %q; available stacks: %s", stack, strings.Join(sorted, ", "))
+}
+
+// ValidateWireguard checks that every enabled [[wireguard]] entry has a
+// non-empty name, config, valid WireGuard syntax, at least one peer with a
+// valid PublicKey, and an interface Address.
+func ValidateWireguard(c CellConfig) error {
+	for i, entry := range c.Wireguard {
+		if !entry.Enabled {
+			continue
+		}
+		if strings.TrimSpace(entry.Name) == "" {
+			return fmt.Errorf("wireguard[%d]: name is required when enabled", i)
+		}
+		if strings.TrimSpace(entry.Config) == "" {
+			return fmt.Errorf("wireguard[%d] %q: config is required when enabled", i, entry.Name)
+		}
+		parsed, err := wg.ParseConfig(strings.NewReader(entry.Config))
+		if err != nil {
+			return fmt.Errorf("wireguard[%d] %q: %w", i, entry.Name, err)
+		}
+		if len(parsed.Address) == 0 {
+			return fmt.Errorf("wireguard[%d] %q: [Interface] Address is required", i, entry.Name)
+		}
+		if len(parsed.Peers) == 0 {
+			return fmt.Errorf("wireguard[%d] %q: at least one [Peer] is required", i, entry.Name)
+		}
+		for j, peer := range parsed.Peers {
+			if peer.PublicKey == "" {
+				return fmt.Errorf("wireguard[%d] %q: peer[%d] PublicKey is required", i, entry.Name, j)
+			}
+			keyBytes, err := base64.StdEncoding.DecodeString(peer.PublicKey)
+			if err != nil || len(keyBytes) != 32 {
+				return fmt.Errorf("wireguard[%d] %q: peer[%d] PublicKey is not a valid 32-byte base64 key", i, entry.Name, j)
+			}
+		}
+	}
+	return nil
+}
+
+// WireguardEnabled reports whether any [[wireguard]] entry is enabled.
+func WireguardEnabled(c CellConfig) bool {
+	for _, wg := range c.Wireguard {
+		if wg.Enabled {
+			return true
+		}
+	}
+	return false
 }
 
 func atoiOr(s string, fallback int) int {

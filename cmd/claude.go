@@ -73,24 +73,27 @@ func claudeEnv() map[string]string {
 		models = cellCfg.LLM.Models
 	}
 
+	// Base env vars for all claude sessions.
+	env := map[string]string{}
+
 	if useOpenRouter {
-		return openrouterEnv(configModel, models, dbg)
+		for k, v := range openrouterEnv(configModel, models, dbg) {
+			env[k] = v
+		}
+		return env
 	}
 
 	if !useOllama {
-		return nil
+		return env
 	}
 
 	if dbg {
 		fmt.Fprintf(os.Stderr, " claude: ollama mode enabled, redirecting API to host ollama\n")
 	}
 
-	env := map[string]string{
-		"ANTHROPIC_BASE_URL":                        "http://host.docker.internal:11434",
-		"ANTHROPIC_AUTH_TOKEN":                      "ollama",
-		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC":  "1",
-		"CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
-	}
+	env["ANTHROPIC_BASE_URL"] = "http://host.docker.internal:11434"
+	env["ANTHROPIC_AUTH_TOKEN"] = "ollama"
+	env["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] = "1"
 
 	if model := resolveOllamaModel(configModel, dbg); model != "" {
 		env["ANTHROPIC_MODEL"] = model
@@ -113,10 +116,10 @@ func openrouterEnv(configModel string, models cfg.LLMModelsSection, dbg bool) ma
 	}
 
 	env := map[string]string{
-		"ANTHROPIC_BASE_URL":                        "https://openrouter.ai/api",
-		"ANTHROPIC_API_KEY":                         "",
+		"ANTHROPIC_BASE_URL":                         openRouterAnthropicBaseURL,
+		"ANTHROPIC_API_KEY":                          "",
 		"CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
-		"CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK":      "1",
+		"CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK":       "1",
 	}
 
 	model := resolveOpenRouterModel(configModel, models, dbg)
@@ -165,12 +168,10 @@ func resolveOpenRouterModel(configModel string, models cfg.LLMModelsSection, dbg
 // ResolveOpenRouterKey fills ANTHROPIC_AUTH_TOKEN and OPENROUTER_API_KEY from
 // the environment. Called after 1Password resolution so the key is available.
 func ResolveOpenRouterKey(env map[string]string) error {
-	apiKey := os.Getenv("OPENROUTER_API_KEY")
-	if apiKey == "" {
-		return fmt.Errorf("--openrouter requires OPENROUTER_API_KEY env var (set it or add to [op] documents)")
+	if err := FillOpenRouterKey(env); err != nil {
+		return err
 	}
-	env["ANTHROPIC_AUTH_TOKEN"] = apiKey
-	env["OPENROUTER_API_KEY"] = apiKey
+	env["ANTHROPIC_AUTH_TOKEN"] = env["OPENROUTER_API_KEY"]
 	return nil
 }
 

@@ -63,6 +63,19 @@ tools inside a consistent Docker dev environment.`,
 		if len(args) > 0 {
 			return fmt.Errorf("unknown command %q — run 'cell --help' for usage", args[0])
 		}
+		if c, err := config.LoadFromOS(); err == nil {
+			cellCfg := cfg.LoadFromOS(c.ConfigDir, c.BaseDir)
+			if dc := cellCfg.Cell.ResolvedDefaultCommand(); dc != "" {
+				if err := cfg.ValidateDefaultCommand(dc); err != nil {
+					return err
+				}
+				sub, _, err := cmd.Find([]string{dc})
+				if err != nil || sub == cmd {
+					return fmt.Errorf("default_command %q is not a registered subcommand", dc)
+				}
+				return sub.RunE(sub, nil)
+			}
+		}
 		return cmd.Help()
 	},
 }
@@ -769,9 +782,40 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 	}
 
 	// Resolve deferred API keys that depend on 1Password secrets.
-	if extraEnv != nil && extraEnv["ANTHROPIC_BASE_URL"] == "https://openrouter.ai/api" {
-		if err := ResolveOpenRouterKey(extraEnv); err != nil {
-			return err
+	if extraEnv != nil {
+		if extraEnv["ANTHROPIC_BASE_URL"] == openRouterAnthropicBaseURL {
+			if err := ResolveOpenRouterKey(extraEnv); err != nil {
+				return err
+			}
+		} else if v, ok := extraEnv["OPENROUTER_API_KEY"]; ok && v == "" {
+			// codex/opencode set an empty placeholder to request the key.
+			if err := FillOpenRouterKey(extraEnv); err != nil {
+				return err
+			}
+		}
+	}
+
+	// Inject a deterministic session ID so agents resume the same
+	// conversation when relaunched in the same tmux pane.
+	// Claude Code: CLAUDE_CODE_SESSION_ID env var names a new/existing session.
+	// OpenCode: --session requires an existing ID (no create-or-resume), so
+	// we skip it. OpenCode's --continue resumes the last session in the
+	// project directory, which the user can invoke manually.
+	if binary == "claude" {
+		sessID := sessionUUID(c.AppName)
+		if extraEnv == nil {
+			extraEnv = make(map[string]string)
+		}
+		extraEnv["CLAUDE_CODE_SESSION_ID"] = sessID
+	}
+
+	// Validate and prepare WireGuard configs before docker run.
+	if cfg.WireguardEnabled(cellCfg) {
+		if err := cfg.ValidateWireguard(cellCfg); err != nil {
+			return fmt.Errorf("wireguard config: %w", err)
+		}
+		if err := runner.PrepareWireguard(c.CellHome, cellCfg); err != nil {
+			return fmt.Errorf("wireguard prepare: %w", err)
 		}
 	}
 

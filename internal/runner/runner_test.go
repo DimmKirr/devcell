@@ -93,6 +93,66 @@ func findFlag(argv []string, flag string) (string, bool) {
 	return "", false
 }
 
+// --- Docker resource limits ---
+
+func TestArgv_DefaultResourceLimits(t *testing.T) {
+	t.Setenv("DEVCELL_DOCKER_MEM_LIMIT", "")
+	t.Setenv("DEVCELL_DOCKER_CPU_LIMIT", "")
+	t.Setenv("DEVCELL_DOCKER_SHM_SIZE", "")
+	argv := buildArgv(t)
+	if !hasArg(argv, "--memory=4g") {
+		t.Error("missing default --memory=4g")
+	}
+	if !hasArg(argv, "--cpus=2") {
+		t.Error("missing default --cpus=2")
+	}
+	if !hasArg(argv, "--shm-size=1g") {
+		t.Error("missing default --shm-size=1g")
+	}
+}
+
+func TestArgv_ResourceLimitsFromTOML(t *testing.T) {
+	t.Setenv("DEVCELL_DOCKER_MEM_LIMIT", "")
+	t.Setenv("DEVCELL_DOCKER_CPU_LIMIT", "")
+	t.Setenv("DEVCELL_DOCKER_SHM_SIZE", "")
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.CellCfg.Docker = cfg.DockerSection{
+			MemLimit: "16g",
+			CPULimit: "8",
+			ShmSize:  "4g",
+		}
+	})
+	if !hasArg(argv, "--memory=16g") {
+		t.Errorf("expected --memory=16g from TOML, argv: %v", argv)
+	}
+	if !hasArg(argv, "--cpus=8") {
+		t.Errorf("expected --cpus=8 from TOML, argv: %v", argv)
+	}
+	if !hasArg(argv, "--shm-size=4g") {
+		t.Errorf("expected --shm-size=4g from TOML, argv: %v", argv)
+	}
+}
+
+func TestArgv_ResourceLimitsZeroOmitsFlag(t *testing.T) {
+	t.Setenv("DEVCELL_DOCKER_MEM_LIMIT", "")
+	t.Setenv("DEVCELL_DOCKER_CPU_LIMIT", "")
+	t.Setenv("DEVCELL_DOCKER_SHM_SIZE", "")
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.CellCfg.Docker = cfg.DockerSection{
+			MemLimit: "0",
+			CPULimit: "0",
+		}
+	})
+	for _, a := range argv {
+		if strings.HasPrefix(a, "--memory=") {
+			t.Errorf("--memory should be omitted when set to 0, got %q", a)
+		}
+		if strings.HasPrefix(a, "--cpus=") {
+			t.Errorf("--cpus should be omitted when set to 0, got %q", a)
+		}
+	}
+}
+
 // --- Structure ---
 
 func TestArgv_StartsWithDockerRunFlags(t *testing.T) {
@@ -1195,6 +1255,39 @@ func TestArgv_NeverDisablesNewPrivileges(t *testing.T) {
 	}
 }
 
+// --- Cross-tool agent mounts (CELL-448) ---
+
+func TestArgv_CrossToolAgentMounts(t *testing.T) {
+	argv := buildArgv(t)
+	// ~/.agents is mounted as a single ro bind (host has agents/ symlink → ~/.claude/agents)
+	if !hasConsecutive(argv, "-v", "/home/bob/.agents:/home/bob/.agents:ro") {
+		t.Errorf("expected ~/.agents:ro mount in argv: %v", argv)
+	}
+	// ~/.claude/agents should also be mounted at ~/.config/opencode/agents (OpenCode fallback)
+	if !hasConsecutive(argv, "-v", "/home/bob/.claude/agents:/home/bob/.config/opencode/agents:ro") {
+		t.Errorf("expected opencode fallback mount ~/.claude/agents → ~/.config/opencode/agents:ro in argv: %v", argv)
+	}
+}
+
+func TestArgv_CrossToolAgentMounts_DedupAgainstCfgVolumes(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.CellCfg.Volumes = []cfg.VolumeMount{
+			{Mount: "/custom:/home/bob/.config/opencode/agents"},
+		}
+	})
+	countOpencode := 0
+	for i, a := range argv {
+		if a == "-v" && i+1 < len(argv) {
+			if strings.HasSuffix(argv[i+1], "/.config/opencode/agents:ro") || strings.HasSuffix(argv[i+1], "/.config/opencode/agents") {
+				countOpencode++
+			}
+		}
+	}
+	if countOpencode != 1 {
+		t.Errorf("~/.config/opencode/agents mount should appear exactly once (dedup), got %d", countOpencode)
+	}
+}
+
 func TestArgv_SkipFlakeEnvVar(t *testing.T) {
 	argv := buildArgv(t, func(s *runner.RunSpec) { s.SkipFlake = true })
 	if !hasConsecutive(argv, "-e", "DEVCELL_SKIP_FLAKE=1") {
@@ -1224,5 +1317,213 @@ func TestArgv_TrustFlakeAbsentByDefault(t *testing.T) {
 		if strings.Contains(a, "DEVCELL_FLAKE_TRUST") {
 			t.Fatalf("DEVCELL_FLAKE_TRUST should not appear by default, got: %s", a)
 		}
+	}
+}
+
+// --- Wireguard ---
+
+func TestArgv_WireguardEnabled_AddsNetAdmin(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.CellCfg.Wireguard = []cfg.WireguardEntry{
+			{Name: "test", Enabled: true, Config: "[Interface]\nAddress = 10.0.0.2/32"},
+		}
+	})
+	if !hasArg(argv, "--cap-add=NET_ADMIN") {
+		t.Fatal("expected --cap-add=NET_ADMIN when wireguard is enabled")
+	}
+}
+
+func TestArgv_WireguardEnabled_AddsDevNetTun(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.CellCfg.Wireguard = []cfg.WireguardEntry{
+			{Name: "test", Enabled: true, Config: "[Interface]\nAddress = 10.0.0.2/32"},
+		}
+	})
+	if !hasConsecutive(argv, "--device=/dev/net/tun", "") && !hasArg(argv, "--device=/dev/net/tun") {
+		t.Fatal("expected --device=/dev/net/tun when wireguard is enabled")
+	}
+}
+
+func TestArgv_WireguardEnabled_SetsSrcValidMark(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.CellCfg.Wireguard = []cfg.WireguardEntry{
+			{Name: "test", Enabled: true, Config: "[Interface]\nAddress = 10.0.0.2/32"},
+		}
+	})
+	if !hasConsecutive(argv, "--sysctl", "net.ipv4.conf.all.src_valid_mark=1") {
+		t.Fatal("expected --sysctl net.ipv4.conf.all.src_valid_mark=1 when wireguard is enabled")
+	}
+}
+
+func TestArgv_WireguardEnabled_SetsEnvVar(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.CellCfg.Wireguard = []cfg.WireguardEntry{
+			{Name: "test", Enabled: true, Config: "[Interface]\nAddress = 10.0.0.2/32"},
+		}
+	})
+	if !hasConsecutive(argv, "-e", "DEVCELL_WG_ENABLED=1") {
+		t.Fatal("expected DEVCELL_WG_ENABLED=1 env var when wireguard is enabled")
+	}
+}
+
+func TestArgv_WireguardEnabled_MountsWgDir(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.CellCfg.Wireguard = []cfg.WireguardEntry{
+			{Name: "test", Enabled: true, Config: "[Interface]\nAddress = 10.0.0.2/32"},
+		}
+	})
+	found := false
+	for _, a := range argv {
+		if strings.Contains(a, ".wg") && strings.Contains(a, ":ro") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected .wg/ directory mount (read-only) when wireguard is enabled")
+	}
+}
+
+func TestArgv_WireguardDisabled_NoNetAdmin(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.CellCfg.Wireguard = []cfg.WireguardEntry{
+			{Name: "test", Enabled: false, Config: "some config"},
+		}
+	})
+	if hasArg(argv, "--cap-add=NET_ADMIN") {
+		t.Fatal("--cap-add=NET_ADMIN should not appear when wireguard is disabled")
+	}
+}
+
+func TestArgv_WireguardDisabled_NoEnvVar(t *testing.T) {
+	argv := buildArgv(t)
+	for _, a := range argv {
+		if strings.Contains(a, "DEVCELL_WG_ENABLED") {
+			t.Fatalf("DEVCELL_WG_ENABLED should not appear by default, got: %s", a)
+		}
+	}
+}
+
+func TestArgv_WireguardEnabled_NoDuplicateNetAdmin(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.CellCfg.Docker.CapAdd = []string{"NET_ADMIN"}
+		s.CellCfg.Wireguard = []cfg.WireguardEntry{
+			{Name: "test", Enabled: true, Config: "[Interface]\nAddress = 10.0.0.2/32"},
+		}
+	})
+	count := 0
+	for _, a := range argv {
+		if a == "--cap-add=NET_ADMIN" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("expected exactly 1 --cap-add=NET_ADMIN, got %d", count)
+	}
+}
+
+func TestArgv_WireguardEnabled_Privileged_NoExtraCap(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.CellCfg.Docker.Privileged = true
+		s.CellCfg.Wireguard = []cfg.WireguardEntry{
+			{Name: "test", Enabled: true, Config: "[Interface]\nAddress = 10.0.0.2/32"},
+		}
+	})
+	if hasArg(argv, "--cap-add=NET_ADMIN") {
+		t.Fatal("--cap-add=NET_ADMIN should not appear when --privileged is set")
+	}
+}
+
+// ── PrepareWireguard ─────────────────────────────────────────────────────────
+
+func TestPrepareWireguard_WritesConfFiles(t *testing.T) {
+	dir := t.TempDir()
+	cellCfg := cfg.CellConfig{
+		Wireguard: []cfg.WireguardEntry{
+			{
+				Name:    "proton-pt",
+				Enabled: true,
+				Config: "[Interface]\nAddress = 10.2.0.2/32\nDNS = 10.2.0.1\n\n[Peer]\nPublicKey = abc123\nEndpoint = 1.2.3.4:51820\nAllowedIPs = 0.0.0.0/0\n",
+			},
+		},
+	}
+	err := runner.PrepareWireguard(dir, cellCfg)
+	if err != nil {
+		t.Fatalf("PrepareWireguard: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, ".wg", "proton-pt.conf"))
+	if err != nil {
+		t.Fatalf("read conf: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "Address = 10.2.0.2/32") {
+		t.Error("conf missing Address")
+	}
+	if !strings.Contains(content, "PostUp = wg set %i private-key /run/secrets/wg-private-key") {
+		t.Error("conf missing PostUp for private key file")
+	}
+}
+
+func TestPrepareWireguard_StripsPrivateKey(t *testing.T) {
+	dir := t.TempDir()
+	cellCfg := cfg.CellConfig{
+		Wireguard: []cfg.WireguardEntry{
+			{
+				Name:    "test",
+				Enabled: true,
+				Config: "[Interface]\nPrivateKey = SECRET\nAddress = 10.0.0.2/32\n\n[Peer]\nPublicKey = abc\nEndpoint = 1.2.3.4:51820\nAllowedIPs = 0.0.0.0/0\n",
+			},
+		},
+	}
+	if err := runner.PrepareWireguard(dir, cellCfg); err != nil {
+		t.Fatalf("PrepareWireguard: %v", err)
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, ".wg", "test.conf"))
+	if strings.Contains(string(data), "SECRET") {
+		t.Fatal("conf must not contain the PrivateKey value")
+	}
+}
+
+func TestPrepareWireguard_SkipsDisabled(t *testing.T) {
+	dir := t.TempDir()
+	cellCfg := cfg.CellConfig{
+		Wireguard: []cfg.WireguardEntry{
+			{Name: "off", Enabled: false, Config: "[Interface]\nAddress = 10.0.0.2/32"},
+		},
+	}
+	if err := runner.PrepareWireguard(dir, cellCfg); err != nil {
+		t.Fatalf("PrepareWireguard: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".wg", "off.conf")); err == nil {
+		t.Fatal("disabled entry should not produce a .conf file")
+	}
+}
+
+func TestPrepareWireguard_MultipleEntries(t *testing.T) {
+	dir := t.TempDir()
+	cellCfg := cfg.CellConfig{
+		Wireguard: []cfg.WireguardEntry{
+			{Name: "a", Enabled: true, Config: "[Interface]\nAddress = 10.0.0.2/32\n\n[Peer]\nPublicKey = k1\nEndpoint = 1.1.1.1:51820\nAllowedIPs = 0.0.0.0/0\n"},
+			{Name: "b", Enabled: true, Config: "[Interface]\nAddress = 10.0.0.3/32\n\n[Peer]\nPublicKey = k2\nEndpoint = 2.2.2.2:51820\nAllowedIPs = 0.0.0.0/0\n"},
+		},
+	}
+	if err := runner.PrepareWireguard(dir, cellCfg); err != nil {
+		t.Fatalf("PrepareWireguard: %v", err)
+	}
+	for _, name := range []string{"a", "b"} {
+		if _, err := os.Stat(filepath.Join(dir, ".wg", name+".conf")); err != nil {
+			t.Errorf("expected %s.conf to exist", name)
+		}
+	}
+}
+
+func TestPrepareWireguard_NoEntries(t *testing.T) {
+	dir := t.TempDir()
+	cellCfg := cfg.CellConfig{}
+	if err := runner.PrepareWireguard(dir, cellCfg); err != nil {
+		t.Fatalf("PrepareWireguard: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".wg")); err == nil {
+		t.Fatal(".wg dir should not be created when there are no entries")
 	}
 }

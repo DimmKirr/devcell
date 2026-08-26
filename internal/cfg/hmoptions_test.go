@@ -45,7 +45,7 @@ func TestHMOptionsNix_MapsGoTypesToNixTypes(t *testing.T) {
 	cases := map[string]string{
 		"string":            "image_tag = opt types.str;",
 		"*bool":             "thin = opt types.bool;",
-		"bool":              "docker_privileged = opt types.bool;",
+		"bool":              "privileged = opt types.bool;",
 		"int":               "qemu_cpus = opt types.int;",
 		"[]string":          "modules = opt (types.listOf types.str);",
 		"map[string]string": "libvirt_path_map = opt (types.attrsOf types.str);",

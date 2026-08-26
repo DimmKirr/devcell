@@ -59,7 +59,7 @@ func TranslateError(err error) string {
 
 	// Host UID mismatch — files in mounted project become owned by wrong UID.
 	case strings.Contains(lower, "uid") && strings.Contains(lower, "mismatch"):
-		return "UID mismatch between host and container. Pass `--uid $(id -u)` or check `[cell].docker_privileged` in .devcell.toml."
+		return "UID mismatch between host and container. Pass `--uid $(id -u)` or check `[docker].privileged` in .devcell.toml."
 
 	// Port already in use — common when multiple cells try to claim the same port.
 	case strings.Contains(lower, "address already in use") ||
