@@ -490,6 +490,86 @@ func TestWindowsWSL2NixOS_QEMU(t *testing.T) {
 	t.Logf("nix-ready checkpoint refreshed: %s (%.1f GB)", dest, float64(info.Size())/(1<<30))
 }
 
+// TestWindowsWSL2NixOS_Interactive boots the nix-ready checkpoint on the
+// EL3 machine and holds it for manual investigation via SSH or RDP.
+// Opt in: DEVCELL_TEST_WSL2=1 DEVCELL_KEEP_ALIVE=1
+func TestWindowsWSL2NixOS_Interactive(t *testing.T) {
+	if testing.Short() {
+		t.Skip("long: boots the WSL2 Windows image interactively")
+	}
+	if os.Getenv("DEVCELL_TEST_WSL2") == "" || os.Getenv("DEVCELL_KEEP_ALIVE") == "" {
+		t.Skip("set DEVCELL_TEST_WSL2=1 DEVCELL_KEEP_ALIVE=1")
+	}
+	requireQEMUBin(t)
+
+	kernelFW, err := KernelFirmwarePath()
+	if err != nil {
+		t.Skipf("no kernel-bootable firmware: %v", err)
+	}
+	baseImage, err := resolveBaseImage(testdataDir(t))
+	if err != nil {
+		if os.Getenv("DEVCELL_TEST_BASE_IMAGE") != "" {
+			require.NoError(t, err)
+		}
+		t.Skipf("no nix-ready checkpoint image: %v", err)
+	}
+	t.Logf("base image: %s, firmware: %s", baseImage, kernelFW)
+
+	home := filepath.Join(repoRoot(t), "test", "testdata", "cellhome")
+	keyPath := filepath.Join(home, ".devcell", "main", "qemu", "id_ed25519")
+	user := SessionUsername()
+	resultsDir := testResultsDir(t)
+	workDir := t.TempDir()
+
+	overlay := filepath.Join(workDir, "wsl2.qcow2")
+	require.NoError(t, CloneDisk(baseImage, overlay))
+
+	spec := Spec{
+		VMName:         "devcell-qemu-wsl2-interactive",
+		CPUs:           6,
+		MemoryGB:       6,
+		DiskPath:       overlay,
+		SerialLogPath:  filepath.Join(resultsDir, "serial.log"),
+		FirmwarePath:   kernelFW,
+		FirmwareKernel: true,
+		SecureWorld:    true,
+		SSHHost:        "127.0.0.1",
+		SSHPort:        freeTCPPort(10222),
+		RDPPort:        freeTCPPort(13389),
+		MACAddr:        DeterministicMAC("devcell-qemu-wsl2-interactive"),
+		QMPSocketDir:   workDir,
+		DiskCacheMode:  "unsafe",
+	}
+	spec.ApplyDefaults()
+	require.NoError(t, spec.Validate())
+
+	vmDone := startVM(t, spec)
+	defer vmDone.stop()
+
+	qmpSock := QMPSocketPath(spec)
+	require.NoError(t,
+		WaitForSSH(spec.SSHHost, spec.SSHPort, time.Hour, 5*time.Second,
+			testLogObserver{t}, vmStateFn(qmpSock)))
+
+	t.Logf("SSH:  ssh -p %d -i %s %s@%s", spec.SSHPort, keyPath, user, spec.SSHHost)
+	t.Logf("RDP:  xfreerdp /v:%s:%d /u:%s /p:rdp /cert:ignore", spec.SSHHost, spec.RDPPort, user)
+
+	hv := sshCapture(t, spec, user, keyPath,
+		`(Get-CimInstance Win32_ComputerSystem).HypervisorPresent`)
+	t.Logf("HypervisorPresent: %s", strings.TrimSpace(hv))
+
+	wslStatus, wslErr := sshTry(spec, user, keyPath,
+		`$env:WSL_UTF8='1'; wsl --status 2>&1; echo '---'; wsl -l -v 2>&1`)
+	t.Logf("wsl --status (err=%v):\n%s", wslErr, wslStatus)
+
+	wslUname, unameErr := sshTry(spec, user, keyPath,
+		`$env:WSL_UTF8='1'; wsl -e uname -a 2>&1`)
+	t.Logf("wsl -e uname -a (err=%v):\n%s", unameErr, wslUname)
+
+	t.Logf("VM is alive. SSH or RDP in to investigate. Waiting until test timeout or Ctrl+C...")
+	<-vmDone.done
+}
+
 // runRDPCaptureLoop keeps one RDP session open (Xvfb + xfreerdp, restarted
 // on death) and captures its window every 15 seconds — the same cadence as
 // the QMP series, so the two timelines line up. Consecutive identical frames

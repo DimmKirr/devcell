@@ -1,0 +1,171 @@
+$ErrorActionPreference = 'Continue'
+
+{{template "struct-json" .}}
+
+Write-Output '{{.Banner}}'
+Write-Output (Get-Date -Format o)
+devcell-json @{ event = 'hcs_start' }
+
+{{template "vmp-registration" .}}
+
+# --- hypervisor and Vid diagnostics ----------------------------------------
+$hvPresent = (Get-CimInstance Win32_ComputerSystem).HypervisorPresent
+Write-Output "HYPERVISOR_PRESENT=$hvPresent"
+devcell-json @{ event = 'hypervisor'; present = "$hvPresent" }
+
+# Probe the actual hypervisor identity via registry keys that winload and
+# the kernel populate when a hypervisor is detected or launched.
+$hvVendor = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Virtualization' -Name 'HypervisorVendor' -ErrorAction SilentlyContinue).HypervisorVendor
+Write-Output "HV_VENDOR=$hvVendor"
+
+# winload records hypervisor boot status under this key when it tries to
+# call HvlLaunchHypervisor. Absent = winload never attempted the launch.
+$hvBoot = Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Hypervisor' -ErrorAction SilentlyContinue
+if ($hvBoot) {
+    foreach ($p in $hvBoot.PSObject.Properties) {
+        if ($p.Name -notmatch '^PS') { Write-Output "HV_CTRL: $($p.Name)=$($p.Value)" }
+    }
+} else { Write-Output 'HV_CTRL=absent' }
+
+# HVCI (Hypervisor Code Integrity) measured boot artifacts
+$hvLoaded = Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\CI\HVCIMeasured' -ErrorAction SilentlyContinue
+Write-Output "HVCI_MEASURED=$(if ($hvLoaded) { 'present' } else { 'absent' })"
+
+# Check loaded drivers for hv* and vid
+$hvDrivers = Get-CimInstance Win32_SystemDriver -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -match '^(hv|vid|winhv)' } | Select-Object Name, State, Started
+foreach ($d in $hvDrivers) {
+    Write-Output "DRIVER=$($d.Name) State=$($d.State) Started=$($d.Started)"
+}
+if (-not $hvDrivers) { Write-Output 'DRIVER=none matched hv|vid|winhv' }
+
+# winload boot log: contains hypervisor load/launch status
+$bootLog = "$env:SystemRoot\bootstat.dat"
+if (Test-Path $bootLog) {
+    $sz = (Get-Item $bootLog).Length
+    Write-Output "BOOTSTAT_DAT=$sz bytes"
+} else { Write-Output 'BOOTSTAT_DAT=absent' }
+
+# Check System event log for hypervisor-related boot events (EventID 1-10)
+$sysEvents = @(Get-WinEvent -LogName System -MaxEvents 50 -ErrorAction SilentlyContinue |
+    Where-Object { $_.ProviderName -match 'Hyper-V|Vid|hvservice' })
+Write-Output "SYS_HV_EVENTS=$($sysEvents.Count)"
+foreach ($e in $sysEvents) {
+    Write-Output "  SYS_EVENT src=$($e.ProviderName) id=$($e.Id) lvl=$($e.Level): $($e.Message -replace '\r?\n', ' ' -replace '.{200,}', '$&...')"
+}
+
+$vidSvc = Get-Service -Name Vid -ErrorAction SilentlyContinue
+Write-Output "VID_SERVICE_STATUS=$($vidSvc.Status)"
+
+# Check if the hypervisor actually booted (event log is the ground truth)
+$hvEvents = @(Get-WinEvent -LogName 'Microsoft-Windows-Hyper-V-Hypervisor-Operational' -MaxEvents 5 -ErrorAction SilentlyContinue)
+Write-Output "HV_EVENT_LOG_ENTRIES=$($hvEvents.Count)"
+foreach ($e in $hvEvents) { Write-Output "  HV_EVENT id=$($e.Id): $($e.Message -replace '\r?\n', ' ')" }
+
+# Vid-specific event log: vid.sys logs errors here when it can't connect to HV
+$vidEvents = @(Get-WinEvent -LogName 'Microsoft-Windows-Hyper-V-VID-Admin' -MaxEvents 5 -ErrorAction SilentlyContinue)
+Write-Output "VID_EVENT_LOG_ENTRIES=$($vidEvents.Count)"
+foreach ($e in $vidEvents) { Write-Output "  VID_EVENT id=$($e.Id): $($e.Message -replace '\r?\n', ' ')" }
+
+# Probe vid.sys IOCTL: try opening the device + DeviceIoControl for version
+try {
+    $vidDev = [System.IO.File]::Open('\\.\VID', [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+    $vidDev.Close()
+    Write-Output 'VID_DEVICE=OPEN_OK'
+} catch {
+    Write-Output "VID_DEVICE=$($_.Exception.Message)"
+}
+
+# List all devices under \Device\VID* (shows if vid.sys registered anything)
+$vidDevices = @(Get-CimInstance Win32_PnPEntity | Where-Object { $_.Name -match 'VID|Virtualization' } | Select-Object Name, Status)
+Write-Output "VID_PNP_DEVICES=$($vidDevices.Count)"
+foreach ($d in $vidDevices) { Write-Output "  PNP: $($d.Name) Status=$($d.Status)" }
+
+devcell-json @{ event = 'vid_diag'; status = "$($vidSvc.Status)"; hvEvents = $hvEvents.Count; vidEvents = $vidEvents.Count; hvVendor = "$hvVendor" }
+
+# --- vmcompute ------------------------------------------------------------
+# The Host Compute Service is the front door for every VM operation. It was
+# transplanted Manual; nothing else in WinPE would start it.
+try {
+    Start-Service -Name vmcompute -ErrorAction Stop
+    Write-Output 'VMCOMPUTE_START=OK'
+    devcell-json @{ event = 'vmcompute'; status = 'ok' }
+} catch {
+    Write-Output "VMCOMPUTE_START=$($_.Exception.Message)"
+    devcell-json @{ event = 'vmcompute'; status = 'fail'; error = "$($_.Exception.Message)" }
+}
+
+# --- vmms (thumbnail only, tolerated-absent) ------------------------------
+# vmms is not part of VMP; it rides along solely because its WMI provider
+# serves GetVirtualSystemThumbnailImage. Every step here reports and moves
+# on — the HCS smoke test below is the real assertion.
+$vmmsExe = Join-Path $env:SystemRoot 'System32\vmms.exe'
+if (Test-Path $vmmsExe) {
+    try {
+        if (-not (Get-Service -Name vmms -ErrorAction SilentlyContinue)) {
+            New-Service -Name vmms -BinaryPathName $vmmsExe -DisplayName 'Hyper-V VMMS' -StartupType Manual | Out-Null
+        }
+        Write-Output 'VMMS_REGISTER=OK'
+    } catch { Write-Output "VMMS_REGISTER=$($_.Exception.Message)" }
+
+    & mofcomp (Join-Path $env:SystemRoot 'System32\WindowsVirtualization.V2.mof') 2>&1 | Out-Null
+    Write-Output "MOFCOMP_EXIT=$LASTEXITCODE"
+    devcell-json @{ event = 'mofcomp'; exit = $LASTEXITCODE }
+
+    try {
+        Start-Service -Name vmms -ErrorAction Stop
+        Write-Output 'VMMS_START=OK'
+        devcell-json @{ event = 'vmms'; status = 'ok' }
+    } catch {
+        Write-Output "VMMS_START=$($_.Exception.Message)"
+        devcell-json @{ event = 'vmms'; status = 'fail'; error = "$($_.Exception.Message)" }
+    }
+} else {
+    Write-Output 'VMMS_START=ABSENT'
+    Write-Output 'MOFCOMP_EXIT=ABSENT'
+    devcell-json @{ event = 'vmms'; status = 'absent' }
+}
+
+# --- HCS nested-VM smoke test ---------------------------------------------
+# hcsboot.exe creates a diskless Gen2 VM and reports HCSBOOT_* markers. It
+# runs detached so the thumbnail can be taken while the guest UEFI is still
+# on screen; its output is replayed into ours afterwards.
+$hcsOut = Join-Path $env:TEMP 'hcsboot.out'
+$p = Start-Process -FilePath "$DevcellVol\hcsboot.exe" -ArgumentList '90' `
+    -RedirectStandardOutput $hcsOut -PassThru -NoNewWindow
+devcell-json @{ event = 'hcsboot_spawn'; pid = $p.Id }
+
+$deadline = (Get-Date).AddMinutes(25)
+while ((Get-Date) -lt $deadline) {
+    Start-Sleep -Seconds 10
+    if ($p.HasExited) { break }
+    if ((Test-Path $hcsOut) -and (Select-String -Path $hcsOut -Pattern 'HCSBOOT_STATE=' -Quiet)) { break }
+}
+
+# --- thumbnail while the VM lives -----------------------------------------
+try {
+    $vsms = Get-CimInstance -Namespace root\virtualization\v2 -ClassName Msvm_VirtualSystemManagementService -ErrorAction Stop
+    $vm = Get-CimInstance -Namespace root\virtualization\v2 -ClassName Msvm_ComputerSystem -Filter "ElementName='devcell-hcs-test'" -ErrorAction Stop
+    if ($null -eq $vm) { throw 'VM not visible in WMI' }
+    $r = Invoke-CimMethod -InputObject $vsms -MethodName GetVirtualSystemThumbnailImage `
+        -Arguments @{ TargetSystem = $vm; WidthPixels = 640; HeightPixels = 480 } -ErrorAction Stop
+    if ($r.ImageData) {
+        [System.IO.File]::WriteAllBytes("$DevcellVol\hcs-thumbnail.rgb565", [byte[]]$r.ImageData)
+        Write-Output "THUMBNAIL=OK bytes=$($r.ImageData.Length)"
+        devcell-json @{ event = 'thumbnail'; bytes = $r.ImageData.Length }
+    } else {
+        Write-Output "THUMBNAIL=EMPTY ret=$($r.ReturnValue)"
+    }
+} catch {
+    Write-Output "THUMBNAIL=$($_.Exception.Message)"
+    devcell-json @{ event = 'thumbnail'; status = 'fail'; error = "$($_.Exception.Message)" }
+}
+
+if (-not $p.HasExited) { $p.WaitForExit(600000) | Out-Null }
+if (Test-Path $hcsOut) { Get-Content $hcsOut | Write-Output }
+Write-Output "HCSBOOT_EXIT=$($p.ExitCode)"
+devcell-json @{ event = 'hcsboot_exit'; exit = $p.ExitCode }
+
+Write-Output '{{.Complete}}'
+devcell-json @{ event = 'hcs_complete' }
+if ($structStream) { $structStream.Flush(); $structStream.Close() }

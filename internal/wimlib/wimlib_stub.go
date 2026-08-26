@@ -76,5 +76,20 @@ func (w *WIM) SetImageName(imageNum int, name, description string) error {
 	return errNotAvailable
 }
 
+func (w *WIM) ListChildren(imageNum int, wimDirPath string) ([]string, error) {
+	return nil, errNotAvailable
+}
+
 func (w *WIM) Close() {
+}
+
+func NewDecompressor(ctype Compression, maxBlockSize int) (*Decompressor, error) {
+	return nil, errNotAvailable
+}
+
+func (d *Decompressor) Decompress(compressed []byte, uncompressedSize int) ([]byte, error) {
+	return nil, errNotAvailable
+}
+
+func (d *Decompressor) Close() {
 }

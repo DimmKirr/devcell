@@ -243,3 +243,15 @@ func TestExtractPwshFiles(t *testing.T) {
 	assert.Contains(t, files, "/"+PwshVolDir+"/Modules/PSReadLine/PSReadLine.psd1")
 	assert.Equal(t, []byte("content-pwsh.exe"), files["/"+PwshVolDir+"/pwsh.exe"])
 }
+
+func TestAlpineConstants(t *testing.T) {
+	assert.Contains(t, AlpineRootfsURL, "alpine")
+	assert.Contains(t, AlpineRootfsURL, "aarch64")
+	assert.Contains(t, AlpineRootfsURL, AlpineVersion)
+}
+
+func TestAlpineRootfsPath(t *testing.T) {
+	path := AlpineRootfsPath("/home/user")
+	assert.Contains(t, path, ".devcell/cache/qemu")
+	assert.Contains(t, path, AlpineRootfsName)
+}

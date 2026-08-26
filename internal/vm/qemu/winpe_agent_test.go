@@ -74,6 +74,57 @@ func TestGenerateWinPEAgent_PollsCommandFileAndWritesResult(t *testing.T) {
 	assert.Contains(t, out, "Remove-Item", "must consume the command so it runs once")
 }
 
+// A command that dies with a terminating error used to land only in the
+// result file, which the host cannot read until QEMU exits. The run then
+// looked like a hang and burned its whole deadline before revealing a
+// one-line error.
+func TestGenerateWinPEAgent_StreamsCaughtErrorsToProgress(t *testing.T) {
+	out := string(GenerateWinPEAgent(WinPEPayloadConfig{ProgressPort: `\\.\Global\devcell`}))
+
+	catchIdx := strings.LastIndex(out, "} catch {")
+	require.Greater(t, catchIdx, 0, "agent must catch command failures")
+
+	setContent := strings.Index(out[catchIdx:], "Set-Content")
+	progress := strings.Index(out[catchIdx:], "devcell-progress")
+	require.Greater(t, setContent, 0, "the catch block still writes the result file")
+	assert.Less(t, progress, setContent,
+		"a caught error must reach the progress stream before the result file, "+
+			"which the host cannot read until QEMU exits")
+}
+
+// drvload.exe has no verbose switch, so its exit code is the only direct
+// signal, and it was being discarded. 0x80070103 (ERROR_NO_MORE_ITEMS) means
+// the driver was already bound, which reads identically to a real failure on
+// a console screenshot.
+func TestGenerateWinPEBootstrap_ReportsDrvLoadExitCodes(t *testing.T) {
+	out := string(GenerateWinPEBootstrap(WinPEPayloadConfig{
+		ProgressPort: `\\.\Global\devcell`,
+		DriverINFs:   []string{`X:\devcell\drivers\vioserial\vioser.inf`},
+	}))
+
+	assert.Contains(t, out, "$LASTEXITCODE",
+		"drvload's exit code must be captured, not discarded")
+	assert.Contains(t, out, "drvload",
+		"the report must name the operation")
+
+	// Reporting has to come after the loop: the virtio-serial port device
+	// does not exist until its own driver loads.
+	loadIdx := strings.Index(out, "drvload.exe")
+	reportIdx := strings.LastIndex(out, "drvload")
+	assert.Greater(t, reportIdx, loadIdx,
+		"exit codes are reported after the drivers load, not before")
+}
+
+// PnP writes a full driver-binding trace to setupapi.dev.log. Without it the
+// only evidence of what drvload did is a one-line hex code on screen.
+func TestGenerateWinPEAgent_SnapshotsSetupAPILog(t *testing.T) {
+	out := string(GenerateWinPEAgent(WinPEPayloadConfig{}))
+
+	assert.Contains(t, out, `X:\Windows\INF\setupapi.dev.log`,
+		"the PnP driver log must be pulled off the ramdisk")
+	assert.Contains(t, out, SetupAPISnapshotName)
+}
+
 func TestGenerateWinPEAgent_SearchesForTheCommandVolume(t *testing.T) {
 	out := string(GenerateWinPEAgent(WinPEPayloadConfig{}))
 	assert.Contains(t, out, "foreach", "must iterate drive letters")

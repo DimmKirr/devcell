@@ -1,0 +1,98 @@
+$ErrorActionPreference = 'Continue'
+
+{{template "struct-json" .}}
+
+Write-Output '{{.Banner}}'
+Write-Output (Get-Date -Format o)
+devcell-json @{ event = 'wsl_start' }
+
+{{template "vmp-registration" .}}
+
+# --- vmcompute ------------------------------------------------------------
+# WSL2 utility VMs go through HCS like any other; vmcompute must answer
+# before wslservice can launch one.
+try {
+    Start-Service -Name vmcompute -ErrorAction Stop
+    Write-Output 'VMCOMPUTE_START=OK'
+    devcell-json @{ event = 'vmcompute'; status = 'ok' }
+} catch {
+    Write-Output "VMCOMPUTE_START=$($_.Exception.Message)"
+    devcell-json @{ event = 'vmcompute'; status = 'fail'; error = "$($_.Exception.Message)" }
+}
+
+# --- WSL engine registration ----------------------------------------------
+# The transplant only laid files down; this does the MSI's registration
+# work with standard tools executing the vendor's own declared data.
+$wslDir = Join-Path $env:SystemDrive 'Program Files\WSL'
+$env:Path = "$wslDir;$env:Path"
+$env:WSL_UTF8 = '1'
+
+# No HNS in WinPE — every networking mode but 'none' wedges the service.
+$wslConfig = Join-Path $env:USERPROFILE '.wslconfig'
+Set-Content -Path $wslConfig -Value "[wsl2]`r`nnetworkingMode=none`r`n" -Encoding ascii
+devcell-json @{ event = 'wslconfig'; path = $wslConfig }
+
+# WSLService exactly as the MSI ServiceInstall row declares it:
+# own-process (type 16), Automatic (start 2), LocalSystem.
+try {
+    if (-not (Get-Service -Name WSLService -ErrorAction SilentlyContinue)) {
+        New-Service -Name WSLService -DisplayName 'WSL Service' `
+            -BinaryPathName "`"$wslDir\wslservice.exe`"" `
+            -StartupType Automatic | Out-Null
+    }
+    Write-Output 'WSLSERVICE_REGISTER=OK'
+    devcell-json @{ event = 'wslservice_register'; status = 'ok' }
+} catch {
+    Write-Output "WSLSERVICE_REGISTER=$($_.Exception.Message)"
+    devcell-json @{ event = 'wslservice_register'; status = 'fail'; error = "$($_.Exception.Message)" }
+}
+
+# The COM proxy stub self-registers: its DllRegisterServer writes the
+# ILxssUserSession interface entries the MSI Registry table carries, so
+# wsl.exe can marshal calls to wslservice.
+& regsvr32 /s "$wslDir\wslserviceproxystub.dll"
+Write-Output "REGSVR32_PROXYSTUB=$LASTEXITCODE"
+devcell-json @{ event = 'regsvr32_proxystub'; exit = $LASTEXITCODE }
+
+try {
+    Start-Service -Name WSLService -ErrorAction Stop
+    Write-Output 'WSLSERVICE_START=OK'
+    devcell-json @{ event = 'wslservice'; status = 'ok' }
+} catch {
+    Write-Output "WSLSERVICE_START=$($_.Exception.Message)"
+    devcell-json @{ event = 'wslservice'; status = 'fail'; error = "$($_.Exception.Message)" }
+}
+
+# --- first contact ---------------------------------------------------------
+# --status is the cheapest end-to-end proof: wsl.exe resolves the engine,
+# reaches wslservice over COM, and the service answers.
+$status = (& "$wslDir\wsl.exe" --status 2>&1 | Out-String)
+Write-Output "WSL_STATUS_EXIT=$LASTEXITCODE"
+Write-Output $status
+devcell-json @{ event = 'wsl_status'; exit = $LASTEXITCODE }
+
+# --- distro proof (only when the volume ships a rootfs) --------------------
+# Import the smoke-test distro and run uname inside it — a "Linux" line here
+# is a full WSL2 stack: wslservice, HCS, the utility VM, the kernel.
+$rootfs = "$DevcellVol\{{.Rootfs}}"
+if (Test-Path $rootfs) {
+    $importDir = Join-Path $env:SystemDrive 'wsl\{{.Distro}}'
+    New-Item -ItemType Directory -Path $importDir -Force | Out-Null
+    $importOut = (& "$wslDir\wsl.exe" --import {{.Distro}} $importDir $rootfs --version 2 2>&1 | Out-String)
+    Write-Output "WSL_IMPORT_EXIT=$LASTEXITCODE"
+    Write-Output $importOut
+    devcell-json @{ event = 'wsl_import'; exit = $LASTEXITCODE }
+
+    $uname = (& "$wslDir\wsl.exe" -d {{.Distro}} -e uname -a 2>&1 | Out-String)
+    Write-Output "WSL_UNAME_EXIT=$LASTEXITCODE"
+    Write-Output "WSL_UNAME=$($uname.Trim())"
+    devcell-json @{ event = 'wsl_uname'; exit = $LASTEXITCODE; out = $uname.Trim() }
+} else {
+    Write-Output 'WSL_IMPORT_EXIT=SKIPPED'
+    Write-Output 'WSL_UNAME=SKIPPED no rootfs on volume'
+    devcell-json @{ event = 'wsl_import'; status = 'skipped' }
+}
+
+Write-Output '{{.Complete}}'
+devcell-json @{ event = 'wsl_complete' }
+if ($structStream) { $structStream.Flush(); $structStream.Close() }

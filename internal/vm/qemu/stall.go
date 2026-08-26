@@ -67,6 +67,10 @@ func (s *StallTracker) Stalled(threshold int) bool {
 	return s.consec >= threshold
 }
 
+// Reset zeroes the stall counter, e.g. after a runtime intervention that
+// is expected to unblock the guest.
+func (s *StallTracker) Reset() { s.consec = 0 }
+
 // Consecutive returns the current unchanged-poll count.
 func (s *StallTracker) Consecutive() int { return s.consec }
 

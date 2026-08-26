@@ -1,0 +1,222 @@
+$ErrorActionPreference = 'Continue'
+
+{{template "struct-json" .}}
+
+Write-Output '{{.Banner}}'
+Write-Output (Get-Date -Format o)
+devcell-json @{ event = 'verify_start' }
+
+{{template "vmp-registration" .}}
+
+# --- Service probe --------------------------------------------------------
+$svcs = @({{range $i, $s := .Services}}{{if $i}},{{end}}'{{$s}}'{{end}})
+
+# This WinPE ships no service-control CLI, so ask the SCM through pwsh's own
+# ServiceController instead. GetServices() alone is not enough: most of
+# the VMP stack registers as a kernel driver, and drivers only appear in
+# GetDevices(). WMI is the fallback because WinPE-WMI is optional.
+$state = @{}
+$source = 'NONE'
+try {
+    foreach ($x in [System.ServiceProcess.ServiceController]::GetServices()) { $state[$x.ServiceName] = "$($x.Status)" }
+    foreach ($x in [System.ServiceProcess.ServiceController]::GetDevices()) { $state[$x.ServiceName] = "$($x.Status)" }
+    $source = 'ServiceController'
+} catch {
+    try {
+        foreach ($x in Get-CimInstance Win32_Service -ErrorAction Stop) { $state[$x.Name] = "$($x.State)" }
+        foreach ($x in Get-CimInstance Win32_SystemDriver -ErrorAction Stop) { $state[$x.Name] = "$($x.State)" }
+        $source = 'CIM'
+    } catch { $source = "FAILED: $($_.Exception.Message)" }
+}
+Write-Output "SC_SOURCE=$source known=$($state.Count)"
+devcell-json @{ event = 'scm_source'; source = $source; known = $state.Count }
+
+foreach ($s in $svcs) {
+    # A name the SCM has never heard of is exactly what a bad transplant
+    # produces, so absence and presence must be distinguishable.
+    if ($state.ContainsKey($s)) {
+        $scState = $state[$s].ToUpper()
+    } else {
+        $scState = 'NOT_EXIST'
+    }
+    Write-Output "$($s)_SC=$scState"
+
+    $key = "HKLM:\SYSTEM\CurrentControlSet\Services\$s"
+    $p = Get-ItemProperty -Path $key -Name Start -ErrorAction SilentlyContinue
+    if ($null -eq $p) {
+        $startVal = 'ABSENT'
+    } else {
+        $startVal = "$($p.Start)"
+    }
+    Write-Output "$($s)_START=$startVal"
+    devcell-json @{ event = 'probe_service'; service = $s; sc = $scState; start = $startVal }
+}
+
+# --- demand-start probe ---------------------------------------------------
+# A correct hive entry says nothing about whether the file behind it can be
+# loaded. Windows 10+ stores WinSxS payloads delta-compressed (DCS/PA31
+# headers), so a transplant that copies the component-store bytes produces
+# services that register perfectly and fail at load with ERROR_BAD_EXE_FORMAT
+# (193) or STATUS_INVALID_IMAGE_FORMAT (0xC000007B).
+#
+# Start-Service flattens that into "cannot be started", which names nothing.
+# ServiceController throws with the Win32Exception still attached, so walk
+# the inner-exception chain and print the native code.
+Write-Output '--- demand-start probe ---'
+foreach ($s in $svcs) {
+    try {
+        $ctl = New-Object System.ServiceProcess.ServiceController $s
+        if ("$($ctl.Status)" -eq 'Running') {
+            Write-Output "$($s)_TRYSTART=ALREADY_RUNNING"
+            devcell-json @{ event = 'try_start'; service = $s; status = 'already_running' }
+            continue
+        }
+        $ctl.Start()
+        $ctl.WaitForStatus('Running', [TimeSpan]::FromSeconds(15))
+        Write-Output "$($s)_TRYSTART=OK"
+        devcell-json @{ event = 'try_start'; service = $s; status = 'ok' }
+    } catch {
+        $code = 'unknown'
+        $e = $_.Exception
+        while ($e) {
+            if ($e -is [System.ComponentModel.Win32Exception]) { $code = $e.NativeErrorCode; break }
+            $e = $e.InnerException
+        }
+        Write-Output "$($s)_TRYSTART=FAIL win32=$code msg=$($_.Exception.Message)"
+        devcell-json @{ event = 'try_start'; service = $s; status = 'fail'; win32 = "$code"; error = "$($_.Exception.Message)" }
+    }
+}
+
+# Starting one on demand proves the key resolves to a binary the kernel
+# will actually load, which parsing the hive cannot tell us.
+Write-Output '--- starting hvservice on demand ---'
+try {
+    Start-Service -Name hvservice -ErrorAction Stop
+    Write-Output 'HVSERVICE_START_EXIT=0'
+    devcell-json @{ event = 'demand_start'; service = 'hvservice'; status = 'ok' }
+} catch {
+    Write-Output "HVSERVICE_START_EXIT=$($_.Exception.Message)"
+    devcell-json @{ event = 'demand_start'; service = 'hvservice'; status = 'fail'; error = "$($_.Exception.Message)" }
+}
+
+# WinPE-WMI is enabled in stock boot.wim, so this is available.
+$hv = 'UNKNOWN'
+try {
+    $cs = Get-CimInstance Win32_ComputerSystem -ErrorAction Stop
+    $hv = $cs.HypervisorPresent
+} catch { $hv = 'UNKNOWN' }
+Write-Output "HYPERVISOR_PRESENT=$hv"
+devcell-json @{ event = 'hypervisor'; present = "$hv" }
+
+# --- vmcompute / HCS probe --------------------------------------------------
+Write-Output '--- vmcompute probe ---'
+try {
+    $ctl = New-Object System.ServiceProcess.ServiceController 'vmcompute'
+    if ("$($ctl.Status)" -ne 'Running') {
+        $ctl.Start()
+        $ctl.WaitForStatus('Running', [TimeSpan]::FromSeconds(30))
+    }
+    Write-Output "VMCOMPUTE_STATUS=RUNNING"
+    devcell-json @{ event = 'vmcompute'; status = 'running' }
+} catch {
+    Write-Output "VMCOMPUTE_STATUS=FAIL msg=$($_.Exception.Message)"
+    devcell-json @{ event = 'vmcompute'; status = 'fail'; error = "$($_.Exception.Message)" }
+}
+
+# hcsdiag probes the Host Compute Service directly.
+Write-Output '--- hcs probe ---'
+$hcsdiag = "$env:SystemRoot\System32\hcsdiag.exe"
+if (Test-Path $hcsdiag) {
+    try {
+        $hcsList = & $hcsdiag list 2>&1
+        Write-Output "HCSDIAG_LIST=$hcsList"
+        devcell-json @{ event = 'hcsdiag_list'; output = "$hcsList" }
+    } catch {
+        Write-Output "HCSDIAG_LIST=FAIL msg=$($_.Exception.Message)"
+        devcell-json @{ event = 'hcsdiag_list'; status = 'fail'; error = "$($_.Exception.Message)" }
+    }
+} else {
+    Write-Output "HCSDIAG_LIST=NOT_FOUND"
+    devcell-json @{ event = 'hcsdiag_list'; status = 'not_found' }
+}
+
+# --- WSL probe ---------------------------------------------------------------
+Write-Output '--- wsl probe ---'
+$wslExe = "$env:SystemRoot\System32\wsl.exe"
+if (Test-Path $wslExe) {
+    try {
+        $wslStatus = & $wslExe --status 2>&1
+        Write-Output "WSL_STATUS=$wslStatus"
+        devcell-json @{ event = 'wsl_status'; output = "$wslStatus" }
+    } catch {
+        Write-Output "WSL_STATUS=FAIL msg=$($_.Exception.Message)"
+        devcell-json @{ event = 'wsl_status'; status = 'fail'; error = "$($_.Exception.Message)" }
+    }
+} else {
+    Write-Output "WSL_EXE=NOT_FOUND"
+    devcell-json @{ event = 'wsl_exe'; status = 'not_found' }
+}
+
+# --- wslservice probe -------------------------------------------------------
+# wsl.exe checks CBS feature state, but wslservice is the actual engine.
+# If it starts, the compute fabric is functional regardless of what wsl.exe thinks.
+Write-Output '--- wslservice probe ---'
+$wslSvc = 'C:\Program Files\WSL\wslservice.exe'
+if (Test-Path $wslSvc) {
+    Write-Output "WSLSERVICE_EXE=FOUND"
+    # Register and start it as a service
+    try {
+        & sc.exe create wslservice binPath= "`"$wslSvc`"" type= own start= demand 2>&1 | ForEach-Object { Write-Output "WSLSERVICE_CREATE=$_" }
+        Start-Service -Name wslservice -ErrorAction Stop
+        Start-Sleep -Seconds 3
+        $ctl = New-Object System.ServiceProcess.ServiceController 'wslservice'
+        Write-Output "WSLSERVICE_STATUS=$($ctl.Status)"
+        devcell-json @{ event = 'wslservice'; status = "$($ctl.Status)" }
+    } catch {
+        Write-Output "WSLSERVICE_STATUS=FAIL msg=$($_.Exception.Message)"
+        devcell-json @{ event = 'wslservice'; status = 'fail'; error = "$($_.Exception.Message)" }
+    }
+} else {
+    Write-Output "WSLSERVICE_EXE=NOT_FOUND"
+    devcell-json @{ event = 'wslservice'; status = 'not_found' }
+}
+
+# --- HCS VM creation probe --------------------------------------------------
+# The ultimate test: can HCS create a utility VM? This is what WSL2 does.
+Write-Output '--- hcs vm probe ---'
+try {
+    Add-Type -Path "$env:SystemRoot\System32\computecore.dll" -ErrorAction SilentlyContinue
+} catch {}
+# Use the .NET HCS API if available, otherwise try PowerShell's
+# ComputeNetwork / ComputeStorage types.
+try {
+    $hns = [System.Runtime.InteropServices.Marshal]::LoadLibrary("$env:SystemRoot\System32\vmcompute.dll")
+    if ($hns -ne [IntPtr]::Zero) {
+        Write-Output "VMCOMPUTE_DLL=LOADED"
+        devcell-json @{ event = 'vmcompute_dll'; status = 'loaded' }
+    } else {
+        Write-Output "VMCOMPUTE_DLL=FAILED"
+        devcell-json @{ event = 'vmcompute_dll'; status = 'failed' }
+    }
+} catch {
+    Write-Output "VMCOMPUTE_DLL=FAIL msg=$($_.Exception.Message)"
+    devcell-json @{ event = 'vmcompute_dll'; status = 'fail'; error = "$($_.Exception.Message)" }
+}
+
+# Check if the VID device (Virtual Infrastructure Driver) is accessible.
+# VID is the kernel-mode component HCS talks to for VM memory/processor.
+Write-Output '--- vid device probe ---'
+$vidPath = '\\.\VID'
+try {
+    $vidHandle = [System.IO.File]::Open($vidPath, 'Open', 'Read', 'ReadWrite')
+    Write-Output "VID_DEVICE=OPEN"
+    $vidHandle.Close()
+    devcell-json @{ event = 'vid_device'; status = 'open' }
+} catch {
+    Write-Output "VID_DEVICE=FAIL msg=$($_.Exception.Message)"
+    devcell-json @{ event = 'vid_device'; status = 'fail'; error = "$($_.Exception.Message)" }
+}
+
+Write-Output '{{.Complete}}'
+devcell-json @{ event = 'verify_complete' }
+if ($structStream) { $structStream.Flush(); $structStream.Close() }

@@ -51,12 +51,28 @@ type WimPrepConfig struct {
 	// When equal to SourceWim the copy step is skipped (DISM commits
 	// in place). Default: "devcell.wim".
 	TargetWim string
+
+	// UnmountInstallWim controls whether the builder explicitly unmounts
+	// install.wim before committing boot.wim. Default false: the mount is
+	// read-only and the WinPE VM is discarded after the build, so an
+	// explicit unmount just burns wall-clock (15 min on TCG/ARM64).
+	UnmountInstallWim bool
+
+	// TransplantVMP requests the VirtualMachinePlatform transplant on the
+	// host, before the builder VM boots. It produces no DISM commands:
+	// DISM cannot enable VMP in a WinPE image at all, because every backing
+	// package names Microsoft-Windows-Foundation-Package as its parent while
+	// boot.wim's is Microsoft-Windows-WinPE-Package, so CBS refuses both
+	// /Add-Package and /Enable-Feature. The transplant copies the signed
+	// binaries in and clones the service keys instead.
+	TransplantVMP bool
 }
 
 const (
-	WimBuilderScriptName = `devcell-wim-builder.ps1`
-	WimBuilderDoneFile   = `devcell-builder-done.txt`
-	WimBuilderLogFile    = `devcell-builder.log`
+	WimBuilderScriptName    = `devcell-wim-builder.ps1`
+	WimBuilderDoneFile      = `devcell-builder-done.txt`
+	WimBuilderLogFile       = `devcell-builder.log`
+	WimBuilderCompleteToken = `DEVCELL_BUILDER_DONE`
 )
 
 // WimBuilderScriptCommand returns the agent command line for the builder.
@@ -66,16 +82,31 @@ func WimBuilderScriptCommand() string {
 	return `& "$DevcellVol\` + WimBuilderScriptName + `" $DevcellVol`
 }
 
+type wimBuilderOp struct {
+	Feature    string
+	Capability string
+	Package    string
+	Driver     string
+	Num        int
+	Total      int
+}
+
+type wimBuilderData struct {
+	StructuredPortName string
+	NeedsInstallWim    bool
+	UnmountInstallWim  bool
+	NeedsVirtIO        bool
+	SourceWim          string
+	TargetWim          string
+	WimIndex           int
+	DoneFile           string
+	CompleteToken      string
+	Ops                []wimBuilderOp
+}
+
 // GenerateWimBuilderScript produces a PowerShell script that runs inside
 // WinPE to service a boot.wim copy using DISM offline commands. The shared
 // volume (passed as first argument) carries boot.wim in and devcell.wim out.
-//
-// Prerequisites in the VM:
-//   - $args[0] (SHARED) has boot.wim
-//   - A CD-ROM drive contains the Windows ISO with sources\install.wim
-//
-// On success the script writes devcell.wim and devcell-builder-done.txt to
-// the shared volume.
 func GenerateWimBuilderScript(cfg WimPrepConfig) []byte {
 	idx := cfg.WimImageIndex
 	if idx == 0 {
@@ -101,221 +132,35 @@ func GenerateWimBuilderScript(cfg WimPrepConfig) []byte {
 		}
 	}
 
-	var b strings.Builder
-	b.WriteString("$ErrorActionPreference = 'Continue'\r\n")
-	b.WriteString("$Shared = $args[0]\r\n")
-	b.WriteString("\r\n")
-	b.WriteString("Write-Output '=== DEVCELL WIM BUILDER ==='\r\n")
-	b.WriteString("Write-Output \"$(Get-Date -Format o)\"\r\n")
-	b.WriteString("Write-Output \"Shared volume: $Shared\"\r\n")
-	b.WriteString("Write-Output ''\r\n")
-
-	failAndExit := func() {
-		b.WriteString("    'FAIL' | Set-Content \"$Shared\\" + WimBuilderDoneFile + "\"\r\n")
-		b.WriteString("    exit 1\r\n")
-	}
-
-	// Find the Windows ISO drive (contains sources\install.wim)
-	if needsInstallWim {
-		b.WriteString("$WinISO = $null\r\n")
-		b.WriteString("foreach ($d in 'C','D','E','F','G','H','I','J','K','L','M','N','O','P','Q','R','S','T','U','V','W','Y','Z') {\r\n")
-		b.WriteString("    if (Test-Path \"${d}:\\sources\\install.wim\") { $WinISO = \"${d}:\"; break }\r\n")
-		b.WriteString("}\r\n")
-		b.WriteString("if (-not $WinISO) {\r\n")
-		b.WriteString("    Write-Output 'ERROR: Windows ISO not found'\r\n")
-		failAndExit()
-		b.WriteString("}\r\n")
-		b.WriteString("Write-Output \"Found Windows ISO at $WinISO\"\r\n")
-		b.WriteString("Write-Output ''\r\n")
-	}
-
-	// Find the virtio-win ISO drive
-	if needsVirtIO {
-		b.WriteString("$VirtIO = $null\r\n")
-		b.WriteString("foreach ($d in 'C','D','E','F','G','H','I','J','K','L','M','N','O','P','Q','R','S','T','U','V','W','Y','Z') {\r\n")
-		b.WriteString("    if (Test-Path \"${d}:\\vioserial\\w11\\ARM64\\vioser.inf\") { $VirtIO = \"${d}:\"; break }\r\n")
-		b.WriteString("}\r\n")
-		b.WriteString("if (-not $VirtIO) {\r\n")
-		b.WriteString("    Write-Output 'ERROR: virtio-win ISO not found'\r\n")
-		failAndExit()
-		b.WriteString("}\r\n")
-		b.WriteString("Write-Output \"Found virtio-win ISO at $VirtIO\"\r\n")
-		b.WriteString("Write-Output ''\r\n")
-	}
-
-	// Verify source WIM exists on the shared volume
-	fmt.Fprintf(&b, "if (-not (Test-Path \"$Shared\\%s\")) {\r\n", sourceWim)
-	fmt.Fprintf(&b, "    Write-Output 'ERROR: %s not found on shared volume'\r\n", sourceWim)
-	failAndExit()
-	b.WriteString("}\r\n")
-	fmt.Fprintf(&b, "Write-Output 'Found %s on shared volume'\r\n", sourceWim)
-	b.WriteString("Write-Output ''\r\n")
-
-	// Partition the scratch NVMe disk for DISM mount points.
-	// Use W: (not C:) because the USB FAT shared volume may already hold C:
-	// when it is the boot device (SCSI CD boot path with startup.nsh).
-	b.WriteString("Write-Output '--- Preparing work volume (diskpart) ---'\r\n")
-	b.WriteString("@'\r\n")
-	b.WriteString("select disk 0\r\n")
-	b.WriteString("clean\r\n")
-	b.WriteString("create partition primary\r\n")
-	b.WriteString("format fs=ntfs quick label=WORK\r\n")
-	b.WriteString("assign letter=W\r\n")
-	b.WriteString("'@ | Set-Content 'X:\\dp.txt' -Encoding ASCII\r\n")
-	b.WriteString("& diskpart.exe /s X:\\dp.txt 2>&1 | Write-Output\r\n")
-	b.WriteString("if ($LASTEXITCODE -ne 0) {\r\n")
-	b.WriteString("    Write-Output \"ERROR: diskpart failed with exit code $LASTEXITCODE\"\r\n")
-	failAndExit()
-	b.WriteString("}\r\n")
-	b.WriteString("Write-Output 'Work volume W: ready'\r\n")
-	b.WriteString("Write-Output ''\r\n")
-
-	// Check internet connectivity
-	b.WriteString("Write-Output '--- Checking internet connectivity ---'\r\n")
-	b.WriteString("$HasInet = (Test-Connection -ComputerName dns.msftncsi.com -Count 1 -Quiet -ErrorAction SilentlyContinue)\r\n")
-	b.WriteString("if ($HasInet) { Write-Output 'Internet: available' }\r\n")
-	b.WriteString("else { Write-Output 'Internet: not available' }\r\n")
-	b.WriteString("Write-Output ''\r\n")
-
-	// Create mount directories
-	b.WriteString("Write-Output '--- Creating mount directories ---'\r\n")
-	b.WriteString("New-Item -ItemType Directory -Force -Path 'W:\\mnt\\boot','W:\\mnt\\install' | Out-Null\r\n")
-	b.WriteString("Write-Output ''\r\n")
-
-	// Mount source WIM
-	fmt.Fprintf(&b, "Write-Output '--- Mounting %s (index %d) ---'\r\n", sourceWim, idx)
-	fmt.Fprintf(&b, "& dism.exe /Mount-Image /ImageFile:\"$Shared\\%s\" /Index:%d /MountDir:W:\\mnt\\boot 2>&1 | Write-Output\r\n", sourceWim, idx)
-	b.WriteString("if ($LASTEXITCODE -ne 0) {\r\n")
-	fmt.Fprintf(&b, "    Write-Output 'ERROR: Failed to mount %s'\r\n", sourceWim)
-	failAndExit()
-	b.WriteString("}\r\n")
-	fmt.Fprintf(&b, "Write-Output '%s mounted successfully'\r\n", sourceWim)
-	b.WriteString("Write-Output ''\r\n")
-
-	// Mount install.wim (read-only, index 1) when features/capabilities/packages need it as source.
-	if needsInstallWim {
-		b.WriteString("Write-Output '--- Mounting install.wim (index 1, read-only) ---'\r\n")
-		b.WriteString("& dism.exe /Mount-Image /ImageFile:\"$WinISO\\sources\\install.wim\" /Index:1 /MountDir:W:\\mnt\\install /ReadOnly 2>&1 | Write-Output\r\n")
-		b.WriteString("if ($LASTEXITCODE -ne 0) {\r\n")
-		b.WriteString("    Write-Output 'ERROR: Failed to mount install.wim'\r\n")
-		b.WriteString("    & dism.exe /Unmount-Image /MountDir:W:\\mnt\\boot /Discard 2>&1 | Write-Output\r\n")
-		failAndExit()
-		b.WriteString("}\r\n")
-		b.WriteString("Write-Output 'install.wim mounted successfully'\r\n")
-		b.WriteString("Write-Output ''\r\n")
-	}
-
-	// Apply each operation
-	b.WriteString("$OpsOK = 0\r\n")
-	b.WriteString("$OpsFail = 0\r\n")
-	b.WriteString("Write-Output '--- Applying servicing operations ---'\r\n")
+	total := len(cfg.Ops)
+	ops := make([]wimBuilderOp, 0, total)
 	for i, op := range cfg.Ops {
-		var cmd string
-		var desc string
-		switch {
-		case op.Feature != "":
-			desc = fmt.Sprintf("Enable-Feature %s", op.Feature)
-			cmd = fmt.Sprintf("& dism.exe /Image:W:\\mnt\\boot /Enable-Feature /FeatureName:%s /All /Source:W:\\mnt\\install\\Windows /LimitAccess 2>&1 | Write-Output", op.Feature)
-		case op.Package != "":
-			desc = fmt.Sprintf("Add-Package %s", op.Package)
-			cmd = fmt.Sprintf("& dism.exe /Image:W:\\mnt\\boot /Add-Package /PackagePath:W:\\mnt\\install\\%s 2>&1 | Write-Output", op.Package)
-		case op.Driver != "":
-			desc = fmt.Sprintf("Add-Driver %s", op.Driver)
-			cmd = fmt.Sprintf("& dism.exe /Image:W:\\mnt\\boot /Add-Driver /Driver:\"$VirtIO\\%s\" /Recurse 2>&1 | Write-Output", op.Driver)
-		case op.Capability != "":
-			desc = fmt.Sprintf("Add-Capability %s", op.Capability)
-			fmt.Fprintf(&b, "Write-Output '[%d/%d] %s'\r\n", i+1, len(cfg.Ops), desc)
-			fmt.Fprintf(&b, "& dism.exe /Image:W:\\mnt\\boot /Add-Capability /CapabilityName:%s /Source:W:\\mnt\\install /LimitAccess 2>&1 | Write-Output\r\n", op.Capability)
-			b.WriteString("if ($LASTEXITCODE -ne 0) {\r\n")
-			fmt.Fprintf(&b, "    Write-Output '%s failed offline'\r\n", desc)
-			b.WriteString("    if ($HasInet) {\r\n")
-			fmt.Fprintf(&b, "        Write-Output 'Retrying %s via Windows Update...'\r\n", desc)
-			fmt.Fprintf(&b, "        & dism.exe /Image:W:\\mnt\\boot /Add-Capability /CapabilityName:%s 2>&1 | Write-Output\r\n", op.Capability)
-			b.WriteString("        if ($LASTEXITCODE -ne 0) {\r\n")
-			fmt.Fprintf(&b, "            Write-Output 'WARNING: %s failed via Windows Update'\r\n", desc)
-			b.WriteString("            $OpsFail++\r\n")
-			b.WriteString("        } else {\r\n")
-			fmt.Fprintf(&b, "            Write-Output 'OK: %s (via Windows Update)'\r\n", desc)
-			b.WriteString("            $OpsOK++\r\n")
-			b.WriteString("        }\r\n")
-			b.WriteString("    } else {\r\n")
-			fmt.Fprintf(&b, "        Write-Output 'WARNING: %s failed and no internet'\r\n", desc)
-			b.WriteString("        $OpsFail++\r\n")
-			b.WriteString("    }\r\n")
-			b.WriteString("} else {\r\n")
-			fmt.Fprintf(&b, "    Write-Output 'OK: %s (offline)'\r\n", desc)
-			b.WriteString("    $OpsOK++\r\n")
-			b.WriteString("}\r\n")
-			b.WriteString("Write-Output ''\r\n")
-			continue
-		default:
-			continue
-		}
-		fmt.Fprintf(&b, "Write-Output '[%d/%d] %s'\r\n", i+1, len(cfg.Ops), desc)
-		fmt.Fprintf(&b, "%s\r\n", cmd)
-		b.WriteString("if ($LASTEXITCODE -ne 0) {\r\n")
-		fmt.Fprintf(&b, "    Write-Output 'WARNING: %s failed'\r\n", desc)
-		b.WriteString("    $OpsFail++\r\n")
-		b.WriteString("} else {\r\n")
-		fmt.Fprintf(&b, "    Write-Output 'OK: %s'\r\n", desc)
-		b.WriteString("    $OpsOK++\r\n")
-		b.WriteString("}\r\n")
-		b.WriteString("Write-Output ''\r\n")
-	}
-	b.WriteString("Write-Output \"Operations: $OpsOK succeeded, $OpsFail failed\"\r\n")
-	b.WriteString("Write-Output ''\r\n")
-
-	// Verify: list enabled features and injected drivers
-	b.WriteString("Write-Output '--- Verifying serviced image ---'\r\n")
-	b.WriteString("& dism.exe /Image:W:\\mnt\\boot /Get-Features 2>&1 | Select-String -Pattern 'Enabled' -Context 1,0 | ForEach-Object { \"$($_.Context.PreContext[0].Trim()), $($_.Line.Trim())\" } | Write-Output\r\n")
-	if needsVirtIO {
-		b.WriteString("Write-Output ''\r\n")
-		b.WriteString("Write-Output '--- Injected drivers ---'\r\n")
-		b.WriteString("& dism.exe /Image:W:\\mnt\\boot /Get-Drivers 2>&1 | Select-String -Pattern 'oem' | Write-Output\r\n")
-	}
-	b.WriteString("Write-Output ''\r\n")
-
-	// Unmount install.wim (discard, read-only)
-	if needsInstallWim {
-		b.WriteString("Write-Output '--- Unmounting install.wim ---'\r\n")
-		b.WriteString("& dism.exe /Unmount-Image /MountDir:W:\\mnt\\install /Discard 2>&1 | Write-Output\r\n")
-		b.WriteString("Write-Output ''\r\n")
+		ops = append(ops, wimBuilderOp{
+			Feature:    op.Feature,
+			Capability: op.Capability,
+			Package:    op.Package,
+			Driver:     op.Driver,
+			Num:        i + 1,
+			Total:      total,
+		})
 	}
 
-	// Write provenance marker into the mounted image root
-	b.WriteString("Write-Output '--- Writing devcell info.json ---'\r\n")
-	b.WriteString("'{\"version\":\"' + (Get-Date -Format o) + '\"}' | Set-Content 'W:\\mnt\\boot\\info.json'\r\n")
-	b.WriteString("Write-Output ''\r\n")
-
-	// Unmount source WIM (commit changes)
-	fmt.Fprintf(&b, "Write-Output '--- Committing %s changes ---'\r\n", sourceWim)
-	b.WriteString("& dism.exe /Unmount-Image /MountDir:W:\\mnt\\boot /Commit 2>&1 | Write-Output\r\n")
-	b.WriteString("if ($LASTEXITCODE -ne 0) {\r\n")
-	fmt.Fprintf(&b, "    Write-Output 'ERROR: Failed to commit %s'\r\n", sourceWim)
-	failAndExit()
-	b.WriteString("}\r\n")
-	fmt.Fprintf(&b, "Write-Output '%s committed successfully'\r\n", sourceWim)
-	b.WriteString("Write-Output ''\r\n")
-
-	// Copy to target WIM
-	if sourceWim != targetWim {
-		fmt.Fprintf(&b, "Write-Output '--- Creating %s ---'\r\n", targetWim)
-		fmt.Fprintf(&b, "Copy-Item \"$Shared\\%s\" \"$Shared\\%s\" -Force\r\n", sourceWim, targetWim)
-		b.WriteString("if (-not $?) {\r\n")
-		fmt.Fprintf(&b, "    Write-Output 'ERROR: Failed to create %s'\r\n", targetWim)
-		failAndExit()
-		b.WriteString("}\r\n")
-		fmt.Fprintf(&b, "Write-Output '%s created'\r\n", targetWim)
-		b.WriteString("Write-Output ''\r\n")
+	data := wimBuilderData{
+		StructuredPortName: StructuredPortName,
+		NeedsInstallWim:    needsInstallWim,
+		UnmountInstallWim:  cfg.UnmountInstallWim,
+		NeedsVirtIO:        needsVirtIO,
+		SourceWim:          sourceWim,
+		TargetWim:          targetWim,
+		WimIndex:           idx,
+		DoneFile:           WimBuilderDoneFile,
+		CompleteToken:      WimBuilderCompleteToken,
+		Ops:                ops,
 	}
 
-	// Success marker
-	b.WriteString("Write-Output '=== DEVCELL WIM BUILDER COMPLETE ==='\r\n")
-	b.WriteString("Write-Output \"Operations: $OpsOK succeeded, $OpsFail failed\"\r\n")
-	b.WriteString("'SUCCESS' | Set-Content \"$Shared\\" + WimBuilderDoneFile + "\"\r\n")
-	b.WriteString("Write-Output \"$(Get-Date -Format o)\"\r\n")
-
-	return []byte(b.String())
+	out := renderTemplate("wim-builder.ps1.tmpl", data)
+	out = strings.ReplaceAll(out, "\n", "\r\n")
+	return []byte(out)
 }
 
 // HyperVPrepOps returns the servicing operations to enable Hyper-V in a

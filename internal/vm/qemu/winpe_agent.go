@@ -50,6 +50,10 @@ const (
 	SetupActSnapshotName = `devcell-setupact.log`
 	// SetupErrSnapshotName receives setuperr.log the same way.
 	SetupErrSnapshotName = `devcell-setuperr.log`
+	// SetupAPISnapshotName receives X:\Windows\INF\setupapi.dev.log, PnP's
+	// full driver-binding trace. drvload.exe has no verbose switch, so this
+	// is the only way to see why a driver did or did not bind.
+	SetupAPISnapshotName = `devcell-setupapi.dev.log`
 
 	// ProgressPortName lives in command.go (where the QEMU device is wired).
 )
@@ -90,7 +94,7 @@ func WinPEDriverLoadCommand(inf string) string {
 //
 // Deprecated: prefer WinPEDiagScriptCommand, which invokes the proper
 // diagnostics script and waits for completion before the output is read.
-const WinPEDiagCommand = `Set-Content X:\devcell-lv.txt "list volume`+"`r`n"+`exit"; & diskpart.exe /s X:\devcell-lv.txt; & reg.exe query HKLM\SYSTEM\CurrentControlSet\Services\vioscsi; Get-ChildItem X:\Windows\Panther, X:\$windows.~bt\Sources\Panther -ErrorAction SilentlyContinue`
+const WinPEDiagCommand = `Set-Content X:\devcell-lv.txt "list volume` + "`r`n" + `exit"; & diskpart.exe /s X:\devcell-lv.txt; & reg.exe query HKLM\SYSTEM\CurrentControlSet\Services\vioscsi; Get-ChildItem X:\Windows\Panther, X:\$windows.~bt\Sources\Panther -ErrorAction SilentlyContinue`
 
 const (
 	// WinPEDiagScriptName is the diagnostics script shipped on the answer
@@ -708,12 +712,29 @@ func GenerateWinPEBootstrap(cfg WinPEPayloadConfig) []byte {
 	}
 
 	// Load drivers before writing to virtio-serial: the vioserial port
-	// device doesn't exist until its driver is loaded.
+	// device doesn't exist until its driver is loaded. That ordering is also
+	// why the exit codes are collected here and reported below rather than
+	// printed as we go — there is nowhere to report them to yet.
+	if len(cfg.DriverINFs) > 0 {
+		b.WriteString("$drvload = @()\r\n")
+	}
 	for _, inf := range cfg.DriverINFs {
 		fmt.Fprintf(&b, "& drvload.exe '%s'\r\n", inf)
+		fmt.Fprintf(&b, "$drvload += \"%s exit=$LASTEXITCODE\"\r\n", inf)
 	}
 
 	b.WriteString(psProgressLine(cfg, "bootstrap-start"))
+
+	// 0x80070103 is ERROR_NO_MORE_ITEMS: the driver is already bound, which
+	// is success wearing the costume of a failure. Reporting the code makes
+	// that distinguishable from a driver that genuinely did not load.
+	if len(cfg.DriverINFs) > 0 {
+		if line := psProgressLine(cfg, "drvload $d"); line != "" {
+			b.WriteString("foreach ($d in $drvload) {\r\n")
+			b.WriteString("    " + line)
+			b.WriteString("}\r\n")
+		}
+	}
 
 	if cfg.SyncAgent {
 		fmt.Fprintf(&b, "& \"$PSHOME\\pwsh.exe\" -ExecutionPolicy Bypass -File '%s'\r\n", WinPEAgentPath)
@@ -740,78 +761,31 @@ func GenerateWinPEAgent(cfg WinPEPayloadConfig) []byte {
 		poll = 5
 	}
 
-	var b strings.Builder
-	b.WriteString("$ErrorActionPreference = 'Continue'\r\n")
-
-	// Accept volume as argument (answer-volume launcher already knows the
-	// letter); fall back to marker search.
-	b.WriteString("$DevcellVol = if ($args.Count -gt 0) { $args[0] } else { $null }\r\n")
-	b.WriteString("\r\n")
-
-	// Find the devcell volume by marker file.
-	b.WriteString("while (-not $DevcellVol) {\r\n")
-	fmt.Fprintf(&b, "    foreach ($d in 'C','D','E','F','G','H','I','J','K','L','M','N','O','P','Q','R','S','T','U','V','W','Y','Z') {\r\n")
-	fmt.Fprintf(&b, "        if (Test-Path \"${d}:\\%s\") { $DevcellVol = \"${d}:\"; break }\r\n", AgentVolumeMarker)
-	b.WriteString("    }\r\n")
-	fmt.Fprintf(&b, "    if (-not $DevcellVol) { Start-Sleep -Seconds %d }\r\n", poll)
-	b.WriteString("}\r\n")
-	b.WriteString(psProgressLine(cfg, "agent-volume $DevcellVol"))
-	b.WriteString("\r\n")
-
-	// Open the virtio-serial progress port for streaming if configured.
-	if cfg.ProgressPort != "" {
-		b.WriteString("$progressStream = $null\r\n")
-		b.WriteString("try {\r\n")
-		fmt.Fprintf(&b, "    $progressStream = [System.IO.File]::Open('%s',\r\n", cfg.ProgressPort)
-		b.WriteString("        [System.IO.FileMode]::Open,\r\n")
-		b.WriteString("        [System.IO.FileAccess]::Write,\r\n")
-		b.WriteString("        [System.IO.FileShare]::ReadWrite)\r\n")
-		b.WriteString("} catch { }\r\n")
-		b.WriteString("\r\n")
+	data := struct {
+		ProgressPort     string
+		VolumeMarker     string
+		CommandFile      string
+		ResultFile       string
+		DoneFile         string
+		SetupActSnapshot string
+		SetupErrSnapshot string
+		SetupAPISnapshot string
+		PollSeconds      int
+	}{
+		ProgressPort:     cfg.ProgressPort,
+		VolumeMarker:     AgentVolumeMarker,
+		CommandFile:      AgentCommandFile,
+		ResultFile:       AgentResultFile,
+		DoneFile:         AgentDoneFile,
+		SetupActSnapshot: SetupActSnapshotName,
+		SetupErrSnapshot: SetupErrSnapshotName,
+		SetupAPISnapshot: SetupAPISnapshotName,
+		PollSeconds:      poll,
 	}
 
-	// Poll loop.
-	b.WriteString("while ($true) {\r\n")
-
-	// Snapshot Setup's logs (X: RAM disk -> answer volume, CELL-364).
-	fmt.Fprintf(&b, "    Copy-Item 'X:\\Windows\\Panther\\setupact.log' \"$DevcellVol\\%s\" -Force -ErrorAction SilentlyContinue\r\n", SetupActSnapshotName)
-	fmt.Fprintf(&b, "    Copy-Item 'X:\\Windows\\Panther\\setuperr.log' \"$DevcellVol\\%s\" -Force -ErrorAction SilentlyContinue\r\n", SetupErrSnapshotName)
-	fmt.Fprintf(&b, "    Copy-Item 'X:\\$windows.~bt\\Sources\\Panther\\setupact.log' \"$DevcellVol\\%s\" -Force -ErrorAction SilentlyContinue\r\n", SetupActSnapshotName)
-	fmt.Fprintf(&b, "    Copy-Item 'X:\\$windows.~bt\\Sources\\Panther\\setuperr.log' \"$DevcellVol\\%s\" -Force -ErrorAction SilentlyContinue\r\n", SetupErrSnapshotName)
-	b.WriteString("\r\n")
-
-	// Check for a command file.
-	fmt.Fprintf(&b, "    $cmdFile = \"$DevcellVol\\%s\"\r\n", AgentCommandFile)
-	b.WriteString("    if (Test-Path $cmdFile) {\r\n")
-	b.WriteString("        $devcellCmd = (Get-Content $cmdFile -Raw).Trim()\r\n")
-	// Delete first: a command that reboots or hangs must not re-run forever.
-	b.WriteString("        Remove-Item $cmdFile -Force\r\n")
-	fmt.Fprintf(&b, "        $resultFile = \"$DevcellVol\\%s\"\r\n", AgentResultFile)
-	b.WriteString("        try {\r\n")
-	if cfg.ProgressPort != "" {
-		b.WriteString("            Invoke-Expression $devcellCmd 2>&1 | Tee-Object -FilePath $resultFile | ForEach-Object {\r\n")
-		b.WriteString("                if ($progressStream) {\r\n")
-		b.WriteString("                    $bytes = [System.Text.Encoding]::UTF8.GetBytes(\"$_`n\")\r\n")
-		b.WriteString("                    $progressStream.Write($bytes, 0, $bytes.Length)\r\n")
-		b.WriteString("                    $progressStream.Flush()\r\n")
-		b.WriteString("                }\r\n")
-		b.WriteString("                $_\r\n")
-		b.WriteString("            }\r\n")
-	} else {
-		b.WriteString("            Invoke-Expression $devcellCmd 2>&1 | Set-Content $resultFile -Encoding UTF8\r\n")
-	}
-	b.WriteString("        } catch {\r\n")
-	b.WriteString("            \"ERROR: $($_.Exception.Message)\" | Set-Content $resultFile -Encoding UTF8\r\n")
-	b.WriteString("        }\r\n")
-	fmt.Fprintf(&b, "        'done' | Set-Content \"$DevcellVol\\%s\" -Encoding UTF8\r\n", AgentDoneFile)
-	b.WriteString(psProgressLineIndent(cfg, "ran $devcellCmd", "        "))
-	b.WriteString("    }\r\n")
-	b.WriteString("\r\n")
-
-	fmt.Fprintf(&b, "    Start-Sleep -Seconds %d\r\n", poll)
-	b.WriteString("}\r\n")
-
-	return []byte(b.String())
+	out := renderTemplate("winpe-agent.ps1.tmpl", data)
+	out = strings.ReplaceAll(out, "\n", "\r\n")
+	return []byte(out)
 }
 
 // WinPEEchoProbeScriptCommand returns the agent command that invokes the
@@ -903,12 +877,4 @@ func psProgressLine(cfg WinPEPayloadConfig, msg string) string {
 		return ""
 	}
 	return fmt.Sprintf("\"devcell: %s\" | Out-File -Append '%s' -Encoding utf8\r\n", msg, cfg.ProgressPort)
-}
-
-// psProgressLineIndent is psProgressLine with a custom prefix for nested blocks.
-func psProgressLineIndent(cfg WinPEPayloadConfig, msg, indent string) string {
-	if cfg.ProgressPort == "" {
-		return ""
-	}
-	return fmt.Sprintf("%s\"devcell: %s\" | Out-File -Append '%s' -Encoding utf8\r\n", indent, msg, cfg.ProgressPort)
 }

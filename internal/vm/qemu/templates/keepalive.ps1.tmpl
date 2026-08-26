@@ -1,0 +1,53 @@
+$ErrorActionPreference = 'Continue'
+
+{{template "struct-json" .}}
+
+Write-Output '{{.Banner}}'
+Write-Output (Get-Date -Format o)
+devcell-json @{ event = 'keepalive_start' }
+
+# --- channel 1: host -> guest file transfer on the FAT volume -------------
+# The host wrote this before boot. Reading it back verbatim is the proof
+# that a changed file on the host reaches the guest on the next run, which
+# is the whole basis of the change/restart loop.
+$probe = Join-Path $DevcellVol '{{.ProbeFile}}'
+if (Test-Path $probe) {
+    $content = (Get-Content $probe -Raw).Trim()
+    Write-Output "PROBE_FILE=$content"
+    devcell-json @{ event = 'probe_file'; content = $content }
+} else {
+    Write-Output "PROBE_FILE=MISSING $probe"
+    devcell-json @{ event = 'probe_file'; status = 'missing' }
+}
+
+# --- channel 2: the agent shell -------------------------------------------
+Write-Output 'PROBE_SHELL=OK'
+Write-Output "PROBE_PWSH=$($PSVersionTable.PSVersion)"
+Write-Output "PROBE_VOL=$DevcellVol"
+devcell-json @{ event = 'probe_shell'; pwsh = "$($PSVersionTable.PSVersion)" }
+
+# --- starting state to debug from -----------------------------------------
+$hv = 'UNKNOWN'
+try { $hv = (Get-CimInstance Win32_ComputerSystem -ErrorAction Stop).HypervisorPresent } catch { }
+Write-Output "HYPERVISOR_PRESENT=$hv"
+devcell-json @{ event = 'hypervisor'; present = "$hv" }
+
+# The Storage module's volume cmdlets are absent from WinPE: calling one is
+# a command-not-found, and that is terminating even under
+# ErrorActionPreference='Continue', so it aborted the rest of this script.
+# Get-PSDrive is part of core PowerShell and always present.
+Write-Output '--- volumes ---'
+try {
+    Get-PSDrive -PSProvider FileSystem -ErrorAction Stop |
+        ForEach-Object { Write-Output "VOL $($_.Name): used=$($_.Used) free=$($_.Free)" }
+} catch { Write-Output "VOL enumeration failed: $($_.Exception.Message)" }
+
+# --- channel 3: ssh -------------------------------------------------------
+# Screenshots and synthetic keystrokes are a poor shell: the console is owned
+# by the agent, and interrupting it kills winpeshl and with it the whole VM.
+# SSH gives a real session that is independent of the console.
+{{template "gosshd-serve" .}}
+
+Write-Output '{{.Banner}} READY'
+devcell-json @{ event = 'keepalive_ready' }
+if ($structStream) { $structStream.Flush(); $structStream.Close() }

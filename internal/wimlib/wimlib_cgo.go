@@ -317,3 +317,43 @@ func (w *WIM) Close() {
 		w.ptr = 0
 	}
 }
+
+func NewDecompressor(ctype Compression, maxBlockSize int) (*Decompressor, error) {
+	ensureInit()
+	var wimlibType C.enum_wimlib_compression_type
+	switch ctype {
+	case LZX:
+		wimlibType = C.WIMLIB_COMPRESSION_TYPE_LZX
+	case LZMS:
+		wimlibType = C.WIMLIB_COMPRESSION_TYPE_LZMS
+	default:
+		return nil, fmt.Errorf("unsupported decompression type: %d", ctype)
+	}
+
+	var ptr *C.struct_wimlib_decompressor
+	ret := C.wimlib_create_decompressor(wimlibType, C.size_t(maxBlockSize), &ptr)
+	if ret != 0 {
+		return nil, fmt.Errorf("wimlib_create_decompressor: %s", errStr(ret))
+	}
+	return &Decompressor{ptr: uintptr(unsafe.Pointer(ptr))}, nil
+}
+
+func (d *Decompressor) Decompress(compressed []byte, uncompressedSize int) ([]byte, error) {
+	out := make([]byte, uncompressedSize)
+	ret := C.wimlib_decompress(
+		unsafe.Pointer(&compressed[0]), C.size_t(len(compressed)),
+		unsafe.Pointer(&out[0]), C.size_t(uncompressedSize),
+		(*C.struct_wimlib_decompressor)(unsafe.Pointer(d.ptr)),
+	)
+	if ret != 0 {
+		return nil, fmt.Errorf("wimlib_decompress failed")
+	}
+	return out, nil
+}
+
+func (d *Decompressor) Close() {
+	if d.ptr != 0 {
+		C.wimlib_free_decompressor((*C.struct_wimlib_decompressor)(unsafe.Pointer(d.ptr)))
+		d.ptr = 0
+	}
+}

@@ -20,6 +20,11 @@ const USBBusID = "usb-bus"
 // reads from a chardev file wired to GuestProgressLogPath.
 const ProgressPortName = `devcell.progress.0`
 
+// StructuredPortName is a second virtio-serial port for structured JSONL
+// logging. The guest writes JSON lines to \\.\Global\<name>, the host
+// reads from a chardev file wired to GuestStructuredLogPath.
+const StructuredPortName = `devcell.structured.0`
+
 // BuildInstallCommand constructs the QEMU argv for initial Windows installation.
 // windowsISO and any virtioISO are attached as USB CD-ROMs. autounattendImage
 // is attached as a further CD-ROM when it is an .iso, or as a removable
@@ -277,8 +282,8 @@ func baseCommand(spec Spec) []string {
 		argv = append(argv, "-serial", "file:"+spec.SerialLogPath)
 	}
 
-	// Shared virtio-serial bus for guest-agent and/or progress port.
-	needVirtioSerial := spec.GuestAgentSocketPath != "" || spec.GuestProgressLogPath != ""
+	// Shared virtio-serial bus for guest-agent and/or progress/structured ports.
+	needVirtioSerial := spec.GuestAgentSocketPath != "" || spec.GuestProgressLogPath != "" || spec.GuestStructuredLogPath != ""
 	if needVirtioSerial {
 		argv = append(argv, "-device", "virtio-serial-pci,id=virtio-serial0")
 	}
@@ -290,6 +295,13 @@ func baseCommand(spec Spec) []string {
 		argv = append(argv,
 			"-chardev", "file,id=guestprog,path="+spec.GuestProgressLogPath,
 			"-device", "virtserialport,bus=virtio-serial0.0,chardev=guestprog,name="+ProgressPortName)
+	}
+
+	// Structured JSONL port — see Spec.GuestStructuredLogPath.
+	if spec.GuestStructuredLogPath != "" {
+		argv = append(argv,
+			"-chardev", "file,id=gueststruct,path="+spec.GuestStructuredLogPath,
+			"-device", "virtserialport,bus=virtio-serial0.0,chardev=gueststruct,name="+StructuredPortName)
 	}
 
 	// QMP monitor (machine protocol for programmatic control)
@@ -372,7 +384,7 @@ func secureMachineType(spec Spec) string {
 	// Exactly the machine of the config reported working for Hyper-V/WSL2 on
 	// ARM64 (Vogtinator gist, "tested with Build 25931"): no its=on, which was
 	// our own addition from a different source.
-	base := "virt,virtualization=on,gic-version=3,secure=on"
+	base := "virt,virtualization=on,gic-version=3,its=on,secure=on"
 	if !spec.usesTCG() && runtime.GOOS == "darwin" {
 		return base + ",highmem=on"
 	}

@@ -33,6 +33,7 @@ test/testdata/QEMU_EFI.kernel.fd
 # the installed template, so a rerun is a boot rather than a 2h47m reinstall.
 test/testdata/cellhome/
 test/results
+test/results_archive
 .devcell
 .devcell.toml
 .gocache

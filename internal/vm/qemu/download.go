@@ -30,6 +30,14 @@ const (
 	PwshReleaseURL = "https://github.com/PowerShell/PowerShell/releases/download/v" + PwshVersion + "/PowerShell-" + PwshVersion + "-win-arm64.zip"
 	// PwshZipName is the cached zip filename.
 	PwshZipName = "pwsh-arm64.zip"
+
+	// AlpineVersion is the Alpine minirootfs release used as the WSL2
+	// smoke-test distro — a ~4 MB tarball, the cheapest real Linux there is.
+	AlpineVersion = "3.22.1"
+	// AlpineRootfsURL is the direct CDN download for the aarch64 minirootfs.
+	AlpineRootfsURL = "https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/aarch64/alpine-minirootfs-" + AlpineVersion + "-aarch64.tar.gz"
+	// AlpineRootfsName is the cached tarball filename.
+	AlpineRootfsName = "alpine-minirootfs-" + AlpineVersion + "-aarch64.tar.gz"
 )
 
 // WindowsISOPath returns the path to the cached Windows ISO for a given language.
@@ -395,6 +403,42 @@ func DownloadOpenSSH(ctx context.Context, home string, noCache bool, obs Observe
 // PwshZipPath returns the cached PowerShell 7 zip path.
 func PwshZipPath(home string) string {
 	return filepath.Join(CacheDir(home), PwshZipName)
+}
+
+// AlpineRootfsPath returns the cached Alpine minirootfs tarball path.
+func AlpineRootfsPath(home string) string {
+	return filepath.Join(CacheDir(home), AlpineRootfsName)
+}
+
+// DownloadAlpineRootfs fetches the Alpine aarch64 minirootfs if not cached.
+func DownloadAlpineRootfs(ctx context.Context, home string, noCache bool, obs Observer) (string, error) {
+	dest := AlpineRootfsPath(home)
+	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
+		return "", fmt.Errorf("creating cache dir: %w", err)
+	}
+
+	if noCache {
+		obs.Logf("--no-cache: removing alpine download marker")
+		os.Remove(dest + ".done")
+	}
+
+	if hasDownloadMarker(dest) {
+		if _, err := os.Stat(dest); err == nil {
+			obs.Logf("alpine cache hit: %s", dest)
+			return dest, nil
+		}
+		obs.Logf("alpine .done marker found but file missing — re-downloading")
+		os.Remove(dest + ".done")
+	}
+
+	obs.Logf("downloading Alpine minirootfs %s from %s", AlpineVersion, AlpineRootfsURL)
+	if err := downloadFile(ctx, AlpineRootfsURL, dest, obs); err != nil {
+		return "", fmt.Errorf("downloading Alpine minirootfs: %w", err)
+	}
+	if err := os.WriteFile(dest+".done", nil, 0644); err != nil {
+		return "", fmt.Errorf("writing download marker: %w", err)
+	}
+	return dest, nil
 }
 
 // DownloadPwsh fetches the PowerShell 7 ARM64 self-contained zip if not cached.

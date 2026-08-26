@@ -1,0 +1,81 @@
+$ErrorActionPreference = 'Continue'
+
+$DevcellVol = if ($args.Count -gt 0) { $args[0] } else { $null }
+
+# Find the devcell volume by marker file.
+while (-not $DevcellVol) {
+    foreach ($d in 'C','D','E','F','G','H','I','J','K','L','M','N','O','P','Q','R','S','T','U','V','W','Y','Z') {
+        if (Test-Path "${d}:\{{.VolumeMarker}}") { $DevcellVol = "${d}:"; break }
+    }
+    if (-not $DevcellVol) { Start-Sleep -Seconds {{.PollSeconds}} }
+}
+{{- if .ProgressPort}}
+"devcell: agent-volume $DevcellVol" | Out-File -Append '{{.ProgressPort}}' -Encoding utf8
+{{- end}}
+
+{{- if .ProgressPort}}
+
+# Open the virtio-serial progress port for streaming.
+$progressStream = $null
+try {
+    $progressStream = [System.IO.File]::Open('{{.ProgressPort}}',
+        [System.IO.FileMode]::Open,
+        [System.IO.FileAccess]::Write,
+        [System.IO.FileShare]::ReadWrite)
+} catch { }
+{{- end}}
+
+function devcell-progress([string]$msg) {
+{{- if .ProgressPort}}
+    if ($progressStream) {
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes("devcell: $msg`n")
+        $progressStream.Write($bytes, 0, $bytes.Length)
+        $progressStream.Flush()
+    }
+{{- end}}
+}
+
+# Poll loop.
+while ($true) {
+
+    # Snapshot Setup's logs.
+    Copy-Item 'X:\Windows\Panther\setupact.log' "$DevcellVol\{{.SetupActSnapshot}}" -Force -ErrorAction SilentlyContinue
+    Copy-Item 'X:\Windows\Panther\setuperr.log' "$DevcellVol\{{.SetupErrSnapshot}}" -Force -ErrorAction SilentlyContinue
+    Copy-Item 'X:\$windows.~bt\Sources\Panther\setupact.log' "$DevcellVol\{{.SetupActSnapshot}}" -Force -ErrorAction SilentlyContinue
+    Copy-Item 'X:\$windows.~bt\Sources\Panther\setuperr.log' "$DevcellVol\{{.SetupErrSnapshot}}" -Force -ErrorAction SilentlyContinue
+
+    # PnP's driver-binding trace. drvload.exe has no verbose switch, so this
+    # is the only record of which INF matched which device and why.
+    Copy-Item 'X:\Windows\INF\setupapi.dev.log' "$DevcellVol\{{.SetupAPISnapshot}}" -Force -ErrorAction SilentlyContinue
+
+    # Check for a command file.
+    $cmdFile = "$DevcellVol\{{.CommandFile}}"
+    if (Test-Path $cmdFile) {
+        $devcellCmd = (Get-Content $cmdFile -Raw).Trim()
+        Remove-Item $cmdFile -Force
+        $resultFile = "$DevcellVol\{{.ResultFile}}"
+        try {
+{{- if .ProgressPort}}
+            Invoke-Expression $devcellCmd 2>&1 | Tee-Object -FilePath $resultFile | ForEach-Object {
+                if ($progressStream) {
+                    $bytes = [System.Text.Encoding]::UTF8.GetBytes("$_`n")
+                    $progressStream.Write($bytes, 0, $bytes.Length)
+                    $progressStream.Flush()
+                }
+                $_
+            }
+{{- else}}
+            Invoke-Expression $devcellCmd 2>&1 | Set-Content $resultFile -Encoding UTF8
+{{- end}}
+        } catch {
+            # Stream it first: the result file is only readable once QEMU
+            # exits, so an error that lands there alone looks like a hang.
+            devcell-progress "command failed: $($_.Exception.Message)"
+            "ERROR: $($_.Exception.Message)" | Set-Content $resultFile -Encoding UTF8
+        }
+        'done' | Set-Content "$DevcellVol\{{.DoneFile}}" -Encoding UTF8
+        devcell-progress "ran $devcellCmd"
+    }
+
+    Start-Sleep -Seconds {{.PollSeconds}}
+}

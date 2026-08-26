@@ -387,3 +387,16 @@ func QMPEjectMedium(socketPath, id string) error {
 	}
 	return nil
 }
+
+// QMPQuit sends the "quit" command which flushes all block device caches
+// and exits the QEMU process cleanly. Unlike Process.Kill(), this ensures
+// writeback-cached qcow2 images are consistent on disk.
+func QMPQuit(socketPath string) error {
+	conn, enc, _, err := qmpHandshake(socketPath, 5*time.Second)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	return enc.Encode(map[string]string{"execute": "quit"})
+}

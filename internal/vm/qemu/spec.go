@@ -58,6 +58,11 @@ type Spec struct {
 	// \\.\Global\<ProgressPortName>; this works on ARM64 where pci-serial
 	// 16550 devices don't map to user-mode COMx (CELL-430).
 	GuestProgressLogPath string
+	// GuestStructuredLogPath, when set, attaches a second virtio-serial port
+	// (StructuredPortName) for JSONL output. The guest writes structured
+	// events to \\.\Global\<StructuredPortName>; the host captures them
+	// as build.jsonl for machine-parseable progress and metrics.
+	GuestStructuredLogPath string
 	// DiskCacheMode sets the qcow2 cache policy (e.g. "unsafe" to drop guest
 	// flushes). Empty keeps QEMU's safe default. "unsafe" makes the image
 	// worthless if the host dies mid-run, so it is only for throwaway VMs

@@ -15,6 +15,7 @@ require (
 	github.com/digitalocean/go-libvirt v0.0.0-20260609165003-6254771e63a8
 	github.com/diskfs/go-diskfs v1.9.4
 	github.com/docker/docker v28.5.1+incompatible
+	github.com/gliderlabs/ssh v0.3.8
 	github.com/google/go-containerregistry v0.21.5
 	github.com/google/uuid v1.6.0
 	github.com/hydrz/wireguard v0.0.1
@@ -31,6 +32,7 @@ require (
 	golang.org/x/crypto v0.54.0
 	golang.org/x/image v0.41.0
 	golang.org/x/mod v0.37.0
+	golang.org/x/sys v0.47.0
 	gopkg.in/yaml.v3 v3.0.1
 	howett.net/plist v1.0.1
 	k8s.io/client-go v0.36.2
@@ -45,6 +47,7 @@ require (
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/anchore/go-lzo v0.1.0 // indirect
 	github.com/andybalholm/brotli v1.1.1 // indirect
+	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be // indirect
 	github.com/atotto/clipboard v0.1.4 // indirect
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
@@ -164,7 +167,6 @@ require (
 	golang.org/x/net v0.56.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
-	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/term v0.45.0 // indirect
 	golang.org/x/text v0.40.0 // indirect
 	golang.org/x/time v0.14.0 // indirect

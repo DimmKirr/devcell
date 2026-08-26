@@ -1,0 +1,94 @@
+{{define "gosshd-serve"}}# --- SSH server -----------------------------------------------------------
+# Brings up devcell's own SSH server (gosshd) inside a WinPE guest. WinPE boots with
+# the network stack down and has no service-control CLI, so this initialises
+# networking and runs the server as a detached process rather than a service.
+#
+# Win32-OpenSSH is deliberately not used here. Per connection it spawns its
+# pre-auth child as an LSA virtual account (LsaManageSidNameMapping, then
+# LogonUserExExW with LOGON32_PROVIDER_VIRTUAL) and authenticates the user
+# with an S4U logon. WinPE supports no user logons, so the child dies before
+# writing a single log line and the client sees a bare "Connection closed".
+# Privilege separation is mandatory upstream since 7.5, so no server config
+# avoids it. gosshd authenticates in-process instead and never consults a
+# Windows account.
+#
+# Requires .SSHExe (the payload's filename on the volume) and .ServerLog.
+# The NIC needs a driver before the network stack has anything to
+# initialise. The image carries NetKVM in its driver store, but WinPE only
+# binds what drvload is pointed at, so find the INF and load it first.
+$nic = Get-ChildItem -Path (Join-Path $env:SystemRoot 'System32\DriverStore\FileRepository') `
+    -Filter 'netkvm.inf' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+if ($nic) {
+    & drvload $nic.FullName 2>&1 | Out-Null
+    Write-Output "DRVLOAD_NETKVM=$LASTEXITCODE ($($nic.FullName))"
+} else {
+    Write-Output 'DRVLOAD_NETKVM=NOT_FOUND'
+}
+
+try {
+    & wpeutil InitializeNetwork 2>&1 | Out-Null
+    Write-Output "WPEUTIL_NET=$LASTEXITCODE"
+} catch { Write-Output "WPEUTIL_NET=$($_.Exception.Message)" }
+Start-Sleep -Seconds 5
+
+# WinPE has no NetTCPIP module, so Get-NetIPAddress and friends are
+# command-not-found. ipconfig is a plain executable and always present.
+$ip = 'NONE'
+try {
+    $m = (& ipconfig | Select-String -Pattern 'IPv4.*?:\s*([0-9.]+)' |
+        ForEach-Object { $_.Matches[0].Groups[1].Value } |
+        Where-Object { $_ -notlike '127.*' } | Select-Object -First 1)
+    if ($m) { $ip = $m }
+} catch { }
+Write-Output "GUEST_IP=$ip"
+devcell-json @{ event = 'guest_ip'; ip = "$ip" }
+
+$sshExe = Join-Path $DevcellVol '{{.SSHExe}}'
+if (Test-Path $sshExe) {
+    try {
+        # A listening socket is not reachability: the firewall silently drops
+        # inbound SYNs, so a connection stalls with no log on either side.
+        # netsh's firewall context needs mpssvc, which WinPE does not have,
+        # so every subcommand there returns exit 1 and the block stays;
+        # wpeutil carries WinPE's own firewall control instead. This is a
+        # throwaway PE behind a host-only NAT, so dropping it outright is fine.
+        & wpeutil DisableFirewall 2>&1 | Out-Null
+        Write-Output "FIREWALL_SSH=$LASTEXITCODE"
+        devcell-json @{ event = 'firewall'; exit = $LASTEXITCODE }
+
+        # Two sinks, because they answer different questions. The redirected
+        # stderr is read a few seconds from now and only ever shows why the
+        # server refused to start. The log argument keeps logging for the life
+        # of the process onto the shared volume, which outlives the guest
+        # ramdisk, so a session that fails minutes later is still explained
+        # after the VM is gone. Without it a refused session reports only
+        # "Connection closed".
+        $sshdOut = Join-Path $env:TEMP 'gosshd.out'
+        $sshdLog = Join-Path $DevcellVol '{{.ServerLog}}'
+        Start-Process -FilePath $sshExe -ArgumentList "$sshdLog" `
+            -RedirectStandardError $sshdOut -PassThru -NoNewWindow | Out-Null
+        Write-Output "GOSSHD_LOG=$sshdLog"
+        Start-Sleep -Seconds 3
+
+        # Report the process, not the listening socket: the TCP cmdlets are
+        # not guaranteed in WinPE and a missing one reads as "the server
+        # failed" when it is in fact running.
+        $proc = Get-Process -Name ([System.IO.Path]::GetFileNameWithoutExtension($sshExe)) -ErrorAction SilentlyContinue
+        Write-Output "GOSSHD_PROC=$(if ($proc) { $proc.Id } else { 'NONE' })"
+        devcell-json @{ event = 'gosshd'; pid = "$(if ($proc) { $proc.Id } else { 'NONE' })" }
+
+        # The server's own stderr is the only thing that names why it refused
+        # to start, so always replay it.
+        if (Test-Path $sshdOut) {
+            Get-Content $sshdOut | ForEach-Object { Write-Output "GOSSHD: $_" }
+        } else {
+            Write-Output 'GOSSHD: no output captured'
+        }
+    } catch {
+        Write-Output "GOSSHD_PROC=NONE"
+        Write-Output "GOSSHD_ERROR=$($_.Exception.Message)"
+        devcell-json @{ event = 'gosshd'; status = 'fail'; error = "$($_.Exception.Message)" }
+    }
+} else {
+    Write-Output 'GOSSHD_PROC=NO_PAYLOAD'
+}{{end}}

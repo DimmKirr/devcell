@@ -1,0 +1,20 @@
+{{define "struct-json"}}# build.jsonl is a second virtio-serial port, separate from the progress
+# stream. Scripts that skip opening it leave the file empty and read as
+# though nothing had been logged at all.
+$structPort = '\\.\Global\{{.StructPort}}'
+$structStream = $null
+try {
+    $structStream = [System.IO.File]::Open($structPort,
+        [System.IO.FileMode]::Open,
+        [System.IO.FileAccess]::Write,
+        [System.IO.FileShare]::ReadWrite)
+} catch { }
+
+function devcell-json([hashtable]$obj) {
+    if (-not $structStream) { return }
+    $obj['ts'] = (Get-Date -Format o)
+    $line = ($obj | ConvertTo-Json -Compress -Depth 5) + "`n"
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($line)
+    $structStream.Write($bytes, 0, $bytes.Length)
+    $structStream.Flush()
+}{{end}}

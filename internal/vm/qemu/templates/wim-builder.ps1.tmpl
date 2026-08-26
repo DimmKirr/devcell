@@ -1,0 +1,369 @@
+$ErrorActionPreference = 'Continue'
+$Shared = $args[0]
+
+# --- Structured JSONL port (second virtio-serial device) ---
+$structPort = '\\.\Global\{{.StructuredPortName}}'
+$structStream = $null
+try {
+    $structStream = [System.IO.File]::Open($structPort,
+        [System.IO.FileMode]::Open,
+        [System.IO.FileAccess]::Write,
+        [System.IO.FileShare]::ReadWrite)
+} catch { }
+
+# --- Helpers ---
+function devcell-ram {
+    $os = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
+    if ($os) {
+        $t = [math]::Round($os.TotalVisibleMemorySize / 1024)
+        $f = [math]::Round($os.FreePhysicalMemory / 1024)
+        @{ total_mb = $t; used_mb = $t - $f; free_mb = $f }
+    } else { @{} }
+}
+
+function devcell-json([hashtable]$obj) {
+    if (-not $structStream) { return }
+    $out = [ordered]@{ ts = (Get-Date -Format o) }
+    if ($obj.ContainsKey('event')) { $out['event'] = $obj['event'] }
+    if ($obj.ContainsKey('stage')) { $out['stage'] = $obj['stage'] }
+    foreach ($k in ($obj.Keys | Sort-Object)) {
+        if ($k -notin 'event','stage') { $out[$k] = $obj[$k] }
+    }
+    $out['ram'] = devcell-ram
+    $line = ($out | ConvertTo-Json -Compress -Depth 3) + "`n"
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($line)
+    $structStream.Write($bytes, 0, $bytes.Length)
+    $structStream.Flush()
+}
+
+function devcell-stage([string]$Name) {
+    $r = devcell-ram
+    if ($r.total_mb) {
+        Write-Output "--- $Name --- $(Get-Date -Format o) RAM: $($r.used_mb)/$($r.total_mb) MB"
+    } else {
+        Write-Output "--- $Name --- $(Get-Date -Format o)"
+    }
+    devcell-json @{ event = 'stage'; stage = $Name }
+}
+
+$script:dismLastPct = -1
+$script:dismLastOp = ''
+filter devcell-dism-out {
+    param([string]$Op)
+    if ($Op -ne $script:dismLastOp) {
+        $script:dismLastPct = -1
+        $script:dismLastOp = $Op
+    }
+    Write-Output $_
+    if ($_ -match '\[.*?(\d+)\.0%') {
+        $pct = [int]$Matches[1]
+        if ($pct -ge ($script:dismLastPct + 10) -or $pct -eq 100) {
+            devcell-json @{ event = 'dism_progress'; pct = $pct; op = $Op }
+            $script:dismLastPct = $pct
+        }
+    } elseif ($_ -notmatch '^\s*$' -and $_ -notmatch '^\[') {
+        devcell-json @{ event = 'dism_output'; line = $_.Trim(); op = $Op }
+    }
+}
+
+# === START ===
+Write-Output '=== DEVCELL WIM BUILDER ==='
+Write-Output "$(Get-Date -Format o)"
+Write-Output "Shared volume: $Shared"
+devcell-json @{ event = 'start'; shared = "$Shared" }
+Write-Output ''
+
+# --- Locate ISOs ---
+{{- if .NeedsInstallWim}}
+devcell-stage 'Locating Windows ISO (install.wim)'
+$WinISO = $null
+foreach ($d in 'C','D','E','F','G','H','I','J','K','L','M','N','O','P','Q','R','S','T','U','V','W','Y','Z') {
+    if (Test-Path "${d}:\sources\install.wim") { $WinISO = "${d}:"; break }
+}
+if (-not $WinISO) {
+    Write-Output 'ERROR: Windows ISO not found'
+    devcell-json @{ event = 'locate_iso'; target = 'install.wim'; status = 'fail' }
+    'FAIL' | Set-Content "$Shared\{{.DoneFile}}"
+    Write-Output '{{.CompleteToken}}'
+    exit 1
+}
+Write-Output "Found Windows ISO at $WinISO"
+devcell-json @{ event = 'locate_iso'; target = 'install.wim'; status = 'ok'; drive = "$WinISO" }
+Write-Output ''
+{{- end}}
+
+{{- if .NeedsVirtIO}}
+devcell-stage 'Locating virtio-win ISO'
+$VirtIO = $null
+foreach ($d in 'C','D','E','F','G','H','I','J','K','L','M','N','O','P','Q','R','S','T','U','V','W','Y','Z') {
+    if (Test-Path "${d}:\vioserial\w11\ARM64\vioser.inf") { $VirtIO = "${d}:"; break }
+}
+if (-not $VirtIO) {
+    Write-Output 'ERROR: virtio-win ISO not found'
+    devcell-json @{ event = 'locate_iso'; target = 'virtio-win'; status = 'fail' }
+    'FAIL' | Set-Content "$Shared\{{.DoneFile}}"
+    Write-Output '{{.CompleteToken}}'
+    exit 1
+}
+Write-Output "Found virtio-win ISO at $VirtIO"
+devcell-json @{ event = 'locate_iso'; target = 'virtio-win'; status = 'ok'; drive = "$VirtIO" }
+Write-Output ''
+{{- end}}
+
+# --- Verify source WIM ---
+devcell-stage 'Verifying source {{.SourceWim}}'
+if (-not (Test-Path "$Shared\{{.SourceWim}}")) {
+    Write-Output 'ERROR: {{.SourceWim}} not found on shared volume'
+    devcell-json @{ event = 'verify_source'; image = '{{.SourceWim}}'; status = 'fail' }
+    'FAIL' | Set-Content "$Shared\{{.DoneFile}}"
+    Write-Output '{{.CompleteToken}}'
+    exit 1
+}
+Write-Output 'Found {{.SourceWim}} on shared volume'
+devcell-json @{ event = 'verify_source'; image = '{{.SourceWim}}'; status = 'ok' }
+Write-Output ''
+
+# --- Prepare work volume ---
+devcell-stage 'Preparing work volume (diskpart)'
+@'
+select disk 0
+clean
+create partition primary
+format fs=ntfs quick label=WORK
+assign letter=W
+'@ | Set-Content 'X:\dp.txt' -Encoding ASCII
+& diskpart.exe /s X:\dp.txt 2>&1 | Write-Output
+if ($LASTEXITCODE -ne 0) {
+    Write-Output "ERROR: diskpart failed with exit code $LASTEXITCODE"
+    'FAIL' | Set-Content "$Shared\{{.DoneFile}}"
+    Write-Output '{{.CompleteToken}}'
+    exit 1
+}
+Write-Output 'Work volume W: ready'
+Write-Output ''
+
+# --- Internet check ---
+devcell-stage 'Checking internet connectivity'
+$HasInet = (Test-Connection -ComputerName dns.msftncsi.com -Count 1 -Quiet -ErrorAction SilentlyContinue)
+if ($HasInet) { Write-Output 'Internet: available' }
+else { Write-Output 'Internet: not available' }
+devcell-json @{ event = 'internet'; available = $HasInet }
+Write-Output ''
+
+# --- Mount directories ---
+devcell-stage 'Creating mount directories'
+New-Item -ItemType Directory -Force -Path 'W:\mnt\boot','W:\mnt\install','W:\scratch' | Out-Null
+$SD = '/ScratchDir:W:\scratch'
+Write-Output ''
+
+# --- Mount source WIM ---
+devcell-stage 'Mounting {{.SourceWim}} (index {{.WimIndex}})'
+& dism.exe /Mount-Image /ImageFile:"$Shared\{{.SourceWim}}" /Index:{{.WimIndex}} /MountDir:W:\mnt\boot $SD 2>&1 | devcell-dism-out -Op 'mount-boot'
+if ($LASTEXITCODE -ne 0) {
+    Write-Output 'ERROR: Failed to mount {{.SourceWim}}'
+    devcell-json @{ event = 'mount'; image = '{{.SourceWim}}'; index = {{.WimIndex}}; status = 'fail' }
+    'FAIL' | Set-Content "$Shared\{{.DoneFile}}"
+    Write-Output '{{.CompleteToken}}'
+    exit 1
+}
+Write-Output '{{.SourceWim}} mounted successfully'
+devcell-json @{ event = 'mount'; image = '{{.SourceWim}}'; index = {{.WimIndex}}; status = 'ok' }
+Write-Output ''
+
+{{- if .NeedsInstallWim}}
+# --- Mount install.wim ---
+devcell-stage 'Mounting install.wim (index 1, read-only)'
+& dism.exe /Mount-Image /ImageFile:"$WinISO\sources\install.wim" /Index:1 /MountDir:W:\mnt\install /ReadOnly $SD 2>&1 | devcell-dism-out -Op 'mount-install'
+if ($LASTEXITCODE -ne 0) {
+    Write-Output 'ERROR: Failed to mount install.wim'
+    devcell-json @{ event = 'mount'; image = 'install.wim'; index = 1; status = 'fail' }
+    & dism.exe /Unmount-Image /MountDir:W:\mnt\boot /Discard $SD 2>&1 | devcell-dism-out -Op 'unmount-boot-discard'
+    'FAIL' | Set-Content "$Shared\{{.DoneFile}}"
+    Write-Output '{{.CompleteToken}}'
+    exit 1
+}
+Write-Output 'install.wim mounted successfully'
+devcell-json @{ event = 'mount'; image = 'install.wim'; index = 1; status = 'ok' }
+Write-Output ''
+{{- end}}
+
+# --- List available features ---
+devcell-stage 'Listing {{.SourceWim}} features'
+& dism.exe /Image:W:\mnt\boot /Get-Features /Format:Table $SD 2>&1 | devcell-dism-out -Op 'features-boot'
+Write-Output ''
+
+{{- if .NeedsInstallWim}}
+devcell-stage 'Listing install.wim features'
+& dism.exe /Image:W:\mnt\install /Get-Features /Format:Table $SD 2>&1 | devcell-dism-out -Op 'features-install'
+Write-Output ''
+{{- end}}
+
+# --- Apply servicing operations ---
+$OpsOK = 0
+$OpsFail = 0
+devcell-stage 'Applying servicing operations'
+{{range $i, $op := .Ops}}
+{{- if $op.Feature}}
+# --- Step 1: Discover backing packages for {{$op.Feature}} in install.wim ---
+Write-Output '[{{$op.Num}}/{{$op.Total}}] Discovering packages for {{$op.Feature}}'
+$featureInfo = & dism.exe /Image:W:\mnt\install /Get-FeatureInfo /FeatureName:{{$op.Feature}} $SD 2>&1
+devcell-json @{ event = 'feature_info'; feature = '{{$op.Feature}}'; index = {{$op.Num}}; total = {{$op.Total}} }
+$featureInfo | Write-Output
+
+# --- Step 2: Import backing packages into boot.wim ---
+$pkgNames = $featureInfo | Select-String -Pattern '^\s*Package Name\s*:\s*(.+)$' | ForEach-Object { $_.Matches[0].Groups[1].Value.Trim() }
+foreach ($pkg in $pkgNames) {
+    $pkgPath = "W:\mnt\install\Windows\servicing\Packages\$pkg.mum"
+    if (Test-Path $pkgPath) {
+        Write-Output "  Importing package: $pkg"
+        devcell-json @{ event = 'add_package'; feature = '{{$op.Feature}}'; package = $pkg }
+        & dism.exe /Image:W:\mnt\boot /Add-Package /PackagePath:"$pkgPath" $SD 2>&1 | devcell-dism-out -Op "Add-Package $pkg"
+        if ($LASTEXITCODE -ne 0) {
+            Write-Output "  WARNING: Add-Package $pkg failed (exit $LASTEXITCODE)"
+        } else {
+            Write-Output "  OK: Add-Package $pkg"
+        }
+    } else {
+        Write-Output "  SKIP: package $pkg not found at $pkgPath"
+    }
+}
+
+# --- Step 3: Enable the feature (now in manifest) ---
+Write-Output '[{{$op.Num}}/{{$op.Total}}] Enable-Feature {{$op.Feature}}'
+devcell-json @{ event = 'op_start'; op = 'Enable-Feature {{$op.Feature}}'; index = {{$op.Num}}; total = {{$op.Total}} }
+& dism.exe /Image:W:\mnt\boot /Enable-Feature /FeatureName:{{$op.Feature}} /All /Source:W:\mnt\install\Windows /LimitAccess $SD 2>&1 | devcell-dism-out -Op 'Enable-Feature {{$op.Feature}}'
+if ($LASTEXITCODE -ne 0) {
+    Write-Output 'WARNING: Enable-Feature {{$op.Feature}} failed'
+    devcell-json @{ event = 'op_done'; op = 'Enable-Feature {{$op.Feature}}'; status = 'fail'; exitcode = $LASTEXITCODE }
+    $OpsFail++
+} else {
+    Write-Output 'OK: Enable-Feature {{$op.Feature}}'
+    devcell-json @{ event = 'op_done'; op = 'Enable-Feature {{$op.Feature}}'; status = 'ok' }
+    $OpsOK++
+}
+{{- end}}
+{{- if $op.Capability}}
+Write-Output '[{{$op.Num}}/{{$op.Total}}] Add-Capability {{$op.Capability}}'
+devcell-json @{ event = 'op_start'; op = 'Add-Capability {{$op.Capability}}'; index = {{$op.Num}}; total = {{$op.Total}} }
+& dism.exe /Image:W:\mnt\boot /Add-Capability /CapabilityName:{{$op.Capability}} /Source:W:\mnt\install /LimitAccess $SD 2>&1 | devcell-dism-out -Op 'Add-Capability {{$op.Capability}}'
+if ($LASTEXITCODE -ne 0) {
+    if ($HasInet) {
+        Write-Output 'Retrying Add-Capability {{$op.Capability}} via Windows Update...'
+        & dism.exe /Image:W:\mnt\boot /Add-Capability /CapabilityName:{{$op.Capability}} $SD 2>&1 | devcell-dism-out -Op 'Add-Capability {{$op.Capability}}'
+        if ($LASTEXITCODE -ne 0) {
+            Write-Output 'WARNING: Add-Capability {{$op.Capability}} failed'
+            devcell-json @{ event = 'op_done'; op = 'Add-Capability {{$op.Capability}}'; status = 'fail'; exitcode = $LASTEXITCODE }
+            $OpsFail++
+        } else {
+            Write-Output 'OK: Add-Capability {{$op.Capability}} (via Windows Update)'
+            devcell-json @{ event = 'op_done'; op = 'Add-Capability {{$op.Capability}}'; status = 'ok'; source = 'online' }
+            $OpsOK++
+        }
+    } else {
+        Write-Output 'WARNING: Add-Capability {{$op.Capability}} failed and no internet'
+        devcell-json @{ event = 'op_done'; op = 'Add-Capability {{$op.Capability}}'; status = 'fail'; error = 'no internet' }
+        $OpsFail++
+    }
+} else {
+    Write-Output 'OK: Add-Capability {{$op.Capability}}'
+    devcell-json @{ event = 'op_done'; op = 'Add-Capability {{$op.Capability}}'; status = 'ok' }
+    $OpsOK++
+}
+{{- end}}
+{{- if $op.Package}}
+Write-Output '[{{$op.Num}}/{{$op.Total}}] Add-Package {{$op.Package}}'
+devcell-json @{ event = 'op_start'; op = 'Add-Package {{$op.Package}}'; index = {{$op.Num}}; total = {{$op.Total}} }
+& dism.exe /Image:W:\mnt\boot /Add-Package /PackagePath:W:\mnt\install\{{$op.Package}} $SD 2>&1 | devcell-dism-out -Op 'Add-Package {{$op.Package}}'
+if ($LASTEXITCODE -ne 0) {
+    Write-Output 'WARNING: Add-Package {{$op.Package}} failed'
+    devcell-json @{ event = 'op_done'; op = 'Add-Package {{$op.Package}}'; status = 'fail'; exitcode = $LASTEXITCODE }
+    $OpsFail++
+} else {
+    Write-Output 'OK: Add-Package {{$op.Package}}'
+    devcell-json @{ event = 'op_done'; op = 'Add-Package {{$op.Package}}'; status = 'ok' }
+    $OpsOK++
+}
+{{- end}}
+{{- if $op.Driver}}
+Write-Output '[{{$op.Num}}/{{$op.Total}}] Add-Driver {{$op.Driver}}'
+devcell-json @{ event = 'op_start'; op = 'Add-Driver {{$op.Driver}}'; index = {{$op.Num}}; total = {{$op.Total}} }
+& dism.exe /Image:W:\mnt\boot /Add-Driver /Driver:"$VirtIO\{{$op.Driver}}" /Recurse $SD 2>&1 | devcell-dism-out -Op 'Add-Driver {{$op.Driver}}'
+if ($LASTEXITCODE -ne 0) {
+    Write-Output 'WARNING: Add-Driver {{$op.Driver}} failed'
+    devcell-json @{ event = 'op_done'; op = 'Add-Driver {{$op.Driver}}'; status = 'fail'; exitcode = $LASTEXITCODE }
+    $OpsFail++
+} else {
+    Write-Output 'OK: Add-Driver {{$op.Driver}}'
+    devcell-json @{ event = 'op_done'; op = 'Add-Driver {{$op.Driver}}'; status = 'ok' }
+    $OpsOK++
+}
+{{- end}}
+Write-Output ''
+{{end}}
+Write-Output "Operations: $OpsOK succeeded, $OpsFail failed"
+devcell-json @{ event = 'ops_summary'; ok = $OpsOK; fail = $OpsFail }
+Write-Output ''
+
+# --- Verify serviced image ---
+devcell-stage 'Verifying serviced image'
+& dism.exe /Image:W:\mnt\boot /Get-Features $SD 2>&1 | Select-String -Pattern 'Enabled' -Context 1,0 | ForEach-Object { "$($_.Context.PreContext[0].Trim()), $($_.Line.Trim())" } | Write-Output
+{{- if .NeedsVirtIO}}
+Write-Output ''
+devcell-stage 'Injected drivers'
+& dism.exe /Image:W:\mnt\boot /Get-Drivers $SD 2>&1 | Select-String -Pattern 'oem' | Write-Output
+{{- end}}
+Write-Output ''
+
+{{- if and .NeedsInstallWim .UnmountInstallWim}}
+# --- Unmount install.wim ---
+devcell-stage 'Unmounting install.wim'
+& dism.exe /Unmount-Image /MountDir:W:\mnt\install /Discard $SD 2>&1 | devcell-dism-out -Op 'unmount-install'
+devcell-json @{ event = 'unmount'; image = 'install.wim'; status = 'ok' }
+Write-Output ''
+{{- else if .NeedsInstallWim}}
+# install.wim unmount skipped: read-only mount in a throwaway WinPE VM,
+# explicit unmount just burns wall-clock (15 min on TCG/ARM64).
+devcell-json @{ event = 'unmount'; image = 'install.wim'; status = 'skipped' }
+{{- end}}
+
+# --- Write provenance marker ---
+devcell-stage 'Writing devcell info.json'
+'{"version":"' + (Get-Date -Format o) + '"}' | Set-Content 'W:\mnt\boot\info.json'
+Write-Output ''
+
+# --- Commit source WIM ---
+devcell-stage 'Committing {{.SourceWim}} changes'
+& dism.exe /Unmount-Image /MountDir:W:\mnt\boot /Commit $SD 2>&1 | devcell-dism-out -Op 'commit-boot'
+if ($LASTEXITCODE -ne 0) {
+    Write-Output 'ERROR: Failed to commit {{.SourceWim}}'
+    devcell-json @{ event = 'commit'; image = '{{.SourceWim}}'; status = 'fail' }
+    'FAIL' | Set-Content "$Shared\{{.DoneFile}}"
+    Write-Output '{{.CompleteToken}}'
+    exit 1
+}
+Write-Output '{{.SourceWim}} committed successfully'
+devcell-json @{ event = 'commit'; image = '{{.SourceWim}}'; status = 'ok' }
+Write-Output ''
+
+{{- if ne .SourceWim .TargetWim}}
+# --- Copy to target WIM ---
+devcell-stage 'Creating {{.TargetWim}}'
+Copy-Item "$Shared\{{.SourceWim}}" "$Shared\{{.TargetWim}}" -Force
+if (-not $?) {
+    Write-Output 'ERROR: Failed to create {{.TargetWim}}'
+    'FAIL' | Set-Content "$Shared\{{.DoneFile}}"
+    Write-Output '{{.CompleteToken}}'
+    exit 1
+}
+Write-Output '{{.TargetWim}} created'
+Write-Output ''
+{{- end}}
+
+# === COMPLETE ===
+Write-Output '=== DEVCELL WIM BUILDER COMPLETE ==='
+Write-Output "Operations: $OpsOK succeeded, $OpsFail failed"
+devcell-json @{ event = 'complete'; ops_ok = $OpsOK; ops_fail = $OpsFail }
+'SUCCESS' | Set-Content "$Shared\{{.DoneFile}}"
+Write-Output "$(Get-Date -Format o)"
+Write-Output '{{.CompleteToken}}'
+if ($structStream) { $structStream.Close() }

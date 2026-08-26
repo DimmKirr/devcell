@@ -1,0 +1,69 @@
+{{define "vmp-registration"}}# --- Runtime registration -------------------------------------------------
+# Registers the parity pieces that cannot be baked offline sensibly. Vid and
+# storvsp go through drvload — WinPE's own driver-install tool creates their
+# service keys from the transplanted INFs. The two extra vmswitch keys and
+# the Virtualization config root are plain typed registry values (this WinPE
+# has no service-control CLI), copied from the live reference inventory of
+# 2026-08-22 (26100.9168, VMP-only). Everything is idempotent and reports
+# outcome markers instead of failing: verification is the judge.
+Write-Output '--- runtime registration ---'
+$infDir = Join-Path $env:SystemRoot 'INF'
+& drvload (Join-Path $infDir 'wvid.inf') 2>&1 | Out-Null
+Write-Output "REG_DRVLOAD_VID=$LASTEXITCODE"
+devcell-json @{ event = 'drvload'; inf = 'wvid.inf'; exit = $LASTEXITCODE }
+& drvload (Join-Path $infDir 'wstorvsp.inf') 2>&1 | Out-Null
+Write-Output "REG_DRVLOAD_STORVSP=$LASTEXITCODE"
+devcell-json @{ event = 'drvload'; inf = 'wstorvsp.inf'; exit = $LASTEXITCODE }
+
+# drvload may fail (exit 3) when the .sys is not next to the INF, but the
+# transplant already placed the service keys and binaries. Start-Service
+# loads the driver into the kernel via SCM, which reads ImagePath from the
+# registry and finds the .sys in System32\drivers.
+foreach ($svc in 'Vid','storvsp','wcifs') {
+    try {
+        Start-Service -Name $svc -ErrorAction Stop
+        Write-Output "SVC_START_${svc}=OK"
+        devcell-json @{ event = 'svc_start'; name = $svc; status = 'ok' }
+    } catch {
+        Write-Output "SVC_START_${svc}=$($_.Exception.Message)"
+        devcell-json @{ event = 'svc_start'; name = $svc; status = 'fail'; error = "$($_.Exception.Message)" }
+    }
+}
+
+try {
+    foreach ($n in 'VMSVSF','VMSVSP') {
+        $k = "HKLM:\SYSTEM\CurrentControlSet\Services\$n"
+        if (-not (Test-Path $k)) { New-Item -Path $k -Force | Out-Null }
+        New-ItemProperty -Path $k -Name Type -Value 1 -PropertyType DWord -Force | Out-Null
+        New-ItemProperty -Path $k -Name Start -Value 3 -PropertyType DWord -Force | Out-Null
+        New-ItemProperty -Path $k -Name ErrorControl -Value 1 -PropertyType DWord -Force | Out-Null
+        New-ItemProperty -Path $k -Name ImagePath -Value 'System32\drivers\vmswitch.sys' -PropertyType ExpandString -Force | Out-Null
+    }
+    Write-Output 'REG_VMSWITCH_KEYS=OK'
+    devcell-json @{ event = 'vmswitch_keys'; status = 'ok' }
+} catch {
+    Write-Output "REG_VMSWITCH_KEYS=$($_.Exception.Message)"
+    devcell-json @{ event = 'vmswitch_keys'; status = 'fail'; error = "$($_.Exception.Message)" }
+}
+
+try {
+    $virt = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Virtualization'
+    if (-not (Test-Path $virt)) { New-Item -Path $virt -Force | Out-Null }
+    New-ItemProperty -Path $virt -Name CompatibleVmVersion -Value '10.0' -PropertyType String -Force | Out-Null
+    New-ItemProperty -Path $virt -Name CurrentVmVersion -Value '12.0' -PropertyType String -Force | Out-Null
+    New-ItemProperty -Path $virt -Name MinimumImportVmVersion -Value '10.0' -PropertyType String -Force | Out-Null
+    New-ItemProperty -Path $virt -Name ServicingVersion -Value '1.0' -PropertyType String -Force | Out-Null
+    New-ItemProperty -Path $virt -Name Version -Value '10.0.26100.1' -PropertyType String -Force | Out-Null
+    New-ItemProperty -Path $virt -Name MetricsFlushInterval -Value 3600 -PropertyType DWord -Force | Out-Null
+    New-ItemProperty -Path $virt -Name MinimumMacAddress -Value ([byte[]]@(0)) -PropertyType Binary -Force | Out-Null
+    New-ItemProperty -Path $virt -Name MaximumMacAddress -Value ([byte[]]@(0)) -PropertyType Binary -Force | Out-Null
+    foreach ($sub in 'Worker','VirtualDevices','HvSocket','GuestCommunicationServices','Containers') {
+        $sk = Join-Path $virt $sub
+        if (-not (Test-Path $sk)) { New-Item -Path $sk -Force | Out-Null }
+    }
+    Write-Output 'REG_VIRT_ROOT=OK'
+    devcell-json @{ event = 'virt_root'; status = 'ok' }
+} catch {
+    Write-Output "REG_VIRT_ROOT=$($_.Exception.Message)"
+    devcell-json @{ event = 'virt_root'; status = 'fail'; error = "$($_.Exception.Message)" }
+}{{end}}

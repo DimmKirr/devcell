@@ -38,17 +38,32 @@ func TestGeneratedArtifacts_AreByteStable(t *testing.T) {
 	}{
 		{"autounattend.xml", GenerateAutounattendXML(cfg),
 			"cda4911e1a517553946024387f65e529fc46f89921fc04f24eb65768212874ec"},
-		// bootstrap hash updated 2026-08-13: network check now includes
-		// Get-NetIPConfiguration, routing table, QEMU host ping, DNS
-		// resolution, and a verdict line.
+		// bootstrap hash updated 2026-08-23: OpenSSHPayloadName carries the
+		// pinned version, and the payload's filename is rendered into the
+		// script. The installed-Windows path still ships Win32-OpenSSH —
+		// only the WinPE path moved to gosshd, and it renders no bootstrap.
 		{"devcell-bootstrap.ps1", GenerateBootstrapScript(cfg),
-			"9c3c58e341ee88055de31977a3a9c40935eee2aac1e8b3e585cdd32e23ec4fe6"},
+			"cc0bfbe535377c50e488e08021010f02c765684c7264f491529b658d739ef169"},
 		// diag hash updated 2026-08-13: added routing table, QEMU host
 		// connectivity, DNS resolution, and Get-NetIPConfiguration.
 		{"devcell-diag.ps1", GenerateGuestDiagnosticsScript(),
 			"c9414853b704ca0414de91ad507904dc04a2fad68963fcffe11eb55768a132fa"},
+		// winpe-agent hash updated 2026-08-22: CELL-453 template extraction
+		// (winpe-agent.ps1.tmpl) rendered the agent from a file instead of
+		// spliced Go strings.
 		{"winpe-agent", GenerateWinPEAgent(WinPEPayloadConfig{}),
-			"0eb2df43adcde32d6ae6b6a0135a4712ae71b066d20d1fc9861805ae88916f7c"},
+			"3b2f6af18f68d4a16bc9eeeebd29f90e0626baeb7ad2b3e6550a7161151f1e32"},
+		// The verify/boot pass scripts joined the golden set 2026-08-23 when
+		// the WSL pass4 script landed (CELL-456).
+		// vmp-verify hash updated 2026-08-25: HCS boot diagnostics expanded.
+		{"devcell-vmp-verify.ps1", GenerateVMPVerifyScript(),
+			"c370431b4d5dabdae473e14412d4a9063e3dc6c446181f2e82204bdaae372386"},
+		// hcs-boot hash updated 2026-08-25: expanded HV/VID diagnostics.
+		{"devcell-hcs-boot.ps1", GenerateHCSBootScript(),
+			"5f74309af5aa67d8f61787b02105db22da8d2b14105882c0fcc91b15c2fd7d11"},
+		// wsl-boot hash updated 2026-08-25: HCS boot diagnostics expanded.
+		{"devcell-wsl-boot.ps1", GenerateWSLBootScript(),
+			"c9ea446dce74a348976966d6fd591f079ee291bea9f9d838e5e6e81fefdcedb1"},
 	} {
 		sum := hex.EncodeToString(func() []byte { h := sha256.Sum256(tc.got); return h[:] }())
 		require.Equal(t, tc.want, sum,
