@@ -26,4 +26,4 @@ test/results/
 .vagrant/
 .playwright-mcp/
 Vagrantfile.local
-CONTINUE.md
+.scratch/CONTINUE.md
