@@ -16,7 +16,7 @@ import (
 // Precedence:
 //   1. tomlNixhome (from [cell].nixhome or DEVCELL_NIXHOME_PATH env)
 //   2. <baseDir>/nixhome on disk
-//   3. github:DimmKirr/devcell/<ver>?dir=nixhome (with v0.0.0 → main coercion)
+//   3. github:devcell-sh/community-home/<ver> (with v0.0.0 → main coercion)
 
 func TestResolvePureNixhomeRef_TomlNixhomeWins(t *testing.T) {
 	got := runner.ResolvePureNixhomeRef(runner.PureNixhomeInputs{
@@ -64,7 +64,7 @@ func TestResolvePureNixhomeRef_NoLocal_UsesGithubFallback(t *testing.T) {
 		Version:  "v1.2.3",
 		StatFunc: func(string) error { return os.ErrNotExist },
 	})
-	want := "github:DimmKirr/devcell/v1.2.3?dir=nixhome"
+	want := "github:devcell-sh/community-home/v1.2.3"
 	if got.FlakeRef != want {
 		t.Errorf("github fallback → want %q, got %q", want, got.FlakeRef)
 	}
@@ -86,7 +86,7 @@ func TestResolvePureNixhomeRef_V000CoercesToDefaultRef(t *testing.T) {
 		Version:  "v0.0.0",
 		StatFunc: func(string) error { return os.ErrNotExist },
 	})
-	want := "github:DimmKirr/devcell/" + runner.DefaultNixhomeGitRef + "?dir=nixhome"
+	want := "github:devcell-sh/community-home/" + runner.DefaultNixhomeGitRef
 	if got.FlakeRef != want {
 		t.Errorf("v0.0.0 → want %q, got %q", want, got.FlakeRef)
 	}
@@ -98,7 +98,7 @@ func TestResolvePureNixhomeRef_EmptyVersionCoercesToDefaultRef(t *testing.T) {
 		Version:  "",
 		StatFunc: func(string) error { return os.ErrNotExist },
 	})
-	want := "github:DimmKirr/devcell/" + runner.DefaultNixhomeGitRef + "?dir=nixhome"
+	want := "github:devcell-sh/community-home/" + runner.DefaultNixhomeGitRef
 	if got.FlakeRef != want {
 		t.Errorf("empty version → want %q, got %q", want, got.FlakeRef)
 	}
@@ -106,9 +106,9 @@ func TestResolvePureNixhomeRef_EmptyVersionCoercesToDefaultRef(t *testing.T) {
 
 // Pins the default ref value so an accidental rename of the constant gets
 // caught by CI. Update this when the pure path lands on main.
-func TestDefaultNixhomeGitRef_IsFeatureWip(t *testing.T) {
-	if runner.DefaultNixhomeGitRef != "feature/wip" {
-		t.Errorf("DefaultNixhomeGitRef = %q; want \"feature/wip\" (flip to \"main\" when CELL-195 lands)",
+func TestDefaultNixhomeGitRef_IsMain(t *testing.T) {
+	if runner.DefaultNixhomeGitRef != "main" {
+		t.Errorf("DefaultNixhomeGitRef = %q; want \"main\" (community-home's default branch)",
 			runner.DefaultNixhomeGitRef)
 	}
 }

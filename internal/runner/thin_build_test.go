@@ -577,7 +577,7 @@ func TestThinBuildArgv_BakesNixLdInterpreter(t *testing.T) {
 // -v <path>:/opt/nixhome mount, --flake points at the github URL.
 
 func TestThinBuildArgv_RemoteRefSkipsNixhomeMount(t *testing.T) {
-	const remoteRef = "github:DimmKirr/devcell/main?dir=nixhome"
+	const remoteRef = "github:devcell-sh/community-home/main"
 	argv := ThinBuildArgv(testCoreImage, testContainer, testVolume, remoteRef, testThinTag, testStack, "x86_64")
 	for i, a := range argv {
 		if a == "-v" && i+1 < len(argv) && strings.HasSuffix(argv[i+1], ":/opt/nixhome") {
@@ -587,7 +587,7 @@ func TestThinBuildArgv_RemoteRefSkipsNixhomeMount(t *testing.T) {
 }
 
 func TestThinBuildArgv_RemoteRefUsedInHomeManagerSwitch(t *testing.T) {
-	const remoteRef = "github:DimmKirr/devcell/main?dir=nixhome"
+	const remoteRef = "github:devcell-sh/community-home/main"
 	argv := ThinBuildArgv(testCoreImage, testContainer, testVolume, remoteRef, testThinTag, testStack, "x86_64")
 	script := argv[len(argv)-1]
 	want := "home-manager switch --flake " + remoteRef + "#devcell-" + testStack

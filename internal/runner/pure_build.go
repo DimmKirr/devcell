@@ -28,7 +28,7 @@ import (
 // PureBuildSpec describes a pure-image build invocation.
 type PureBuildSpec struct {
 	// FlakeRef is the full flake reference to build against (e.g.
-	// "path:/abs/nixhome" or "github:DimmKirr/devcell/main?dir=nixhome").
+	// "path:/abs/nixhome" or "github:devcell-sh/community-home/main").
 	// When set, takes precedence over NixhomePath — the per-stack output
 	// suffix is appended directly. This is the seam that lets the pure
 	// path fall back to a remote flake when no local nixhome exists,

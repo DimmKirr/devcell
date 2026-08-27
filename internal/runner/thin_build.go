@@ -275,7 +275,7 @@ func DockerHostPath(p string) string {
 // nixhomeRef accepts EITHER:
 //   - a filesystem path (e.g. /home/bob/nixhome) — the caller streams a tar
 //     archive to stdin, which is extracted at /opt/nixhome before home-manager
-//   - a flake reference (e.g. github:DimmKirr/devcell/main?dir=nixhome) — no
+//   - a flake reference (e.g. github:devcell-sh/community-home/main) — no
 //     archive; home-manager runs against `<ref>#devcell-<stack><arch>` directly,
 //     letting nix fetch and cache under /nix/store. This is the
 //     clean-machine path (CELL-38) — no local nixhome required.
