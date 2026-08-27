@@ -63,27 +63,75 @@ tools inside a consistent Docker dev environment.`,
 		if len(args) > 0 {
 			return fmt.Errorf("unknown command %q — run 'cell --help' for usage", args[0])
 		}
+		// A valid default_command never reaches here — applyDefaultCommand
+		// rewrites os.Args before Execute, so cobra dispatches to the
+		// subcommand directly (with user args forwarded). Only an invalid
+		// value falls through; surface the validation error.
 		if c, err := config.LoadFromOS(); err == nil {
 			cellCfg := cfg.LoadFromOS(c.ConfigDir, c.BaseDir)
 			if dc := cellCfg.Cell.ResolvedDefaultCommand(); dc != "" {
 				if err := cfg.ValidateDefaultCommand(dc); err != nil {
 					return err
 				}
-				sub, _, err := cmd.Find([]string{dc})
-				if err != nil || sub == cmd {
-					return fmt.Errorf("default_command %q is not a registered subcommand", dc)
-				}
-				return sub.RunE(sub, nil)
 			}
 		}
 		return cmd.Help()
 	},
 }
 
+// rewriteDefaultCommand injects the configured default command in front of
+// the user's args (os.Args[1:]) so flags and positionals reach the inner
+// binary: `cell -c` becomes `cell claude -c`. This must happen BEFORE
+// rootCmd.Execute() — the root command parses flags, so an agent flag like
+// -c would die there as "unknown shorthand flag" and never reach the
+// default-command dispatch in RunE. An explicit subcommand, help/version,
+// or completion invocation is left untouched.
+func rewriteDefaultCommand(args []string, defaultCmd string, knownCmds map[string]bool) []string {
+	if defaultCmd == "" {
+		return args
+	}
+	if len(args) > 0 {
+		first := args[0]
+		if knownCmds[first] {
+			return args
+		}
+		switch first {
+		case "--help", "-h", "--version", "help", "completion", "__complete", "__completeNoDesc":
+			return args
+		}
+	}
+	return append([]string{defaultCmd}, args...)
+}
+
+// applyDefaultCommand resolves default_command from config and rewrites
+// os.Args in place. Invalid values are left for rootCmd.RunE to report.
+func applyDefaultCommand() {
+	c, err := config.LoadFromOS()
+	if err != nil {
+		return
+	}
+	cellCfg := cfg.LoadFromOS(c.ConfigDir, c.BaseDir)
+	dc := cellCfg.Cell.ResolvedDefaultCommand()
+	if dc == "" || cfg.ValidateDefaultCommand(dc) != nil {
+		return
+	}
+	known := make(map[string]bool)
+	for _, sub := range rootCmd.Commands() {
+		known[sub.Name()] = true
+		for _, a := range sub.Aliases {
+			known[a] = true
+		}
+	}
+	rewritten := rewriteDefaultCommand(os.Args[1:], dc, known)
+	os.Args = append([]string{os.Args[0]}, rewritten...)
+	osArgs = os.Args // keep scanFlag/scanStringFlag on the rewritten argv
+}
+
 func Execute() {
 	defer ux.CloseDebugLog()
 	telemetry.Init(resolveConfigDir())
 	defer telemetry.Close()
+	applyDefaultCommand()
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "\n cell %s\n", version.Full())
 		baseVer, userVer := runner.ImageVersions(context.Background())
