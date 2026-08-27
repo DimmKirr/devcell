@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/devcell-sh/go-winkit/diag"
-	"github.com/devcell-sh/go-winkit/unattend"
+	"github.com/devcell-sh/go-winkit/winpe"
 
 	"github.com/devcell-sh/go-winkit/isokit"
 	"github.com/stretchr/testify/assert"
@@ -325,7 +325,7 @@ func TestISOBootWithStartupNSH(t *testing.T) {
 	// production build puts on the answer volume.
 	startupImg := filepath.Join(tmpDir, "startup.img")
 	require.NoError(t, isokit.CreateFATImage(startupImg, map[string][]byte{
-		"/startup.nsh": unattend.PadForFAT([]byte(unattend.StartupNSH)),
+		"/startup.nsh": winpe.PadForFAT([]byte(winpe.StartupNSH)),
 	}))
 
 	serialLog := filepath.Join(resultsDir, "serial.log")

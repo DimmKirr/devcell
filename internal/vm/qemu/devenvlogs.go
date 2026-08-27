@@ -4,10 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/devcell-sh/go-winkit/templates"
-	"github.com/devcell-sh/go-winkit/unattend"
-
 	"github.com/devcell-sh/go-winkit/isokit"
+	"github.com/devcell-sh/go-winkit/templates"
+	"github.com/devcell-sh/go-winkit/winpe"
 )
 
 // The guest log volume: a FAT image any post-install VM can write logs to —
@@ -33,10 +32,10 @@ func BuildGuestLogVolume(destPath string) error {
 // the failure mode that ruled out installing the module onto the guest disk.
 func BuildControlVolume(destPath string, payload map[string][]byte) error {
 	files := map[string][]byte{
-		"/" + GuestLogVolumeMarker: unattend.PadForFAT([]byte("devcell guest control volume\r\n")),
+		"/" + GuestLogVolumeMarker: winpe.PadForFAT([]byte("devcell guest control volume\r\n")),
 	}
 	for name, data := range payload {
-		files[name] = unattend.PadForFAT(data)
+		files[name] = winpe.PadForFAT(data)
 	}
 	if err := isokit.CreateFATImage(destPath, files); err != nil {
 		return fmt.Errorf("building control volume: %w", err)

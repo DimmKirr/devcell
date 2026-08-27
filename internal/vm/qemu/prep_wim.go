@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/devcell-sh/go-winkit/templates"
-	"github.com/devcell-sh/go-winkit/unattend"
 	"github.com/devcell-sh/go-winkit/winpe"
 )
 
@@ -325,7 +324,7 @@ func SharedVolumeFiles(cfg WimPrepConfig, efiBootLoader []byte, pwshFiles map[st
 		"/" + WimBuilderScriptName:    GenerateWimBuilderScript(cfg),
 	}
 	if len(efiBootLoader) > 0 {
-		files["/startup.nsh"] = unattend.PadForFAT([]byte(unattend.StartupNSH))
+		files["/startup.nsh"] = winpe.PadForFAT([]byte(winpe.StartupNSH))
 		files["/EFI/BOOT/BOOTAA64.EFI"] = efiBootLoader
 	}
 	for path, data := range pwshFiles {
