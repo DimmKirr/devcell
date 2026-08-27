@@ -1,6 +1,5 @@
 .workspaces
 .worktrees
-nixhome/user.nix
 .venv
 .env.devcell
 *.egg-info

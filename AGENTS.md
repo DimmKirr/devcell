@@ -15,7 +15,7 @@ Every behavioral change to `cmd/`, `internal/`, or `nixhome/modules/llm/*.nix` l
 
 Applies to: a new flag, env var, TOML key, or CLI subcommand (`cmd/*_test.go`); a new `internal/*` function with observable behavior (same package); a new MCP server, system-prompt source, or runner argv field (`internal/runner/*_test.go`).
 
-No new test required for: pure refactors, docs, dependency bumps, nix module additions (`task nix:validate` is the test), or entrypoint shell fragments (covered by `test/`).
+No new test required for: pure refactors, docs, dependency bumps, nix module additions (nixhome now lives in `devcell-sh/community-home`), or entrypoint shell fragments (covered by `test/`).
 
 ## Nix environment layout
 
@@ -31,9 +31,9 @@ No new test required for: pure refactors, docs, dependency bumps, nix module add
 
 Do NOT use `ARG TARGETARCH=amd64` — the docker driver doesn't set it for host-platform builds. Use `ARCH=$(uname -m)` in `RUN` steps.
 
-## Before building an image
+## Nix module edits
 
-Run `task nix:validate` after every `.nix` edit. It parses every file and resolves all `pkgs.*` attributes across every stack — no build, no activation.
+Nix modules (nixhome) now live in the standalone `devcell-sh/community-home` repo. Edits to `.nix` files in this repo are limited to `flake.nix` (the Go package build).
 
 Escaping inside `writeShellScriptBin` (`''...''` strings) is the usual culprit:
 

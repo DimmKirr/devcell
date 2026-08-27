@@ -18,7 +18,7 @@
         });
 
     # Tight source filter — only the Go files needed to compile cell.
-    # Excludes test/results/, web/, nixhome/, docs/, etc. so each
+    # Excludes test/results/, web/, docs/, etc. so each
     # nix-build doesn't copy the entire repo into the store.
     cellSrc = nixpkgs.lib.fileset.toSource {
       root = ./.;

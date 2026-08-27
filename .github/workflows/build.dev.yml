@@ -116,7 +116,7 @@ jobs:
       - name: Hydrate /nix volume from GHCR cache
         if: inputs.skip_nix_cache != true
         run: |
-          HASH=${{ hashFiles('nixhome/**') }}
+          HASH=${{ github.sha }}
           ./bin/cell nix-store pull \
             --image "${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:nix-cache-${{ matrix.arch }}-${HASH}" \
             --fallback "${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:nix-cache-${{ matrix.arch }}-latest" \
@@ -125,17 +125,16 @@ jobs:
 
       # Build both stacks sequentially in the same job so the nix-store
       # volume accumulates derivations from both — single tar dump at job
-      # end carries everything needed by docker-test. `cell build --thin`
+      # end carries everything needed by docker-test. `cell build`
       # reuses store paths across the two invocations (nix is
       # content-addressed), so ultimate after base is incremental.
       - name: Build thin image (base stack)
         env:
           DEVCELL_NIX_VOLUME: devcell-nix-store-${{ matrix.arch }}
-          DEVCELL_NIXHOME_PATH: ${{ github.workspace }}/nixhome
           DEVCELL_NIX_MAX_JOBS: "4"
         run: |
           BASE_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:v0.0.0-${{ matrix.arch }}-base"
-          ./bin/cell build --thin --stack base --image "$BASE_TAG" --debug
+          ./bin/cell build --stack base --image "$BASE_TAG" --debug
           echo "BASE_TAG=$BASE_TAG" >> "$GITHUB_ENV"
 
       # Interim publish: lock in the base-stack derivations as a usable
@@ -149,7 +148,7 @@ jobs:
         timeout-minutes: 45
         env:
           ARCH: ${{ matrix.arch }}
-          HASH: ${{ hashFiles('nixhome/**') }}
+          HASH: ${{ github.sha }}
           STAGE: post-base
           DEVCELL_NIX_PUSH_DEBUG: "1"
         run: task nix-cache:publish
@@ -157,11 +156,10 @@ jobs:
       - name: Build thin image (ultimate stack)
         env:
           DEVCELL_NIX_VOLUME: devcell-nix-store-${{ matrix.arch }}
-          DEVCELL_NIXHOME_PATH: ${{ github.workspace }}/nixhome
           DEVCELL_NIX_MAX_JOBS: "4"
         run: |
           ULT_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:v0.0.0-${{ matrix.arch }}-ultimate"
-          ./bin/cell build --thin --stack ultimate --image "$ULT_TAG" --debug
+          ./bin/cell build --stack ultimate --image "$ULT_TAG" --debug
           echo "ULT_TAG=$ULT_TAG" >> "$GITHUB_ENV"
 
       - name: Push to GHCR (both stacks)
@@ -177,7 +175,7 @@ jobs:
         timeout-minutes: 120
         env:
           ARCH: ${{ matrix.arch }}
-          HASH: ${{ hashFiles('nixhome/**') }}
+          HASH: ${{ github.sha }}
           STAGE: post-ultimate
           DEVCELL_NIX_PUSH_DEBUG: "1"
         run: task nix-cache:publish
@@ -228,7 +226,7 @@ jobs:
 
       - name: Hydrate /nix volume from GHCR cache
         run: |
-          HASH=${{ hashFiles('nixhome/**') }}
+          HASH=${{ github.sha }}
           ./bin/cell nix-store pull \
             --image "${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:nix-cache-${{ matrix.arch }}-${HASH}" \
             --fallback "${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:nix-cache-${{ matrix.arch }}-latest" \
@@ -384,8 +382,6 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run cell claude --version (full pipeline)
-        env:
-          DEVCELL_NIXHOME_PATH: ${{ github.workspace }}/nixhome
         run: |
           # Simulate a new user in a fresh project dir
           mkdir -p /tmp/e2e-project && cd /tmp/e2e-project
