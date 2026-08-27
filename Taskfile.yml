@@ -213,17 +213,9 @@ tasks:
         OUT=$(nix build .#cell --no-link --print-out-paths)
         "$OUT/bin/cell" --version
 
-  test:powershell:render:
-    desc: Render all .ps1.tmpl templates to a temp directory for linting
-    dir: "{{.TASKFILE_DIR}}"
-    silent: true
-    cmds:
-      - go run ./tools/renderps1 -out "{{.TASKFILE_DIR}}/.rendered-ps1"
-
   test:powershell:lint:
-    desc: Render templates then lint all PowerShell scripts (.ps1, .psm1) with PSScriptAnalyzer
+    desc: Lint the guest PowerShell scripts (.ps1, .psm1) with PSScriptAnalyzer — template lint lives in go-winkit (task test:powershell:lint there)
     dir: "{{.TASKFILE_DIR}}"
-    deps: [test:powershell:render]
     silent: true
     cmds:
       - |
@@ -239,7 +231,6 @@ tasks:
           }
           $files = @(
             Get-ChildItem -Recurse -Path "internal/vm/qemu/guest" -Include "*.ps1","*.psm1"
-            Get-ChildItem -Path ".rendered-ps1" -Include "*.ps1" -Recurse
           )
           if ($files.Count -eq 0) { Write-Output "No .ps1/.psm1 files found"; exit 0 }
           $fail = $false
@@ -256,7 +247,6 @@ tasks:
           }
           if ($fail) { exit 1 } else { Write-Output "All scripts clean." }
         '
-      - rm -rf .rendered-ps1
 
   bake:validate:
     desc: Print resolved docker-bake config (HCL parse check, no build)
