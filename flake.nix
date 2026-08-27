@@ -31,7 +31,7 @@
     };
 
     # Version stamped into the binary via -ldflags. Consumers pinning a
-    # release (`nix profile install github:DimmKirr/devcell/v0.8.2#cell`)
+    # release (`nix profile install github:devcell-sh/devcell/v0.8.2#cell`)
     # override this by pointing `nix build` at a tagged ref and passing
     # `--override-input` or by editing this string in a release commit.
     # `self.shortRev` is populated when Nix evaluates a clean flake ref
@@ -93,7 +93,7 @@
 
         meta = with pkgs.lib; {
           description = "devcell CLI — container-native dev environments";
-          homepage = "https://github.com/DimmKirr/devcell";
+          homepage = "https://github.com/devcell-sh/devcell";
           license = licenses.mit;
           mainProgram = "cell";
         };

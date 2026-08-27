@@ -152,8 +152,8 @@ func TestScaffold_FlakeNixContainsUpstreamURL(t *testing.T) {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(filepath.Join(dir, ".devcell", "flake.nix"))
-	if !strings.Contains(string(data), "DimmKirr/devcell") {
-		t.Errorf("flake.nix should reference DimmKirr/devcell, got:\n%s", string(data))
+	if !strings.Contains(string(data), runner.UpstreamOwner+"/"+runner.UpstreamRepo) {
+		t.Errorf("flake.nix should reference %s/%s, got:\n%s", runner.UpstreamOwner, runner.UpstreamRepo, string(data))
 	}
 }
 
@@ -169,8 +169,9 @@ func TestScaffold_FlakeNixVersionSubstituted(t *testing.T) {
 	}
 	// v0.0.0 (dev build) coerces to DefaultNixhomeGitRef via runner.UpstreamFlakeRef
 	// — literal v0.0.0 would 404 against github (no such tag).
-	if !strings.Contains(s, "DimmKirr/devcell/"+runner.DefaultNixhomeGitRef+"?dir=nixhome") {
-		t.Errorf("flake.nix should contain coerced upstream URL, got:\n%s", s)
+	want := runner.UpstreamOwner + "/" + runner.UpstreamRepo + "/" + runner.DefaultNixhomeGitRef
+	if !strings.Contains(s, want) {
+		t.Errorf("flake.nix should contain coerced upstream URL %q, got:\n%s", want, s)
 	}
 }
 
@@ -572,8 +573,9 @@ func TestGenerateFlakeNix_VersionSubstituted(t *testing.T) {
 	if strings.Contains(content, "{{VERSION}}") {
 		t.Errorf("unreplaced {{VERSION}} placeholder:\n%s", content)
 	}
-	if !strings.Contains(content, "DimmKirr/devcell/v2.3.4?dir=nixhome") {
-		t.Errorf("expected versioned URL with v2.3.4:\n%s", content)
+	want := runner.UpstreamOwner + "/" + runner.UpstreamRepo + "/v2.3.4"
+	if !strings.Contains(content, want) {
+		t.Errorf("expected versioned URL containing %q:\n%s", want, content)
 	}
 }
 

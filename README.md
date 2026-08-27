@@ -183,7 +183,7 @@ Start simple, go deeper when you need to.
 
 **Extend a stack** - edit `.devcell/flake.nix` to add nix packages. Run `cell build` to apply.
 
-**Fork nixhome** - fork the [nixhome](https://github.com/DimmKirr/devcell/tree/main/nixhome) repo, point your flake to your fork. Upstream updates still merge cleanly.
+**Fork nixhome** - fork the [nixhome](https://github.com/devcell-sh/community-home) repo, point your flake to your fork. Upstream updates still merge cleanly.
 
 <details>
 <summary><strong>Development</strong></summary>

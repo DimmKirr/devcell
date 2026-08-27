@@ -275,7 +275,7 @@ ENV PATH="/opt/python-tools/.venv/bin:${PATH}"
 // modelsSnippet is an optional commented-out [models] section for devcell.toml;
 // pass "" to use the default generic example.
 
-const defaultNixhomeRepo = "https://github.com/DimmKirr/devcell.git"
+const defaultNixhomeRepo = "https://github.com/devcell-sh/community-home.git"
 
 // IsGitURL returns true if source looks like a git URL or GitHub shorthand.
 func IsGitURL(source string) bool {
@@ -302,8 +302,8 @@ func ResolveNixhome(source, buildDir, ver string, force bool) error {
 	// Git source — always fetch latest.
 	gs := parseGitSource(source)
 	if gs.RepoURL == "" {
-		// No source provided — use upstream default with nixhome subdir.
-		gs = gitSource{RepoURL: defaultNixhomeRepo, Subdir: "nixhome"}
+		// No source provided — use upstream default (flake at repo root).
+		gs = gitSource{RepoURL: defaultNixhomeRepo}
 	}
 
 	ref := gs.Ref
@@ -378,7 +378,7 @@ func ResolveNixhome(source, buildDir, ver string, force bool) error {
 
 // gitSource holds the parsed components of a git nixhome source.
 type gitSource struct {
-	RepoURL string // e.g. https://github.com/DimmKirr/devcell.git
+	RepoURL string // e.g. https://github.com/devcell-sh/community-home.git
 	Ref     string // branch/tag override (empty = use version default)
 	Subdir  string // subdirectory within repo (empty = repo root)
 }

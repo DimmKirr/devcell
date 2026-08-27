@@ -873,7 +873,7 @@ in
         "VK_ICD_FILENAMES=${pkgs.mesa}/share/vulkan/icd.d/lvp_icd.${pkgs.stdenv.hostPlatform.uname.processor}.json"
       ];
       Labels = {
-        "org.opencontainers.image.source"   = "https://github.com/DimmKirr/devcell";
+        "org.opencontainers.image.source"   = "https://github.com/devcell-sh/devcell";
         "org.opencontainers.image.created"  = buildDate;
         "org.opencontainers.image.revision" = buildRev;
         "org.opencontainers.image.version"  = stackName;

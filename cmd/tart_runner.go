@@ -117,12 +117,8 @@ func runTartAgent(
 			Disks:      disks,
 			SSHTimeout: 120 * time.Second,
 			InitFunc: func() error {
-				nixhome := baseDir + "/nixhome"
-				if cellCfg.Nix.NixhomePath != "" {
-					nixhome = cellCfg.Nix.NixhomePath
-				}
-				logf("auto-build: VM not found — running build with stack=%q nixhome=%q", stack, nixhome)
-				return runBuildTart(cellName, hostHome, baseDir, stack, nil, nixhome, false, false, false, cellCfg.Cell.ResolvedTartOCIImage())
+				logf("auto-build: VM not found — running build with stack=%q", stack)
+				return runBuildTart(cellName, hostHome, baseDir, stack, nil, false, false, false, cellCfg.Cell.ResolvedTartOCIImage())
 			},
 		}
 		acquireIn.ApplyDefaults()

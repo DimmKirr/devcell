@@ -7,6 +7,6 @@ import (
 	"runtime"
 )
 
-func runInitTart(cellName, hostHome, projectDir, stack, nixhomePath string, force, noCache bool) error {
+func runInitTart(cellName, hostHome, projectDir, stack string, force, noCache bool) error {
 	return fmt.Errorf("cell init --engine=tart requires macOS on Apple Silicon (current: %s/%s)", runtime.GOOS, runtime.GOARCH)
 }
