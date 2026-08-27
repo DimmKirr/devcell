@@ -95,7 +95,7 @@ tasks:
     silent: true
     cmds:
       - mkdir -p nix/home-manager
-      - go run ./tools/hmoptgen -out nix/home-manager/options.nix
+      - go run cmd/hmoptgen.go -out nix/home-manager/options.nix
       # Parse-check the module pair when nix is available (CI Go jobs may not have it).
       - |
         if command -v nix-instantiate >/dev/null 2>&1; then

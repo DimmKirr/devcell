@@ -1,10 +1,13 @@
+//go:build ignore
+
 // hmoptgen writes the generated home-manager option declarations for the
 // devcell.toml schema. Wired into `task hm:generate` (a dep of cell:build)
 // so nix/home-manager/options.nix is regenerated on every build and cannot
 // drift from internal/cfg.CellConfig.
 //
-// Usage: go run ./tools/hmoptgen [-out path]
+// Usage: go run cmd/hmoptgen.go [-out path]
 // With no -out, the module is printed to stdout.
+// Excluded from normal builds by the ignore tag above, like cmd/gendoc.go.
 package main
 
 import (
