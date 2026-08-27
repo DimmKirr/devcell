@@ -88,4 +88,3 @@ func TrackCommandFinish(command string, durationMs int64, clean bool) {
 		"exit_clean":  clean,
 	})
 }
-

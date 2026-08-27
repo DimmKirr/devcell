@@ -60,7 +60,7 @@ func SpecToDomainXML(spec qemu.Spec) ([]byte, error) {
 		d.Devices = &libvirtxml.DomainDeviceList{
 			Graphics: []libvirtxml.DomainGraphic{{
 				VNC: &libvirtxml.DomainGraphicVNC{
-					Port: int(spec.VNCPort),
+					Port:   int(spec.VNCPort),
 					Listen: "127.0.0.1",
 				},
 			}},

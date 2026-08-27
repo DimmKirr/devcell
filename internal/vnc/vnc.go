@@ -113,8 +113,8 @@ func ParseDockerPS(output string) (map[string]string, error) {
 		if len(parts) != 2 {
 			continue
 		}
-		name := parts[0]   // e.g. cell-myproject-3-run
-		ports := parts[1]  // e.g. 0.0.0.0:350->5900/tcp
+		name := parts[0]  // e.g. cell-myproject-3-run
+		ports := parts[1] // e.g. 0.0.0.0:350->5900/tcp
 
 		// Extract host port for 5900
 		hostPort, ok := extract5900Port(ports)

@@ -115,15 +115,15 @@ func GenerateUserPlist(username, password string, uid, gid int) ([]byte, error) 
 	}
 
 	record := map[string]any{
-		"name":           []string{username},
-		"uid":            []string{fmt.Sprintf("%d", uid)},
-		"gid":            []string{fmt.Sprintf("%d", gid)},
-		"shell":          []string{"/bin/zsh"},
-		"home":           []string{fmt.Sprintf("/Users/%s", username)},
-		"realname":       []string{username},
-		"passwd":         []string{"********"},
-		"generateduid":   []string{generateUUID()},
-		"ShadowHashData":          [][]byte{shadowHashData},
+		"name":                     []string{username},
+		"uid":                      []string{fmt.Sprintf("%d", uid)},
+		"gid":                      []string{fmt.Sprintf("%d", gid)},
+		"shell":                    []string{"/bin/zsh"},
+		"home":                     []string{fmt.Sprintf("/Users/%s", username)},
+		"realname":                 []string{username},
+		"passwd":                   []string{"********"},
+		"generateduid":             []string{generateUUID()},
+		"ShadowHashData":           [][]byte{shadowHashData},
 		"authentication_authority": []string{";ShadowHash;HASHLIST:<SALTED-SHA512-PBKDF2>"},
 	}
 
@@ -162,19 +162,19 @@ func PatchManifest(cfg InitConfig, pubKey string) []PatchFile {
 	userPlist, _ := GenerateUserPlist(user, cfg.Password, 501, 20)
 
 	saCompletedPlist, _ := plist.Marshal(map[string]any{
-		"DidSeeCloudSetup":        true,
-		"DidSeePrivacy":           true,
-		"DidSeeAccessibility":     true,
-		"DidSeeAppearanceSetup":   true,
-		"DidSeeSiriSetup":         true,
-		"DidSeeScreenTime":        true,
+		"DidSeeCloudSetup":                    true,
+		"DidSeePrivacy":                       true,
+		"DidSeeAccessibility":                 true,
+		"DidSeeAppearanceSetup":               true,
+		"DidSeeSiriSetup":                     true,
+		"DidSeeScreenTime":                    true,
 		"DidSeeiCloudLoginForStorageServices": true,
-		"DidSeeTouchIDSetup":      true,
-		"DidSeeActivationLock":    true,
-		"DidSeeApplePaySetup":     true,
-		"DidSeeAvatarSetup":      true,
-		"LastSeenBuddyBuildVersion": "99Z999",
-		"LastSeenCloudProductVersion": "99.9",
+		"DidSeeTouchIDSetup":                  true,
+		"DidSeeActivationLock":                true,
+		"DidSeeApplePaySetup":                 true,
+		"DidSeeAvatarSetup":                   true,
+		"LastSeenBuddyBuildVersion":           "99Z999",
+		"LastSeenCloudProductVersion":         "99.9",
 	}, plist.XMLFormat)
 
 	safetyNetPlist := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>

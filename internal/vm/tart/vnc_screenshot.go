@@ -139,7 +139,7 @@ func (c *VNCClient) drainPending() {
 			}
 			for i := 0; i < int(header.NumRect); i++ {
 				var rect struct {
-					X, Y, W, H  uint16
+					X, Y, W, H   uint16
 					EncodingType int32
 				}
 				if err := binary.Read(c.conn, binary.BigEndian, &rect); err != nil {
@@ -208,7 +208,7 @@ func (c *VNCClient) readFramebufferUpdate() (*image.RGBA, error) {
 
 		for i := 0; i < int(header.NumRect); i++ {
 			var rect struct {
-				X, Y, W, H  uint16
+				X, Y, W, H   uint16
 				EncodingType int32
 			}
 			if err := binary.Read(c.conn, binary.BigEndian, &rect); err != nil {

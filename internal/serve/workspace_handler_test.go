@@ -20,7 +20,6 @@ func authedRequest(method, path string) *http.Request {
 	return req
 }
 
-
 func TestWorkspaceHandler_GET_returns200_with_XML(t *testing.T) {
 	mux := workspaceMux("localhost")
 	rec := httptest.NewRecorder()

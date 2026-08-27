@@ -15,8 +15,8 @@ import (
 	"github.com/DimmKirr/devcell/internal/runner"
 	"github.com/DimmKirr/devcell/internal/telemetry"
 	"github.com/DimmKirr/devcell/internal/ux"
-	internalvnc "github.com/DimmKirr/devcell/internal/vnc"
 	"github.com/DimmKirr/devcell/internal/vm/qemu"
+	internalvnc "github.com/DimmKirr/devcell/internal/vnc"
 	"github.com/spf13/cobra"
 )
 

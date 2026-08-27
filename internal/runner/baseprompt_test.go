@@ -157,8 +157,8 @@ func TestWriteOverlayPrompt_UsesAppendSourcesNotBase(t *testing.T) {
 	c := promptFileConfig(t, "main")
 
 	if _, err := WriteOverlayPrompt(c, cfg.CellConfig{}, ResolveOpts{
-		FlagInline:       "BASE-TEXT",
-		AppendEnvInline:  "OVERLAY-TEXT",
+		FlagInline:      "BASE-TEXT",
+		AppendEnvInline: "OVERLAY-TEXT",
 	}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

@@ -184,19 +184,19 @@ Examples:
 }
 
 var (
-	servePort             int
+	servePort                   int
 	serveSystemPrompt           string
 	serveSystemPromptFile       string
 	serveAppendSystemPrompt     string
 	serveAppendSystemPromptFile string
-	serveHTTPS            bool
-	serveDebug            bool
-	serveWorkspace        bool
-	serveWorkspaceMock    bool
-	serveWorkspaceHost    string
-	serveDocker           bool
-	serveStop             bool
-	servePTY              bool
+	serveHTTPS                  bool
+	serveDebug                  bool
+	serveWorkspace              bool
+	serveWorkspaceMock          bool
+	serveWorkspaceHost          string
+	serveDocker                 bool
+	serveStop                   bool
+	servePTY                    bool
 )
 
 func init() {

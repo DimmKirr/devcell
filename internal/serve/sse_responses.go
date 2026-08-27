@@ -30,7 +30,7 @@ import (
 // No `[DONE]` sentinel — response.completed is the terminator.
 
 type responseSSEPayload struct {
-	Type     string         `json:"type"`
+	Type     string           `json:"type"`
 	Response *ResponsesObject `json:"response,omitempty"`
 	// item / content_part / delta envelopes
 	OutputIndex  *int            `json:"output_index,omitempty"`
@@ -191,11 +191,11 @@ func pumpResponsesSSE(
 			})
 		}
 		obj := &ResponsesObject{
-			ID:         respID,
-			Object:     "response",
-			CreatedAt:  created,
-			Status:     "completed",
-			Model:      model,
+			ID:        respID,
+			Object:    "response",
+			CreatedAt: created,
+			Status:    "completed",
+			Model:     model,
 			Output: []ResponsesOutputItem{{
 				Type:   "message",
 				ID:     itemID,

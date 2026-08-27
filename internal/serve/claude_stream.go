@@ -37,11 +37,11 @@ type streamEnvelope struct {
 // streamInnerEvent is the Anthropic Messages-API event nested inside a
 // stream_event wrapper.
 type streamInnerEvent struct {
-	Type         string                  `json:"type"`
-	Index        int                     `json:"index,omitempty"`
-	Message      *streamMessage          `json:"message,omitempty"`       // message_start
-	ContentBlock *streamContentBlock     `json:"content_block,omitempty"` // content_block_start
-	Delta        *streamDelta            `json:"delta,omitempty"`         // content_block_delta + message_delta share this field name with different shapes
+	Type         string              `json:"type"`
+	Index        int                 `json:"index,omitempty"`
+	Message      *streamMessage      `json:"message,omitempty"`       // message_start
+	ContentBlock *streamContentBlock `json:"content_block,omitempty"` // content_block_start
+	Delta        *streamDelta        `json:"delta,omitempty"`         // content_block_delta + message_delta share this field name with different shapes
 }
 
 type streamMessage struct {

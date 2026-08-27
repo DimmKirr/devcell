@@ -55,13 +55,13 @@ func runBuild(cmd *cobra.Command, _ []string) error {
 	applyOutputFlagsWithLog("build")
 
 	telemetry.Track("build", map[string]any{
-		"engine":    scanStringFlag("--engine"),
+		"engine":     scanStringFlag("--engine"),
 		"subcommand": "build",
-		"update":    scanFlag("--update"),
-		"no_cache":  scanFlag("--no-cache"),
-		"force":     scanFlag("--force"),
-		"impure":    scanFlag("--impure") || scanFlag("--debian"),
-		"thin":      !scanFlag("--no-thin") && !scanFlag("--thick"),
+		"update":     scanFlag("--update"),
+		"no_cache":   scanFlag("--no-cache"),
+		"force":      scanFlag("--force"),
+		"impure":     scanFlag("--impure") || scanFlag("--debian"),
+		"thin":       !scanFlag("--no-thin") && !scanFlag("--thick"),
 	})
 
 	update, _ := cmd.Flags().GetBool("update")

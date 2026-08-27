@@ -194,6 +194,7 @@ func captureStdoutBytes(t *testing.T, fn func()) []byte {
 // no prior save. Behaviour of restore-with-no-save is terminal-specific:
 //   - xterm: no-op
 //   - Terminal.app / iTerm2: cursor moves to home (1,1)
+//
 // On the affected terminals, the first phase's `\x1b[u\r\x1b[K` jumped
 // to row 1 and cleared it; subsequent phases then wrote each row at the
 // same position, leaving only the LAST phase visible.

@@ -123,10 +123,10 @@ func TestBootstrap_DeclinedPrompt_NoClusterCalls_NoFile(t *testing.T) {
 
 	// 3 inspectSource calls before the prompt — provide outputs.
 	f := setupExec(t,
-		`echo nmd-prod`,                       // current-context
-		`echo prod-cluster`,                   // cluster name
-		`echo https://k.example:6443`,         // server
-		`echo admin@nmd-prod`,                 // identity
+		`echo nmd-prod`,               // current-context
+		`echo prod-cluster`,           // cluster name
+		`echo https://k.example:6443`, // server
+		`echo admin@nmd-prod`,         // identity
 	)
 
 	orig := confirmFn
@@ -162,15 +162,15 @@ func TestBootstrap_SkipCluster_NoCreateCalls(t *testing.T) {
 	// Need: 4 inspect + 1 token + 2 config (set-credentials, set-context)
 	//       + 2 verify (can-i list pods, can-i create pods)
 	f := setupExec(t,
-		`echo nmd-prod`,                 // current-context
-		`echo prod-cluster`,             // cluster
-		`echo https://k.example:6443`,   // server
-		`echo admin@nmd-prod`,           // identity
-		`echo TOKEN_BLOB`,               // token
-		`echo ""`,                       // set-credentials
-		`echo ""`,                       // set-context
-		`echo yes`,                      // can-i list pods
-		`echo no; exit 1`,               // can-i create pods (exits 1 on no)
+		`echo nmd-prod`,               // current-context
+		`echo prod-cluster`,           // cluster
+		`echo https://k.example:6443`, // server
+		`echo admin@nmd-prod`,         // identity
+		`echo TOKEN_BLOB`,             // token
+		`echo ""`,                     // set-credentials
+		`echo ""`,                     // set-context
+		`echo yes`,                    // can-i list pods
+		`echo no; exit 1`,             // can-i create pods (exits 1 on no)
 	)
 
 	var buf bytes.Buffer
@@ -198,17 +198,17 @@ func TestBootstrap_AlreadyExists_Swallowed(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "out")
 
 	setupExec(t,
-		`echo nmd-prod`,                                                                // current-context
-		`echo prod-cluster`,                                                            // cluster
-		`echo https://k.example:6443`,                                                  // server
-		`echo admin@nmd-prod`,                                                          // identity
-		`echo 'Error from server (AlreadyExists): serviceaccounts "x" already exists' >&2; exit 1`, // create sa
+		`echo nmd-prod`,               // current-context
+		`echo prod-cluster`,           // cluster
+		`echo https://k.example:6443`, // server
+		`echo admin@nmd-prod`,         // identity
+		`echo 'Error from server (AlreadyExists): serviceaccounts "x" already exists' >&2; exit 1`,                               // create sa
 		`echo 'Error from server (AlreadyExists): clusterrolebindings.rbac.authorization.k8s.io "x" already exists' >&2; exit 1`, // crb
-		`echo TOKEN_BLOB`,            // token
-		`echo ""`,                    // set-credentials
-		`echo ""`,                    // set-context
-		`echo yes`,                   // can-i list pods
-		`echo no; exit 1`,            // can-i create pods
+		`echo TOKEN_BLOB`, // token
+		`echo ""`,         // set-credentials
+		`echo ""`,         // set-context
+		`echo yes`,        // can-i list pods
+		`echo no; exit 1`, // can-i create pods
 	)
 
 	var buf bytes.Buffer

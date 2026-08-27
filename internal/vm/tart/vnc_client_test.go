@@ -82,10 +82,10 @@ func (s *mockVNCServer) serve() {
 
 	// Pixel format (16 bytes)
 	pixelFormat := []byte{
-		32,                 // bpp
-		24,                 // depth
-		0,                  // big-endian
-		1,                  // true-color
+		32,                     // bpp
+		24,                     // depth
+		0,                      // big-endian
+		1,                      // true-color
 		0, 255, 0, 255, 0, 255, // RGB max
 		16, 8, 0, // RGB shift
 		0, 0, 0, // padding

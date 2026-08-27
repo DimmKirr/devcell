@@ -246,15 +246,15 @@ func TestSpecToDomainXML_DriftGuardAgainstBuildRunCommand(t *testing.T) {
 	// Flags libvirt owns natively — their values are asserted by the
 	// dedicated tests above; here we only require the flag be accounted for.
 	nativelyMapped := map[string]bool{
-		"-machine": true, // <os><type machine=...>
-		"-cpu":     true, // <cpu mode=...>
-		"-accel":   true, // <domain type=...>
-		"-smp":     true, // <vcpu>
-		"-m":       true, // <memory>
-		"-name":    true, // <name>
-		"-display": true, // omitted <graphics> == none
-		"-vnc":     true, // <graphics type='vnc'>
-		"-qmp":     true, // deliberately dropped: libvirt owns the monitor
+		"-machine":   true, // <os><type machine=...>
+		"-cpu":       true, // <cpu mode=...>
+		"-accel":     true, // <domain type=...>
+		"-smp":       true, // <vcpu>
+		"-m":         true, // <memory>
+		"-name":      true, // <name>
+		"-display":   true, // omitted <graphics> == none
+		"-vnc":       true, // <graphics type='vnc'>
+		"-qmp":       true, // deliberately dropped: libvirt owns the monitor
 		"-no-reboot": true, // <on_reboot>destroy</on_reboot>
 	}
 

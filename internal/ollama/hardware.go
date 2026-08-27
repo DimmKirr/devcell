@@ -108,4 +108,3 @@ func CheckHardwareSafe(parameterSize string, systemRAMGB float64) (bool, float64
 	needed := EstimateRAMGB(paramsB)
 	return needed <= systemRAMGB*0.75, needed
 }
-

@@ -496,22 +496,21 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 		e("DEVCELL_BOOT_DIR", bootContainerPath)
 	}
 
-
 	// cfg [[volumes]] entries — skip any whose container path duplicates
 	// a standard mount (e.g. BaseDir identity mount) to avoid Docker's
 	// "Duplicate mount point" error.
 	stdMounts := map[string]bool{
-		c.BaseDir:                              true,
-		"/" + c.AppName:                        true,
-		"/home/" + c.HostUser:                  true,
-		"/var/run/docker.sock":                 true,
-		"/home/" + c.HostUser + "/.claude/commands": true,
-		"/home/" + c.HostUser + "/.claude/agents":   true,
-		"/home/" + c.HostUser + "/.claude/skills":   true,
-		"/home/" + c.HostUser + "/.agents":          true,
-		"/home/" + c.HostUser + "/.config/opencode/agents":    true,
-		"/etc/devcell/config":                  true,
-		"/home/" + c.HostUser + "/.config/devcell":  true,
+		c.BaseDir:              true,
+		"/" + c.AppName:        true,
+		"/home/" + c.HostUser:  true,
+		"/var/run/docker.sock": true,
+		"/home/" + c.HostUser + "/.claude/commands":        true,
+		"/home/" + c.HostUser + "/.claude/agents":          true,
+		"/home/" + c.HostUser + "/.claude/skills":          true,
+		"/home/" + c.HostUser + "/.agents":                 true,
+		"/home/" + c.HostUser + "/.config/opencode/agents": true,
+		"/etc/devcell/config":                              true,
+		"/home/" + c.HostUser + "/.config/devcell":         true,
 	}
 	for _, vol := range spec.CellCfg.Volumes {
 		cp := vol.ContainerPath()
@@ -666,8 +665,6 @@ func BuildImage(ctx context.Context, configDir string, noCache bool, verbose boo
 	}
 	return nil
 }
-
-
 
 // DetectArch returns "aarch64" or "x86_64". Respects DEVCELL_ARCH env
 // override ("amd64"→"x86_64", "arm64"→"aarch64") for cross-architecture builds.
@@ -978,7 +975,7 @@ func ImageMetadataFromContainer(ctx context.Context) ImageMetadata {
 // output. Pure helper, no I/O.
 func imageMetadataFromInspect(created string, labels map[string]string, env []string) ImageMetadata {
 	m := ImageMetadata{
-		BaseImage: labels["devcell.built-with"],   // "nix2container" / ""
+		BaseImage: labels["devcell.built-with"], // "nix2container" / ""
 		Stack:     labels["devcell.stack"],
 		GitCommit: labels["org.opencontainers.image.revision"],
 		BuildDate: labels["org.opencontainers.image.created"],

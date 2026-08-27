@@ -96,7 +96,7 @@ func TestFilterLatestGen_DifferentFamiliesKeptSeparately(t *testing.T) {
 	}
 	filtered := cloudmodels.FilterLatestGen(models)
 	if len(filtered) != 2 {
-		t.Fatalf("expected 2 models (pro+flash are different families), got %d", len(filtered), )
+		t.Fatalf("expected 2 models (pro+flash are different families), got %d", len(filtered))
 	}
 }
 

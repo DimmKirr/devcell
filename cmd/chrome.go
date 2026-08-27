@@ -19,9 +19,9 @@ import (
 )
 
 var (
-	chromeSyncOnly  bool
-	chromeNoSync    bool
-	chromeForce     bool
+	chromeSyncOnly bool
+	chromeNoSync   bool
+	chromeForce    bool
 )
 
 var chromeCmd = &cobra.Command{
@@ -164,8 +164,8 @@ type localStorageEntry struct {
 }
 
 type storageState struct {
-	Cookies []storageStateCookie  `json:"cookies"`
-	Origins []storageStateOrigin  `json:"origins"`
+	Cookies []storageStateCookie `json:"cookies"`
+	Origins []storageStateOrigin `json:"origins"`
 }
 
 // openExtractAndClose opens Chrome for the user to log in (no CDP, no special

@@ -32,7 +32,6 @@
 // ProgressSpinner.Success because PhaseRunner is a thin convenience wrapper
 // around it. CELL-261's FormatSecretsPhase produces strings that drop into
 // the `<detail>` slot verbatim.
-//
 package ux
 
 // PhaseRunner owns the sequential phase list above the resumed parent

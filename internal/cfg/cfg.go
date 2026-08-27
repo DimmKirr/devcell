@@ -31,40 +31,40 @@ const DefaultLibvirtURI = "qemu+tcp://host.docker.internal/session"
 
 // CellSection holds [cell] config.
 type CellSection struct {
-	ImageTag        string   `toml:"image_tag"`
-	Registry        string   `toml:"registry"`         // container registry; default: DefaultRegistry; env: DEVCELL_REGISTRY
-	GUI             *bool    `toml:"gui"`               // default: true (nil = not set → true)
-	Timezone        string   `toml:"timezone"`          // IANA tz (e.g. "Europe/Prague"); default: host $TZ
-	Locale          string   `toml:"locale"`            // POSIX locale (e.g. "en_US.UTF-8"); default: "en_US.UTF-8"
-	Stack           string   `toml:"stack"`             // nix stack name (e.g. "go", "python"); default: "base" (see ResolvedStack)
-	Modules         []string `toml:"modules"`           // extra nix modules to compose on top of stack
-	NixhomePath     string   `toml:"nixhome"`           // deprecated: use [nix] nixhome instead
-	Engine          string   `toml:"engine"`            // execution engine: "docker" (default) or "vagrant"
-	VagrantProvider string   `toml:"vagrant_provider"`  // vagrant provider: "utm" (default) or "libvirt"
-	VagrantBox      string   `toml:"vagrant_box"`       // vagrant box name override (default: "utm/bookworm")
-	KVM               *bool    `toml:"kvm"`                 // pass the daemon host's /dev/kvm into the container so QEMU gets hardware accel instead of TCG; default: false; env: DEVCELL_KVM
-	PerCellImage   *bool    `toml:"per_cell_image"`   // tag user image per cell instead of per stack; default: false
-	Hostname          string   `toml:"hostname"`            // override container hostname; default: computed "cell-<basename>-<bunk>"; env: DEVCELL_HOSTNAME
-	MacAddress        string   `toml:"mac_address"`         // MAC for the container's NIC (XX:XX:XX:XX:XX:XX); pinned across restarts for infra-side identity persistence. Honored on user-defined bridge networks (devcell uses --network devcell-network). Empty → docker auto-assigns a random MAC per launch.
-	Thin              *bool    `toml:"thin"`                // thin image mode; default: true; disable with thin=false or DEVCELL_THIN=0
-	StaleWarning      *bool    `toml:"stale_warning"`       // CELL-391 "cell is behind — parallel reality" nudge at start; default: true; env: DEVCELL_STALE_WARN
-	Background        *bool    `toml:"background"`          // keep VM/container running after shell exit; default: false; env: DEVCELL_BACKGROUND
-	TartSSHPort       int      `toml:"tart_ssh_port"`       // SSH port for tart engine; default: 22; env: DEVCELL_TART_SSH_PORT
-	TartSSHHost       string   `toml:"tart_ssh_host"`       // SSH host for tart engine; default: "localhost"; env: DEVCELL_TART_SSH_HOST
-	TartSSHUser       string   `toml:"tart_ssh_user"`       // SSH user for tart engine; default: "admin"; env: DEVCELL_TART_SSH_USER
-	TartSSHKey        string   `toml:"tart_ssh_key"`        // path to SSH private key for tart; env: DEVCELL_TART_SSH_KEY
-	TartOCIImage      string   `toml:"tart_oci_image"`      // OCI base image for tart VMs; default: DefaultTartOCIImage; env: DEVCELL_TART_OCI_IMAGE
-	QemuSSHPort       int      `toml:"qemu_ssh_port"`       // SSH port for QEMU engine; default: 2222; env: DEVCELL_QEMU_SSH_PORT
-	QemuSSHHost       string   `toml:"qemu_ssh_host"`       // SSH host for QEMU engine; default: "127.0.0.1"; env: DEVCELL_QEMU_SSH_HOST
-	QemuWindowsISO    string   `toml:"qemu_windows_iso"`    // path to Windows ARM64 ISO; env: DEVCELL_QEMU_WINDOWS_ISO
-	QemuCPUs          int      `toml:"qemu_cpus"`           // QEMU vCPUs; default: 4; env: DEVCELL_QEMU_CPUS
-	QemuMemoryGB      int      `toml:"qemu_memory_gb"`      // QEMU RAM in GB; default: 4; env: DEVCELL_QEMU_MEMORY_GB
-	QemuDiskSizeGB    int      `toml:"qemu_disk_size_gb"`   // QEMU disk size in GB; default: 64; env: DEVCELL_QEMU_DISK_SIZE_GB
-	QemuDisplay       string   `toml:"qemu_display"`        // QEMU display: "none", "cocoa", "sdl"; default: "none"; env: DEVCELL_QEMU_DISPLAY
-	LibvirtURI        string   `toml:"libvirt_uri"`         // libvirtd connection URI for the libvirt engine; default: DefaultLibvirtURI; env: DEVCELL_LIBVIRT_URI
-	LibvirtPathMap    map[string]string `toml:"libvirt_path_map"` // container prefix -> host prefix rewrites for domain XML paths (CELL-375); empty = CLI runs on the host
-	QemuProjectSync   string   `toml:"qemu_project_sync"`   // project sync for qemu/libvirt engines: "push" (default), "two-way", "off"; env: DEVCELL_QEMU_PROJECT_SYNC (CELL-383)
-	DefaultCommand    string   `toml:"default_command"`     // subcommand to run when `cell` is invoked with no args; env: DEVCELL_DEFAULT_COMMAND
+	ImageTag        string            `toml:"image_tag"`
+	Registry        string            `toml:"registry"`          // container registry; default: DefaultRegistry; env: DEVCELL_REGISTRY
+	GUI             *bool             `toml:"gui"`               // default: true (nil = not set → true)
+	Timezone        string            `toml:"timezone"`          // IANA tz (e.g. "Europe/Prague"); default: host $TZ
+	Locale          string            `toml:"locale"`            // POSIX locale (e.g. "en_US.UTF-8"); default: "en_US.UTF-8"
+	Stack           string            `toml:"stack"`             // nix stack name (e.g. "go", "python"); default: "base" (see ResolvedStack)
+	Modules         []string          `toml:"modules"`           // extra nix modules to compose on top of stack
+	NixhomePath     string            `toml:"nixhome"`           // deprecated: use [nix] nixhome instead
+	Engine          string            `toml:"engine"`            // execution engine: "docker" (default) or "vagrant"
+	VagrantProvider string            `toml:"vagrant_provider"`  // vagrant provider: "utm" (default) or "libvirt"
+	VagrantBox      string            `toml:"vagrant_box"`       // vagrant box name override (default: "utm/bookworm")
+	KVM             *bool             `toml:"kvm"`               // pass the daemon host's /dev/kvm into the container so QEMU gets hardware accel instead of TCG; default: false; env: DEVCELL_KVM
+	PerCellImage    *bool             `toml:"per_cell_image"`    // tag user image per cell instead of per stack; default: false
+	Hostname        string            `toml:"hostname"`          // override container hostname; default: computed "cell-<basename>-<bunk>"; env: DEVCELL_HOSTNAME
+	MacAddress      string            `toml:"mac_address"`       // MAC for the container's NIC (XX:XX:XX:XX:XX:XX); pinned across restarts for infra-side identity persistence. Honored on user-defined bridge networks (devcell uses --network devcell-network). Empty → docker auto-assigns a random MAC per launch.
+	Thin            *bool             `toml:"thin"`              // thin image mode; default: true; disable with thin=false or DEVCELL_THIN=0
+	StaleWarning    *bool             `toml:"stale_warning"`     // CELL-391 "cell is behind — parallel reality" nudge at start; default: true; env: DEVCELL_STALE_WARN
+	Background      *bool             `toml:"background"`        // keep VM/container running after shell exit; default: false; env: DEVCELL_BACKGROUND
+	TartSSHPort     int               `toml:"tart_ssh_port"`     // SSH port for tart engine; default: 22; env: DEVCELL_TART_SSH_PORT
+	TartSSHHost     string            `toml:"tart_ssh_host"`     // SSH host for tart engine; default: "localhost"; env: DEVCELL_TART_SSH_HOST
+	TartSSHUser     string            `toml:"tart_ssh_user"`     // SSH user for tart engine; default: "admin"; env: DEVCELL_TART_SSH_USER
+	TartSSHKey      string            `toml:"tart_ssh_key"`      // path to SSH private key for tart; env: DEVCELL_TART_SSH_KEY
+	TartOCIImage    string            `toml:"tart_oci_image"`    // OCI base image for tart VMs; default: DefaultTartOCIImage; env: DEVCELL_TART_OCI_IMAGE
+	QemuSSHPort     int               `toml:"qemu_ssh_port"`     // SSH port for QEMU engine; default: 2222; env: DEVCELL_QEMU_SSH_PORT
+	QemuSSHHost     string            `toml:"qemu_ssh_host"`     // SSH host for QEMU engine; default: "127.0.0.1"; env: DEVCELL_QEMU_SSH_HOST
+	QemuWindowsISO  string            `toml:"qemu_windows_iso"`  // path to Windows ARM64 ISO; env: DEVCELL_QEMU_WINDOWS_ISO
+	QemuCPUs        int               `toml:"qemu_cpus"`         // QEMU vCPUs; default: 4; env: DEVCELL_QEMU_CPUS
+	QemuMemoryGB    int               `toml:"qemu_memory_gb"`    // QEMU RAM in GB; default: 4; env: DEVCELL_QEMU_MEMORY_GB
+	QemuDiskSizeGB  int               `toml:"qemu_disk_size_gb"` // QEMU disk size in GB; default: 64; env: DEVCELL_QEMU_DISK_SIZE_GB
+	QemuDisplay     string            `toml:"qemu_display"`      // QEMU display: "none", "cocoa", "sdl"; default: "none"; env: DEVCELL_QEMU_DISPLAY
+	LibvirtURI      string            `toml:"libvirt_uri"`       // libvirtd connection URI for the libvirt engine; default: DefaultLibvirtURI; env: DEVCELL_LIBVIRT_URI
+	LibvirtPathMap  map[string]string `toml:"libvirt_path_map"`  // container prefix -> host prefix rewrites for domain XML paths (CELL-375); empty = CLI runs on the host
+	QemuProjectSync string            `toml:"qemu_project_sync"` // project sync for qemu/libvirt engines: "push" (default), "two-way", "off"; env: DEVCELL_QEMU_PROJECT_SYNC (CELL-383)
+	DefaultCommand  string            `toml:"default_command"`   // subcommand to run when `cell` is invoked with no args; env: DEVCELL_DEFAULT_COMMAND
 }
 
 // ResolvedQemuProjectSync returns the effective project sync mode:

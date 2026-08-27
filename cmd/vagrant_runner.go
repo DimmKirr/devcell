@@ -20,6 +20,7 @@ import (
 //  2. Ensures the VM is up (skipped in dry-run mode)
 //  3. Execs: vagrant ssh -- -t [env KEY=VAL...] <binary> <defaultFlags...> <userArgs...>
 //     with cmd.Dir=vagrantDir so vagrant locates the correct Vagrantfile
+//
 // stackNeedsGUI reports whether the stack + modules configuration includes
 // desktop/GUI components. Only "ultimate" and "electronics" stacks include
 // the desktop module; it can also be added explicitly via extra modules.

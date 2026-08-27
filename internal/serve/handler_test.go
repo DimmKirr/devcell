@@ -11,11 +11,11 @@ import (
 
 // fakeExec records what was called and returns canned output.
 type fakeExec struct {
-	called       bool
-	agent        string
-	prompt       string
-	model        string
-	effort       string
+	called           bool
+	agent            string
+	prompt           string
+	model            string
+	effort           string
 	systemPromptFile string
 
 	stdout   string

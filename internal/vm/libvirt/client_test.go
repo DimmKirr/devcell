@@ -170,4 +170,3 @@ func TestIntegration_ConnectAndList(t *testing.T) {
 		t.Errorf("ListDomains: %v", err)
 	}
 }
-

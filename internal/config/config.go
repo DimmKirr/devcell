@@ -12,9 +12,9 @@ import (
 
 // Config holds all runtime variables resolved from environment and cwd.
 type Config struct {
-	Bunk        string
+	Bunk          string
 	AppName       string
-	CellName   string
+	CellName      string
 	CellHome      string
 	ConfigDir     string
 	BuildDir      string // build context dir: .devcell/ when project config exists, else ConfigDir
@@ -47,9 +47,9 @@ func Load(cwd string, getenv func(string) string) Config {
 
 	configDir := resolveConfigDir(getenv)
 	return Config{
-		Bunk:        bunk,
+		Bunk:          bunk,
 		AppName:       appName,
-		CellName:   cellName,
+		CellName:      cellName,
 		CellHome:      home + "/.devcell/" + cellName,
 		ConfigDir:     configDir,
 		BuildDir:      configDir,

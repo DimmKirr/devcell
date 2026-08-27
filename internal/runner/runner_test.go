@@ -16,9 +16,9 @@ func baseConfig() config.Config {
 	return config.Load("/home/bob/myproject", func(k string) string {
 		m := map[string]string{
 			"DEVCELL_BUNK": "3",
-			"HOME":    "/home/bob",
-			"USER":    "bob",
-			"TERM":    "xterm-256color",
+			"HOME":         "/home/bob",
+			"USER":         "bob",
+			"TERM":         "xterm-256color",
 		}
 		return m[k]
 	})
@@ -1010,10 +1010,10 @@ func TestImageMetadataFromInspect_LabelsPopulated(t *testing.T) {
 	m := runner.ImageMetadataFromInspectExport(
 		"2026-05-16T21:33:48Z",
 		map[string]string{
-			"devcell.built-with":                  "nix2container",
-			"devcell.stack":                       "ultimate",
-			"org.opencontainers.image.created":    "2026-05-16T21:33:48Z",
-			"org.opencontainers.image.revision":   "abc123",
+			"devcell.built-with":                "nix2container",
+			"devcell.stack":                     "ultimate",
+			"org.opencontainers.image.created":  "2026-05-16T21:33:48Z",
+			"org.opencontainers.image.revision": "abc123",
 		},
 		nil,
 	)
@@ -1070,13 +1070,13 @@ func TestImageVersions_Format(t *testing.T) {
 	// The format string ImageVersions emits is "<commit> built <date>"
 	// when both fields are real, " built <date>" when only date, etc.
 	cases := []struct {
-		name   string
-		m      runner.ImageMetadata
+		name    string
+		m       runner.ImageMetadata
 		wantHas string // substring we expect in the formatted "user" output
 	}{
 		{"commit+date", runner.ImageMetadata{GitCommit: "abc123", BuildDate: "2026-05-16T21:33:48Z", BaseImage: "nix2container"}, "abc123 built 2026-05-16T21:33:48Z"},
-		{"date only",   runner.ImageMetadata{GitCommit: "unknown", BuildDate: "2026-05-16T21:33:48Z", BaseImage: "nix2container"}, "built 2026-05-16T21:33:48Z"},
-		{"epoch date",  runner.ImageMetadata{GitCommit: "abc123", BuildDate: "1970-01-01T00:00:00Z"}, "abc123"},
+		{"date only", runner.ImageMetadata{GitCommit: "unknown", BuildDate: "2026-05-16T21:33:48Z", BaseImage: "nix2container"}, "built 2026-05-16T21:33:48Z"},
+		{"epoch date", runner.ImageMetadata{GitCommit: "abc123", BuildDate: "1970-01-01T00:00:00Z"}, "abc123"},
 		{"placeholders only", runner.ImageMetadata{GitCommit: "unknown", BuildDate: "1970-01-01T00:00:00Z"}, ""},
 	}
 	for _, tc := range cases {
@@ -1466,7 +1466,7 @@ func TestPrepareWireguard_WritesConfFiles(t *testing.T) {
 			{
 				Name:    "proton-pt",
 				Enabled: true,
-				Config: "[Interface]\nAddress = 10.2.0.2/32\nDNS = 10.2.0.1\n\n[Peer]\nPublicKey = abc123\nEndpoint = 1.2.3.4:51820\nAllowedIPs = 0.0.0.0/0\n",
+				Config:  "[Interface]\nAddress = 10.2.0.2/32\nDNS = 10.2.0.1\n\n[Peer]\nPublicKey = abc123\nEndpoint = 1.2.3.4:51820\nAllowedIPs = 0.0.0.0/0\n",
 			},
 		},
 	}
@@ -1494,7 +1494,7 @@ func TestPrepareWireguard_StripsPrivateKey(t *testing.T) {
 			{
 				Name:    "test",
 				Enabled: true,
-				Config: "[Interface]\nPrivateKey = SECRET\nAddress = 10.0.0.2/32\n\n[Peer]\nPublicKey = abc\nEndpoint = 1.2.3.4:51820\nAllowedIPs = 0.0.0.0/0\n",
+				Config:  "[Interface]\nPrivateKey = SECRET\nAddress = 10.0.0.2/32\n\n[Peer]\nPublicKey = abc\nEndpoint = 1.2.3.4:51820\nAllowedIPs = 0.0.0.0/0\n",
 			},
 		},
 	}

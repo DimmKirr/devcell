@@ -50,9 +50,9 @@ func TestPreflightNixBuilder_DarwinNoBuilder_ReturnsActionableError(t *testing.T
 		t.Fatal("failed probe should return error")
 	}
 	for _, want := range []string{
-		"linux-builder",        // tells user what's missing
-		"DEVCELL_PURE_SKIP",    // tells user how to bypass
-		"ultimate",             // mentions the stack
+		"linux-builder",     // tells user what's missing
+		"DEVCELL_PURE_SKIP", // tells user how to bypass
+		"ultimate",          // mentions the stack
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error should mention %q so user sees the fix path; got: %s", want, err.Error())

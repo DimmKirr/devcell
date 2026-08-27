@@ -13,7 +13,10 @@ import (
 	"github.com/DimmKirr/devcell/internal/runner"
 )
 
-type fakeCollector struct{ raw []byte; err error }
+type fakeCollector struct {
+	raw []byte
+	err error
+}
 
 func (f fakeCollector) CollectSystemDF(context.Context) ([]byte, error) {
 	return f.raw, f.err
@@ -209,7 +212,9 @@ func TestComputeTotals_ImagesUsesUniqueBytesNotSize(t *testing.T) {
 		t.Fatal(err)
 	}
 	var got struct {
-		Totals struct{ ImagesBytes int64 `json:"imagesBytes"` } `json:"totals"`
+		Totals struct {
+			ImagesBytes int64 `json:"imagesBytes"`
+		} `json:"totals"`
 	}
 	if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
 		t.Fatal(err)
@@ -350,9 +355,9 @@ func TestFormatTable_HighlightsPinnedAndPrintsHints(t *testing.T) {
 	wantSubstrings := []string{
 		"TYPE", "SIZE", "RECLAIM", "PINNED",
 		"devcell-user:ultimate-pure",
-		"✓ (3)",                          // pinned marker with count
-		"docker image rm aded93bf10dc",   // orphan reclaim hint, short id form
-		"docker buildx prune",            // cache/volume hint
+		"✓ (3)",                        // pinned marker with count
+		"docker image rm aded93bf10dc", // orphan reclaim hint, short id form
+		"docker buildx prune",          // cache/volume hint
 		"Totals:",
 	}
 	for _, want := range wantSubstrings {

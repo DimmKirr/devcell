@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/DimmKirr/devcell/internal/version"
-	"github.com/swaggo/swag"
 	httpSwagger "github.com/swaggo/http-swagger/v2"
+	"github.com/swaggo/swag"
 )
 
 // DefaultPort is the default listen port for devcell serve.
@@ -23,15 +23,15 @@ const DefaultPort = 8484
 
 // Server is the devcell HTTP API server.
 type Server struct {
-	exec       Executor
-	port       int
-	lookPath   LookPathFunc
-	anthropic  AnthropicClient
-	apiKey       string // empty = no auth
-	logPrompts   bool   // when true, handlers log full prompt + response bodies
+	exec             Executor
+	port             int
+	lookPath         LookPathFunc
+	anthropic        AnthropicClient
+	apiKey           string // empty = no auth
+	logPrompts       bool   // when true, handlers log full prompt + response bodies
 	systemPromptFile string // when non-empty, passed as --append-system-prompt-file to claude
 	basePromptFile   string // when non-empty, passed as --system-prompt-file (replaces the stock prompt)
-	jobStore     *JobStore
+	jobStore         *JobStore
 
 	workspaceEnabled bool
 	workspaceMock    bool
