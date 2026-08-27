@@ -5,7 +5,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/DimmKirr/devcell/internal/isokit"
+	"github.com/devcell-sh/go-winkit/unattend"
+	"github.com/devcell-sh/go-winkit/winpe"
+
+	"github.com/devcell-sh/go-winkit/isokit"
 	"github.com/stretchr/testify/require"
 )
 
@@ -18,9 +21,9 @@ import (
 func TestCollectGuestLogs_ReturnsEveryLogTheGuestWrote(t *testing.T) {
 	img := filepath.Join(t.TempDir(), "answer.img")
 	require.NoError(t, isokit.CreateFATImage(img, map[string][]byte{
-		"/" + BootstrapLogName:        []byte("devcell-bootstrap: starting"),
-		"/" + GuestDiagnosticsLogName: []byte("=== NETWORK ADAPTERS ==="),
-		"/" + SetupActSnapshotName:    []byte("setupact contents"),
+		"/" + unattend.BootstrapLogName:        []byte("devcell-bootstrap: starting"),
+		"/" + unattend.GuestDiagnosticsLogName: []byte("=== NETWORK ADAPTERS ==="),
+		"/" + winpe.SetupActSnapshotName:       []byte("setupact contents"),
 	}))
 
 	logs := CollectGuestLogs(img)
@@ -29,11 +32,11 @@ func TestCollectGuestLogs_ReturnsEveryLogTheGuestWrote(t *testing.T) {
 	for _, l := range logs {
 		byName[l.Name] = l
 	}
-	require.Contains(t, byName, BootstrapLogName)
-	require.Contains(t, byName, GuestDiagnosticsLogName)
-	require.Contains(t, byName, SetupActSnapshotName)
-	require.Equal(t, "devcell-bootstrap: starting", string(byName[BootstrapLogName].Content))
-	require.NoError(t, byName[BootstrapLogName].Err)
+	require.Contains(t, byName, unattend.BootstrapLogName)
+	require.Contains(t, byName, unattend.GuestDiagnosticsLogName)
+	require.Contains(t, byName, winpe.SetupActSnapshotName)
+	require.Equal(t, "devcell-bootstrap: starting", string(byName[unattend.BootstrapLogName].Content))
+	require.NoError(t, byName[unattend.BootstrapLogName].Err)
 }
 
 // A log the guest never wrote is a finding, not a gap to hide: "Setup died
@@ -42,7 +45,7 @@ func TestCollectGuestLogs_ReturnsEveryLogTheGuestWrote(t *testing.T) {
 func TestCollectGuestLogs_ReportsMissingLogsRatherThanSkippingThem(t *testing.T) {
 	img := filepath.Join(t.TempDir(), "answer.img")
 	require.NoError(t, isokit.CreateFATImage(img, map[string][]byte{
-		"/" + BootstrapLogName: []byte("only this one"),
+		"/" + unattend.BootstrapLogName: []byte("only this one"),
 	}))
 
 	logs := CollectGuestLogs(img)
@@ -54,7 +57,7 @@ func TestCollectGuestLogs_ReportsMissingLogsRatherThanSkippingThem(t *testing.T)
 			require.Nil(t, l.Content, "a log that failed to read must carry no content")
 		}
 	}
-	require.Contains(t, missing, GuestDiagnosticsLogName,
+	require.Contains(t, missing, unattend.GuestDiagnosticsLogName,
 		"a log the guest never wrote must be reported, not omitted")
 	require.Len(t, logs, len(guestLogNames), "every known log must be accounted for")
 }
@@ -64,11 +67,11 @@ func TestCollectGuestLogs_ReportsMissingLogsRatherThanSkippingThem(t *testing.T)
 // the log.
 func TestGuestLogNames_CoverWinPEAndFirstLogonChannels(t *testing.T) {
 	require.ElementsMatch(t, []string{
-		SetupActSnapshotName,
-		SetupErrSnapshotName,
-		AgentResultFile,
-		BootstrapLogName,
-		GuestDiagnosticsLogName,
+		winpe.SetupActSnapshotName,
+		winpe.SetupErrSnapshotName,
+		winpe.AgentResultFile,
+		unattend.BootstrapLogName,
+		unattend.GuestDiagnosticsLogName,
 	}, guestLogNames)
 }
 

@@ -11,7 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/DimmKirr/devcell/internal/isokit"
+	"github.com/devcell-sh/go-winkit/diag"
+	"github.com/devcell-sh/go-winkit/unattend"
+
+	"github.com/devcell-sh/go-winkit/isokit"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -139,7 +142,7 @@ func TestEmptyDiskBoot_StallDetected(t *testing.T) {
 
 		// vCPU PC
 		if regs, err := QMPHumanMonitor(qmpSock, "info registers"); err == nil {
-			pollPC = ExtractRegister(regs, "PC=")
+			pollPC = diag.ExtractRegister(regs, "PC=")
 		}
 
 		n := stall.Observe(StallSignal{ScreenHash: pollHash, ReadBytes: pollRead, PC: pollPC})
@@ -322,7 +325,7 @@ func TestISOBootWithStartupNSH(t *testing.T) {
 	// production build puts on the answer volume.
 	startupImg := filepath.Join(tmpDir, "startup.img")
 	require.NoError(t, isokit.CreateFATImage(startupImg, map[string][]byte{
-		"/startup.nsh": padForFAT([]byte(startupNSH)),
+		"/startup.nsh": unattend.PadForFAT([]byte(unattend.StartupNSH)),
 	}))
 
 	serialLog := filepath.Join(resultsDir, "serial.log")

@@ -11,7 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/DimmKirr/devcell/internal/isokit"
+	"github.com/devcell-sh/go-winkit/unattend"
+
+	"github.com/devcell-sh/go-winkit/isokit"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -222,7 +224,7 @@ func TestGenerateWSLUserScript_SetsDefaultUserToSessionUser(t *testing.T) {
 // Two identities, deliberately separate:
 //
 //   - the WINDOWS account is the host's $USER (autounattend creates it, SSH
-//     lands as it) — SessionUsername()
+//     lands as it) — unattend.SessionUsername()
 //   - the WSL DISTRO user is whoever nixhome's home-manager config was built
 //     for — WSLDistroUser
 //
@@ -612,7 +614,7 @@ func TestWindowsDevEnv_QEMU(t *testing.T) {
 	startFSD()
 
 	keyPath := filepath.Join(home, ".devcell", "main", "qemu", "id_ed25519")
-	user := SessionUsername()
+	user := unattend.SessionUsername()
 	const shareDrive = "Z:"
 
 	// The FAT log volume: guest-side stage transcripts the host can read off

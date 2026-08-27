@@ -7,7 +7,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/DimmKirr/devcell/internal/mctcatalog"
+	"github.com/devcell-sh/go-winkit/mctcatalog"
 )
 
 func assembleISOFromESD(t *testing.T, esdPath, isoPath string) {

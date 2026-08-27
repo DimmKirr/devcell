@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/DimmKirr/devcell/internal/wimlib"
+	"github.com/devcell-sh/go-wimlib"
 )
 
 // TransplantWSLIntoBootWim lays the WSL engine into a WinPE boot.wim.

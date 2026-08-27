@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/DimmKirr/devcell/internal/isokit"
-	"github.com/DimmKirr/devcell/internal/wimlib"
+	"github.com/devcell-sh/go-wimlib"
+	"github.com/devcell-sh/go-winkit/isokit"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

@@ -2,6 +2,8 @@ package qemu
 
 import (
 	"strings"
+
+	"github.com/devcell-sh/go-winkit/templates"
 )
 
 const (
@@ -55,7 +57,7 @@ func GenerateVMPVerifyScript() []byte {
 		Services:   names,
 	}
 
-	out := renderTemplate("vmp-verify.ps1.tmpl", data)
+	out := templates.Render("vmp-verify.ps1.tmpl", data)
 	out = strings.ReplaceAll(out, "\n", "\r\n")
 	return []byte(out)
 }

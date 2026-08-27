@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/devcell-sh/go-winkit/unattend"
+
 	"github.com/DimmKirr/devcell/internal/cfg"
 	"github.com/DimmKirr/devcell/internal/ux"
 	"github.com/DimmKirr/devcell/internal/vm/qemu"
@@ -106,12 +108,12 @@ func formatProvisionStep(name string, attempt, attempts int, took time.Duration,
 
 // qemuBuildSSHUser is the guest account the build authenticates as.
 //
-// It must track the answer file, which creates qemu.SessionUsername(): the
+// It must track the answer file, which creates unattend.SessionUsername(): the
 // guest bootstrap writes the SSH key into that account's authorized_keys (and
 // the administrators file it belongs to), so any other name is a guaranteed
 // publickey rejection.
 func qemuBuildSSHUser() string {
-	return qemu.SessionUsername()
+	return unattend.SessionUsername()
 }
 
 // dumpGuestLogs prints everything the guest wrote to the answer volume.

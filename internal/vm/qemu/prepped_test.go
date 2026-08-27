@@ -9,7 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/DimmKirr/devcell/internal/isokit"
+	"github.com/devcell-sh/go-winkit/unattend"
+
+	"github.com/devcell-sh/go-winkit/isokit"
 	"github.com/stretchr/testify/require"
 )
 
@@ -61,19 +63,19 @@ func testWindowsPreppedDiskBoot(t *testing.T, accel string) {
 
 	sshKeyPath, pubKey := requireInstallSSHKey(t)
 
-	cfg := DefaultAutounattendConfig()
+	cfg := unattend.DefaultConfig()
 	cfg.SSHPubKey = pubKey
 	cfg.EnableRDP = true
-	cfg.VirtIODrivers = NetKVMDriverPaths()
+	cfg.VirtIODrivers = unattend.NetKVMDriverPaths()
 
 	answerImg := filepath.Join(tmpDir, "autounattend.img")
-	require.NoError(t, BuildAnswerVolume(cfg, answerImg))
+	require.NoError(t, unattend.BuildAnswerVolume(cfg, answerImg))
 
 	xmlBack, err := isokit.ReadFileFromFAT(answerImg, "/autounattend.xml")
 	require.NoError(t, err, "reading autounattend.xml back from the FAT image")
 	require.Contains(t, string(xmlBack), "<unattend", "FAT round-trip corrupted autounattend.xml")
 
-	ps1Back, err := isokit.ReadFileFromFAT(answerImg, "/"+GuestDiagnosticsScriptName)
+	ps1Back, err := isokit.ReadFileFromFAT(answerImg, "/"+unattend.GuestDiagnosticsScriptName)
 	require.NoError(t, err, "reading the diagnostics script back from the FAT image")
 	require.Contains(t, string(ps1Back), "Get-NetAdapter", "FAT round-trip corrupted the diagnostics script")
 
@@ -207,7 +209,7 @@ func verifyGuestFATWrite(t *testing.T, spec Spec, answerImg string, qemuDone <-c
 	// Clean shutdown flushes the guest's writes to the answer volume.
 	shutdownGuest(t, spec, qemuDone)
 
-	log, err := ReadGuestDiagnostics(answerImg)
+	log, err := unattend.ReadGuestDiagnostics(answerImg)
 	require.NoError(t, err, "guest ran the diagnostics script but the host cannot read the log back")
 	require.Contains(t, log, "NETWORK ADAPTERS", "diagnostics log is missing expected sections")
 	t.Logf("guest-side FAT write verified: %d bytes of diagnostics read back from the answer volume", len(log))

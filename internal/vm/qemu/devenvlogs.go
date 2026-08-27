@@ -4,7 +4,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/DimmKirr/devcell/internal/isokit"
+	"github.com/devcell-sh/go-winkit/templates"
+	"github.com/devcell-sh/go-winkit/unattend"
+
+	"github.com/devcell-sh/go-winkit/isokit"
 )
 
 // The guest log volume: a FAT image any post-install VM can write logs to —
@@ -30,10 +33,10 @@ func BuildGuestLogVolume(destPath string) error {
 // the failure mode that ruled out installing the module onto the guest disk.
 func BuildControlVolume(destPath string, payload map[string][]byte) error {
 	files := map[string][]byte{
-		"/" + GuestLogVolumeMarker: padForFAT([]byte("devcell guest control volume\r\n")),
+		"/" + GuestLogVolumeMarker: unattend.PadForFAT([]byte("devcell guest control volume\r\n")),
 	}
 	for name, data := range payload {
-		files[name] = padForFAT(data)
+		files[name] = unattend.PadForFAT(data)
 	}
 	if err := isokit.CreateFATImage(destPath, files); err != nil {
 		return fmt.Errorf("building control volume: %w", err)
@@ -124,7 +127,7 @@ func StageLogNames(stages []GuestStage) []string {
 // silenced first: Invoke-WebRequest's progress records travel over SSH as
 // CLIXML and turned two stage logs into 8.9MB and 11.8MB of noise.
 func withLogVolumeTranscript(logName, stageName, script string) string {
-	return renderTemplate("stage-wrapper.ps1.tmpl", struct {
+	return templates.Render("stage-wrapper.ps1.tmpl", struct {
 		Marker    string
 		LogName   string
 		StageName string

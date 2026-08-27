@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/DimmKirr/devcell/internal/goregedit"
-	"github.com/DimmKirr/devcell/internal/wimlib"
+	"github.com/devcell-sh/go-regedit"
+	"github.com/devcell-sh/go-wimlib"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -41,7 +41,7 @@ func TestTransplantVMPIntoBootWim(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(bootWim, data, 0644))
 
-	regExport := filepath.Join("..", "..", "goregedit", "testdata", "vmp-services.reg")
+	regExport := filepath.Join("testdata", "vmp-services.reg")
 	if _, err := os.Stat(regExport); err != nil {
 		t.Skip("no VMP service export available")
 	}
@@ -99,14 +99,14 @@ func TestTransplantVMPIntoBootWim(t *testing.T) {
 	hive := filepath.Join(hiveDir, "Windows", "System32", "config", "SYSTEM")
 
 	for _, svc := range VMPTransplantServices() {
-		key, err := goregedit.ReadServiceKey(hive, `ControlSet001\Services\`+svc.Name)
+		key, err := regedit.ReadServiceKey(hive, `ControlSet001\Services\`+svc.Name)
 		require.NoError(t, err, "%s must be registered in boot.wim's hive", svc.Name)
 		assert.NotEmpty(t, key.Values["ImagePath"].String(),
 			"%s must carry an ImagePath", svc.Name)
 	}
 
 	// The hypervisor driver has to load at boot, not on demand.
-	hvservice, err := goregedit.ReadServiceKey(hive, `ControlSet001\Services\hvservice`)
+	hvservice, err := regedit.ReadServiceKey(hive, `ControlSet001\Services\hvservice`)
 	require.NoError(t, err)
 	assert.Equal(t, uint32(0), hvservice.Values["Start"].DWord(),
 		"hvservice must be Start=0 (Boot) so WinPE brings up the hypervisor")
@@ -124,7 +124,7 @@ func TestTransplantVMPFromDonorDir(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(bootWim, data, 0644))
 
-	regExport := filepath.Join("..", "..", "goregedit", "testdata", "vmp-services.reg")
+	regExport := filepath.Join("testdata", "vmp-services.reg")
 	if _, err := os.Stat(regExport); err != nil {
 		t.Skip("no VMP service export available")
 	}
@@ -172,13 +172,13 @@ func TestTransplantVMPFromDonorDir(t *testing.T) {
 	hive := filepath.Join(hiveDir, "Windows", "System32", "config", "SYSTEM")
 
 	for _, svc := range VMPTransplantServices() {
-		key, err := goregedit.ReadServiceKey(hive, `ControlSet001\Services\`+svc.Name)
+		key, err := regedit.ReadServiceKey(hive, `ControlSet001\Services\`+svc.Name)
 		require.NoError(t, err, "%s must be registered in boot.wim's hive", svc.Name)
 		assert.NotEmpty(t, key.Values["ImagePath"].String(),
 			"%s must carry an ImagePath", svc.Name)
 	}
 
-	hvservice, err := goregedit.ReadServiceKey(hive, `ControlSet001\Services\hvservice`)
+	hvservice, err := regedit.ReadServiceKey(hive, `ControlSet001\Services\hvservice`)
 	require.NoError(t, err)
 	assert.Equal(t, uint32(0), hvservice.Values["Start"].DWord(),
 		"hvservice must be Start=0 (Boot) so WinPE brings up the hypervisor")

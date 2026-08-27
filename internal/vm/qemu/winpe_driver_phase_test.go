@@ -10,7 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/DimmKirr/devcell/internal/isokit"
+	"github.com/devcell-sh/go-winkit/diag"
+	"github.com/devcell-sh/go-winkit/unattend"
+	"github.com/devcell-sh/go-winkit/winpe"
+
+	"github.com/devcell-sh/go-winkit/isokit"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -89,13 +93,13 @@ func TestWindowsSetupDriverPhase(t *testing.T) {
 			drivers, err := LoadWinPEStorageDrivers(virtioISO)
 			require.NoError(t, err)
 
-			cfg := DefaultAutounattendConfig()
+			cfg := unattend.DefaultConfig()
 			cfg.SSHPubKey = "ssh-ed25519 AAAATESTKEY driver-phase-test"
 			cfg.WinPEAgent = true
-			cfg.AgentCommand = WinPEDiagScriptCommand()
+			cfg.AgentCommand = winpe.DiagScriptCommand()
 			cfg.AnswerDrivers = drivers
 			answerImg := filepath.Join(tmpDir, "autounattend.img")
-			require.NoError(t, BuildAnswerVolume(cfg, answerImg))
+			require.NoError(t, unattend.BuildAnswerVolume(cfg, answerImg))
 
 			serialLog := filepath.Join(resultsDir, "serial.log")
 			spec := Spec{
@@ -186,7 +190,7 @@ func TestWindowsSetupDriverPhase(t *testing.T) {
 					}
 				}
 				if regs, err := QMPHumanMonitor(qmpSock, "info registers"); err == nil {
-					pollPC = ExtractRegister(regs, "PC=")
+					pollPC = diag.ExtractRegister(regs, "PC=")
 				}
 
 				n := stall.Observe(StallSignal{ScreenHash: pollHash, ReadBytes: pollRead, PC: pollPC})
@@ -212,9 +216,9 @@ func TestWindowsSetupDriverPhase(t *testing.T) {
 				default:
 				}
 
-				setupact = readAnswerVolumeFile(t, answerImg, "/"+SetupActSnapshotName)
-				setuperr = readAnswerVolumeFile(t, answerImg, "/"+SetupErrSnapshotName)
-				diagOut = readAnswerVolumeFile(t, answerImg, "/"+AgentResultFile)
+				setupact = readAnswerVolumeFile(t, answerImg, "/"+winpe.SetupActSnapshotName)
+				setuperr = readAnswerVolumeFile(t, answerImg, "/"+winpe.SetupErrSnapshotName)
+				diagOut = readAnswerVolumeFile(t, answerImg, "/"+winpe.AgentResultFile)
 
 				if setupact != "" && firstSeen.IsZero() {
 					firstSeen = time.Now()
@@ -240,9 +244,9 @@ func TestWindowsSetupDriverPhase(t *testing.T) {
 			cmd.Process.Kill()
 			cmd.Wait()
 
-			setupact = readAnswerVolumeFile(t, answerImg, "/"+SetupActSnapshotName)
-			setuperr = readAnswerVolumeFile(t, answerImg, "/"+SetupErrSnapshotName)
-			diagOut = readAnswerVolumeFile(t, answerImg, "/"+AgentResultFile)
+			setupact = readAnswerVolumeFile(t, answerImg, "/"+winpe.SetupActSnapshotName)
+			setuperr = readAnswerVolumeFile(t, answerImg, "/"+winpe.SetupErrSnapshotName)
+			diagOut = readAnswerVolumeFile(t, answerImg, "/"+winpe.AgentResultFile)
 
 			t.Logf("=== devcell-out.txt (diagnostic) ===\n%s", diagOut)
 			t.Logf("=== devcell-setuperr.log ===\n%s", setuperr)

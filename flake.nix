@@ -55,7 +55,7 @@
         version = nixpkgs.lib.removePrefix "v" cellVersion;
         src = cellSrc;
 
-        vendorHash = "sha256-tWFbVTAUlYhcL4ekSOC0HraBqy+EfJKdMouPxs+KoBU=";
+        vendorHash = "sha256-Jl7DQv3SXJ6H/BY97LQH1Zm47nOgaYAKyN1AczTNpro=";
 
         subPackages = ["cmd"];
 

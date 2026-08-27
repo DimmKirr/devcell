@@ -12,8 +12,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/DimmKirr/devcell/internal/mctcatalog"
-	"github.com/DimmKirr/devcell/internal/uupdump"
+	"github.com/devcell-sh/go-winkit/unattend"
+	"github.com/devcell-sh/go-winkit/winpe"
+
+	"github.com/devcell-sh/go-winkit/mctcatalog"
+	"github.com/devcell-sh/go-winkit/uupdump"
 )
 
 const (
@@ -360,7 +363,7 @@ func RemoveDownloadMarkers(home string) {
 
 // OpenSSHPayloadPath returns the cached Win32-OpenSSH release path.
 func OpenSSHPayloadPath(home string) string {
-	return filepath.Join(CacheDir(home), OpenSSHPayloadName)
+	return filepath.Join(CacheDir(home), unattend.OpenSSHPayloadName)
 }
 
 // DownloadOpenSSH fetches Microsoft's signed Win32-OpenSSH ARM64 release.
@@ -390,8 +393,8 @@ func DownloadOpenSSH(ctx context.Context, home string, noCache bool, obs Observe
 		os.Remove(dest + ".done")
 	}
 
-	obs.Logf("downloading OpenSSH from %s", OpenSSHReleaseURL)
-	if err := downloadFile(ctx, OpenSSHReleaseURL, dest, obs); err != nil {
+	obs.Logf("downloading OpenSSH from %s", unattend.OpenSSHReleaseURL)
+	if err := downloadFile(ctx, unattend.OpenSSHReleaseURL, dest, obs); err != nil {
 		return "", fmt.Errorf("downloading OpenSSH release: %w", err)
 	}
 	if err := os.WriteFile(dest+".done", nil, 0644); err != nil {
@@ -473,7 +476,7 @@ func DownloadPwsh(ctx context.Context, home string, noCache bool, obs Observer) 
 }
 
 // ExtractPwshFiles reads a PowerShell zip and returns its contents as a map
-// keyed by answer-volume paths (e.g. "/pwsh/pwsh.exe"). The PwshVolDir
+// keyed by answer-volume paths (e.g. "/pwsh/pwsh.exe"). The winpe.PwshVolDir
 // prefix is prepended automatically.
 func ExtractPwshFiles(zipPath string) (map[string][]byte, error) {
 	r, err := zip.OpenReader(zipPath)
@@ -496,7 +499,7 @@ func ExtractPwshFiles(zipPath string) (map[string][]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("reading %s from zip: %w", f.Name, err)
 		}
-		volPath := "/" + PwshVolDir + "/" + f.Name
+		volPath := "/" + winpe.PwshVolDir + "/" + f.Name
 		files[volPath] = data
 	}
 	return files, nil

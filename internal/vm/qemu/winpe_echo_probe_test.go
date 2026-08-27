@@ -12,7 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/DimmKirr/devcell/internal/isokit"
+	"github.com/devcell-sh/go-winkit/diag"
+	"github.com/devcell-sh/go-winkit/winpe"
+
+	"github.com/devcell-sh/go-winkit/isokit"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -78,7 +81,7 @@ func TestWinPEEchoProbe(t *testing.T) {
 				require.NoError(t, os.WriteFile(hostPath, data, 0644))
 			}
 
-			payloadCfg := WinPEPayloadConfig{
+			payloadCfg := winpe.PayloadConfig{
 				WPEInit:      true,
 				ProgressPort: `\\.\Global\` + ProgressPortName,
 				DriverINFs:   []string{`X:\devcell\drivers\vioserial\vioser.inf`},
@@ -87,21 +90,21 @@ func TestWinPEEchoProbe(t *testing.T) {
 			}
 			require.NoError(t, os.WriteFile(
 				filepath.Join(injectDir, "winpeshl.ini"),
-				GenerateWinPEShellINI_NoSetup(), 0644))
+				winpe.GenerateShellINI_NoSetup(), 0644))
 			require.NoError(t, os.WriteFile(
 				filepath.Join(injectDir, "bootstrap.cmd"),
-				GenerateWinPEBootstrapCmd(), 0644))
+				winpe.GenerateBootstrapCmd(), 0644))
 			require.NoError(t, os.WriteFile(
 				filepath.Join(injectDir, "bootstrap.ps1"),
-				GenerateWinPEBootstrap(payloadCfg), 0644))
+				winpe.GenerateBootstrap(payloadCfg), 0644))
 			require.NoError(t, os.WriteFile(
 				filepath.Join(injectDir, "agent.ps1"),
-				GenerateWinPEAgent(payloadCfg), 0644))
+				winpe.GenerateAgent(payloadCfg), 0644))
 
 			const viofsTag = "devcell-logs"
 			require.NoError(t, os.WriteFile(
-				filepath.Join(injectDir, WinPEEchoProbeScriptName),
-				GenerateWinPEEchoProbeScript(viofsTag), 0644))
+				filepath.Join(injectDir, winpe.EchoProbeScriptName),
+				winpe.GenerateEchoProbeScript(viofsTag), 0644))
 
 			// ── 4. Inject into boot.wim image 2 ──
 			bootWimPath := filepath.Join(stageDir, "sources", "boot.wim")
@@ -115,9 +118,9 @@ func TestWinPEEchoProbe(t *testing.T) {
 			// ── 6. Create answer volume with agent command + viofs drivers ──
 			answerImg := filepath.Join(tmpDir, "answer.img")
 			answerFiles := map[string][]byte{
-				"/" + AgentVolumeMarker:         []byte("1"),
-				"/" + AgentCommandFile:          []byte(WinPEEchoProbeScriptCommand()),
-				"/" + WinPEEchoProbeScriptName:  GenerateWinPEEchoProbeScript(viofsTag),
+				"/" + winpe.AgentVolumeMarker:   []byte("1"),
+				"/" + winpe.AgentCommandFile:    []byte(winpe.EchoProbeScriptCommand()),
+				"/" + winpe.EchoProbeScriptName: winpe.GenerateEchoProbeScript(viofsTag),
 			}
 			for path, data := range viofsDrivers {
 				answerFiles[path] = data
@@ -264,7 +267,7 @@ func TestWinPEEchoProbe(t *testing.T) {
 					}
 				}
 				if regs, err := QMPHumanMonitor(qmpSock, "info registers"); err == nil {
-					pollPC = ExtractRegister(regs, "PC=")
+					pollPC = diag.ExtractRegister(regs, "PC=")
 				}
 
 				n := stall.Observe(StallSignal{ScreenHash: pollHash, ReadBytes: pollRead, PC: pollPC})
@@ -290,7 +293,7 @@ func TestWinPEEchoProbe(t *testing.T) {
 				default:
 				}
 
-				doneMarker := readAnswerVolumeFile(t, answerImg, "/"+AgentDoneFile)
+				doneMarker := readAnswerVolumeFile(t, answerImg, "/"+winpe.AgentDoneFile)
 				if doneMarker != "" {
 					t.Logf("agent done marker appeared after %s (%d frames)", time.Since(start).Round(time.Second), frame)
 					break
@@ -310,7 +313,7 @@ func TestWinPEEchoProbe(t *testing.T) {
 			cmd.Wait()
 
 			// ── 11. Assert echo probe results ──
-			diagOut := readAnswerVolumeFile(t, answerImg, "/"+AgentResultFile)
+			diagOut := readAnswerVolumeFile(t, answerImg, "/"+winpe.AgentResultFile)
 			t.Logf("=== devcell-out.txt (echo probe) ===\n%s", diagOut)
 			os.WriteFile(filepath.Join(resultsDir, "devcell-out.txt"), []byte(diagOut), 0644)
 			dumpSerialLog(t, serialLog, resultsDir)

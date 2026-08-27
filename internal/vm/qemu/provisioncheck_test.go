@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devcell-sh/go-winkit/unattend"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -18,7 +20,7 @@ import (
 // install that precedes provisioning in the full E2E.
 //
 // Contract surface (identical to cmd/build_qemu.go phase 11):
-//   - scripts: DefaultProvisionSteps(pubKey, SessionUsername(), DefaultSessionUser)
+//   - scripts: DefaultProvisionSteps(pubKey, unattend.SessionUsername(), unattend.DefaultSessionUser)
 //   - transport: BuildSSHExecArgv + PowerShellEncodedCommand
 //
 // It exists because runs 7 and 8 each burned ~1h20m of install to reach a
@@ -78,11 +80,11 @@ func TestProvisioningSteps_AgainstInstalledTemplate(t *testing.T) {
 	require.NoError(t, err)
 	// Mirror cmd/build_qemu.go exactly: the CLI trims the key before use.
 	pubKey := strings.TrimSpace(string(pubKeyBytes))
-	user := SessionUsername()
+	user := unattend.SessionUsername()
 
 	// Same table type and same log naming as the dev-env pipeline: one
 	// component, one log, streamed and bounded like every other guest stage.
-	steps := DefaultProvisionSteps(pubKey, user, DefaultSessionUser)
+	steps := DefaultProvisionSteps(pubKey, user, unattend.DefaultSessionUser)
 	logNames := StageLogNames(steps)
 	for i, step := range steps {
 		ok := t.Run(fmt.Sprintf("%02d-%s", i+1, strings.ReplaceAll(step.Name, " ", "-")), func(t *testing.T) {

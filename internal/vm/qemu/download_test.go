@@ -7,7 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/DimmKirr/devcell/internal/isokit"
+	"github.com/devcell-sh/go-winkit/winpe"
+
+	"github.com/devcell-sh/go-winkit/isokit"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -238,10 +240,10 @@ func TestExtractPwshFiles(t *testing.T) {
 	files, err := ExtractPwshFiles(zipPath)
 	require.NoError(t, err)
 	assert.Len(t, files, 3)
-	assert.Contains(t, files, "/"+PwshVolDir+"/pwsh.exe")
-	assert.Contains(t, files, "/"+PwshVolDir+"/pwsh.dll")
-	assert.Contains(t, files, "/"+PwshVolDir+"/Modules/PSReadLine/PSReadLine.psd1")
-	assert.Equal(t, []byte("content-pwsh.exe"), files["/"+PwshVolDir+"/pwsh.exe"])
+	assert.Contains(t, files, "/"+winpe.PwshVolDir+"/pwsh.exe")
+	assert.Contains(t, files, "/"+winpe.PwshVolDir+"/pwsh.dll")
+	assert.Contains(t, files, "/"+winpe.PwshVolDir+"/Modules/PSReadLine/PSReadLine.psd1")
+	assert.Equal(t, []byte("content-pwsh.exe"), files["/"+winpe.PwshVolDir+"/pwsh.exe"])
 }
 
 func TestAlpineConstants(t *testing.T) {

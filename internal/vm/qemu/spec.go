@@ -9,6 +9,8 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+
+	"github.com/devcell-sh/go-winkit/unattend"
 )
 
 // Spec holds everything needed to configure and connect to a QEMU Windows VM.
@@ -211,8 +213,8 @@ func (s *Spec) ApplyDefaults() {
 		s.SSHHost = "127.0.0.1"
 	}
 	if s.SSHUser == "" {
-		// Must match the account the answer file creates — see SessionUsername.
-		s.SSHUser = SessionUsername()
+		// Must match the account the answer file creates — see unattend.SessionUsername.
+		s.SSHUser = unattend.SessionUsername()
 	}
 	if s.DisplayType == "" {
 		s.DisplayType = "none"

@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devcell-sh/go-winkit/unattend"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -205,7 +207,7 @@ func TestSSHAble_ConnectAndListFiles(t *testing.T) {
 		"the ssh-able image must accept SSH after boot")
 
 	keyPath := filepath.Join(home, ".devcell", "main", "qemu", "id_ed25519")
-	user := SessionUsername()
+	user := unattend.SessionUsername()
 
 	// The two reads that define "we can see local files": the system root and
 	// the connecting user's own profile.

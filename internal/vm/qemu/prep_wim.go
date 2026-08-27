@@ -3,6 +3,10 @@ package qemu
 import (
 	"fmt"
 	"strings"
+
+	"github.com/devcell-sh/go-winkit/templates"
+	"github.com/devcell-sh/go-winkit/unattend"
+	"github.com/devcell-sh/go-winkit/winpe"
 )
 
 // WimPrepOp describes a single DISM offline servicing operation to apply to
@@ -158,7 +162,7 @@ func GenerateWimBuilderScript(cfg WimPrepConfig) []byte {
 		Ops:                ops,
 	}
 
-	out := renderTemplate("wim-builder.ps1.tmpl", data)
+	out := templates.Render("wim-builder.ps1.tmpl", data)
 	out = strings.ReplaceAll(out, "\n", "\r\n")
 	return []byte(out)
 }
@@ -316,12 +320,12 @@ func buildWimBuilderSCSI(wbs WimBuilderSpec) []string {
 // startup.nsh chainloads the Windows Boot Manager, which loads boot.wim.
 func SharedVolumeFiles(cfg WimPrepConfig, efiBootLoader []byte, pwshFiles map[string][]byte) map[string][]byte {
 	files := map[string][]byte{
-		"/" + AgentVolumeMarker:    []byte("1"),
-		"/" + AgentCommandFile:     []byte(WimBuilderScriptCommand()),
-		"/" + WimBuilderScriptName: GenerateWimBuilderScript(cfg),
+		"/" + winpe.AgentVolumeMarker: []byte("1"),
+		"/" + winpe.AgentCommandFile:  []byte(WimBuilderScriptCommand()),
+		"/" + WimBuilderScriptName:    GenerateWimBuilderScript(cfg),
 	}
 	if len(efiBootLoader) > 0 {
-		files["/startup.nsh"] = padForFAT([]byte(startupNSH))
+		files["/startup.nsh"] = unattend.PadForFAT([]byte(unattend.StartupNSH))
 		files["/EFI/BOOT/BOOTAA64.EFI"] = efiBootLoader
 	}
 	for path, data := range pwshFiles {

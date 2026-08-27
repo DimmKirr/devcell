@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devcell-sh/go-winkit/unattend"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -69,7 +71,7 @@ func TestRegistryExtraction(t *testing.T) {
 		"SSH must come up")
 
 	keyPath := filepath.Join(home, ".devcell", "main", "qemu", "id_ed25519")
-	user := SessionUsername()
+	user := unattend.SessionUsername()
 
 	connFile := filepath.Join(resultsDir, "ssh-conn.env")
 	connData := fmt.Sprintf("SSH_HOST=%s\nSSH_PORT=%d\nSSH_USER=%s\nSSH_KEY=%s\n",

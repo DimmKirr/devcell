@@ -13,8 +13,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/DimmKirr/devcell/internal/isokit"
-	"github.com/DimmKirr/devcell/internal/wimlib"
+	"github.com/devcell-sh/go-winkit/diag"
+	"github.com/devcell-sh/go-winkit/wim"
+	"github.com/devcell-sh/go-winkit/winpe"
+
+	"github.com/devcell-sh/go-wimlib"
+	"github.com/devcell-sh/go-winkit/isokit"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -80,7 +84,7 @@ func TestWinPEHyperVInjection(t *testing.T) {
 				require.NoError(t, os.WriteFile(hostPath, data, 0644))
 			}
 
-			payloadCfg := WinPEPayloadConfig{
+			payloadCfg := winpe.PayloadConfig{
 				WPEInit:      true,
 				ProgressPort: `\\.\Global\` + ProgressPortName,
 				DriverINFs:   []string{`X:\devcell\drivers\vioserial\vioser.inf`},
@@ -89,23 +93,23 @@ func TestWinPEHyperVInjection(t *testing.T) {
 			}
 			require.NoError(t, os.WriteFile(
 				filepath.Join(injectDir, "winpeshl.ini"),
-				GenerateWinPEShellINI_NoSetup(), 0644))
+				winpe.GenerateShellINI_NoSetup(), 0644))
 			require.NoError(t, os.WriteFile(
 				filepath.Join(injectDir, "bootstrap.cmd"),
-				GenerateWinPEBootstrapCmd(), 0644))
+				winpe.GenerateBootstrapCmd(), 0644))
 			require.NoError(t, os.WriteFile(
 				filepath.Join(injectDir, "bootstrap.ps1"),
-				GenerateWinPEBootstrap(payloadCfg), 0644))
+				winpe.GenerateBootstrap(payloadCfg), 0644))
 			require.NoError(t, os.WriteFile(
 				filepath.Join(injectDir, "agent.ps1"),
-				GenerateWinPEAgent(payloadCfg), 0644))
+				winpe.GenerateAgent(payloadCfg), 0644))
 			require.NoError(t, os.WriteFile(
-				filepath.Join(injectDir, WinPEHyperVDiagScriptName),
-				GenerateWinPEHyperVDiagScript(payloadCfg.ProgressPort), 0644))
+				filepath.Join(injectDir, winpe.HyperVDiagScriptName),
+				winpe.GenerateHyperVDiagScript(payloadCfg.ProgressPort), 0644))
 
 			// ── 3. Inject into boot.wim image 2 via wimlib ──
 			bootWimPath := filepath.Join(stageDir, "sources", "boot.wim")
-			injectIntoBootWim(t, bootWimPath, injectDir, diagTools, HyperVBootPatches())
+			injectIntoBootWim(t, bootWimPath, injectDir, diagTools, wim.HyperVBootPatches())
 
 			// ── 4. Create custom bootable ISO ──
 			winpeISO := filepath.Join(tmpDir, "winpe-hyperv.iso")
@@ -115,9 +119,9 @@ func TestWinPEHyperVInjection(t *testing.T) {
 			// ── 5. Create answer volume with agent command ──
 			answerImg := filepath.Join(tmpDir, "answer.img")
 			answerFiles := map[string][]byte{
-				"/" + AgentVolumeMarker:         []byte("1"),
-				"/" + AgentCommandFile:          []byte(WinPEHyperVDiagScriptCommand()),
-				"/" + WinPEHyperVDiagScriptName: GenerateWinPEHyperVDiagScript(payloadCfg.ProgressPort),
+				"/" + winpe.AgentVolumeMarker:    []byte("1"),
+				"/" + winpe.AgentCommandFile:     []byte(winpe.HyperVDiagScriptCommand()),
+				"/" + winpe.HyperVDiagScriptName: winpe.GenerateHyperVDiagScript(payloadCfg.ProgressPort),
 			}
 			require.NoError(t, isokit.CreateFATImage(answerImg, answerFiles))
 
@@ -182,7 +186,7 @@ func TestWinPEHyperVInjection(t *testing.T) {
 			}
 
 			// ── 9. Assert diagnostics ──
-			diagOut := readAnswerVolumeFile(t, answerImg, "/"+AgentResultFile)
+			diagOut := readAnswerVolumeFile(t, answerImg, "/"+winpe.AgentResultFile)
 
 			t.Logf("=== devcell-out.txt (Hyper-V/WSL2 diagnostics) ===\n%s", diagOut)
 			os.WriteFile(filepath.Join(resultsDir, "devcell-out.txt"), []byte(diagOut), 0644)
@@ -427,7 +431,7 @@ func extractDiagToolsFromInstallWim(t *testing.T, winISO string) diagToolFiles {
 	toolsDir := filepath.Join(tmpDir, "tools")
 	require.NoError(t, os.MkdirAll(toolsDir, 0755))
 
-	for _, wp := range WinPEDiagToolPaths() {
+	for _, wp := range winpe.DiagToolPaths() {
 		if err := installWim.ExtractPaths(1, toolsDir, []string{wp}); err != nil {
 			t.Logf("warning: could not extract %s from install.wim: %v", wp, err)
 			continue
@@ -453,7 +457,7 @@ func extractDiagToolsFromInstallWim(t *testing.T, winISO string) diagToolFiles {
 // image 2 ("Microsoft Windows Setup"). The WIM is modified in-place.
 // Optional registryPatches are applied to hives inside the WIM before
 // overwriting (e.g. setting hvservice Start=0 for Hyper-V boot).
-func injectIntoBootWim(t *testing.T, bootWimPath, injectDir string, diagTools diagToolFiles, registryPatches ...WimRegistryPatch) {
+func injectIntoBootWim(t *testing.T, bootWimPath, injectDir string, diagTools diagToolFiles, registryPatches ...wim.RegistryPatch) {
 	t.Helper()
 
 	require.True(t, wimlib.Available(), "wimlib CGO bindings not available — build with -tags wimlib")
@@ -485,7 +489,7 @@ func injectIntoBootWim(t *testing.T, bootWimPath, injectDir string, diagTools di
 
 	for _, rp := range registryPatches {
 		t.Logf("patching WIM registry: %s (%d patches)", rp.HivePath, len(rp.Patches))
-		cleanup, err := PatchWimRegistry(wim, imageNum, rp)
+		cleanup, err := wim.PatchRegistry(wim, imageNum, rp)
 		require.NoError(t, err)
 		defer cleanup()
 	}
@@ -562,7 +566,7 @@ func bootWinPEAndPoll(t *testing.T, argv []string, qmpSock, serialLog, answerImg
 			}
 		}
 		if regs, err := QMPHumanMonitor(qmpSock, "info registers"); err == nil {
-			pollPC = ExtractRegister(regs, "PC=")
+			pollPC = diag.ExtractRegister(regs, "PC=")
 		}
 
 		n := stall.Observe(StallSignal{ScreenHash: pollHash, ReadBytes: pollRead, PC: pollPC})
@@ -589,7 +593,7 @@ func bootWinPEAndPoll(t *testing.T, argv []string, qmpSock, serialLog, answerImg
 		default:
 		}
 
-		doneMarker := readAnswerVolumeFile(t, answerImg, "/"+AgentDoneFile)
+		doneMarker := readAnswerVolumeFile(t, answerImg, "/"+winpe.AgentDoneFile)
 		if doneMarker != "" {
 			t.Logf("agent done marker appeared after %s (%d frames)", time.Since(start).Round(time.Second), frame)
 			break

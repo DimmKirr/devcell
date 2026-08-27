@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devcell-sh/go-winkit/unattend"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -85,7 +87,7 @@ func TestVioserialProgressPort(t *testing.T) {
 		"SSH must come up")
 
 	keyPath := filepath.Join(home, ".devcell", "main", "qemu", "id_ed25519")
-	user := SessionUsername()
+	user := unattend.SessionUsername()
 
 	// Write a unique marker to the virtio-serial port and a local file.
 	marker := "DEVCELL_VIOSERIAL_TEST_" + time.Now().UTC().Format("20060102T150405Z")
@@ -152,7 +154,7 @@ Write-Output ("marker: " + $marker)
 // TestVioserialDriverPaths_INFPath verifies the vioserial driver path matches
 // the virtio-win.iso layout.
 func TestVioserialDriverPaths_INFPath(t *testing.T) {
-	paths := VioserialDriverPaths()
+	paths := unattend.VioserialDriverPaths()
 
 	require.Len(t, paths, 1)
 	assert.Equal(t, `vioserial\w11\ARM64\vioser.inf`, paths[0].INFRelPath)
@@ -163,9 +165,9 @@ func TestVioserialDriverPaths_INFPath(t *testing.T) {
 // contains a pnputil command for the vioserial driver when VirtIODrivers
 // includes it.
 func TestVioserialDriverIncludedInSpecialize(t *testing.T) {
-	cfg := DefaultAutounattendConfig()
-	cfg.VirtIODrivers = append(NetKVMDriverPaths(), VioserialDriverPaths()...)
-	out := string(GenerateAutounattendXML(cfg))
+	cfg := unattend.DefaultConfig()
+	cfg.VirtIODrivers = append(unattend.NetKVMDriverPaths(), unattend.VioserialDriverPaths()...)
+	out := string(unattend.GenerateXML(cfg))
 
 	assert.Contains(t, out, `vioserial\w11\ARM64\vioser.inf`,
 		"specialize must install the vioserial driver so the bootstrap can write to the progress port")

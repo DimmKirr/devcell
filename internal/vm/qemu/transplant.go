@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/DimmKirr/devcell/internal/goregedit"
-	"github.com/DimmKirr/devcell/internal/wimlib"
+	"github.com/devcell-sh/go-regedit"
+	"github.com/devcell-sh/go-wimlib"
 )
 
 // bootWimSystemHive is where the SYSTEM hive lives inside boot.wim.
@@ -81,14 +81,13 @@ func TransplantVMPIntoBootWimLogged(bootWimPath, installWimPath, regExportPath s
 	}
 	emit(TransplantEvent{Event: "stage_binaries", Status: "ok", Count: len(services)})
 
-
 	export, err := os.Open(regExportPath)
 	if err != nil {
 		return fail("read_export", fmt.Errorf("opening service export: %w", err))
 	}
 	defer export.Close()
 
-	keys, err := goregedit.ParseRegExport(export)
+	keys, err := regedit.ParseRegExport(export)
 	if err != nil {
 		return fail("read_export", fmt.Errorf("parsing service export: %w", err))
 	}
@@ -166,13 +165,13 @@ func TransplantVMPIntoBootWimLogged(bootWimPath, installWimPath, regExportPath s
 		}
 		start := spec.Values["Start"].DWord()
 		if override, ok := vmpBootStart[svc.Name]; ok {
-			spec.Values["Start"] = goregedit.Value{
-				Type: goregedit.TypeDWord,
+			spec.Values["Start"] = regedit.Value{
+				Type: regedit.TypeDWord,
 				Data: []byte{byte(override), 0, 0, 0},
 			}
 			start = override
 		}
-		if err := goregedit.WriteKey(hive, `ControlSet001\Services\`+svc.Name, spec); err != nil {
+		if err := regedit.WriteKey(hive, `ControlSet001\Services\`+svc.Name, spec); err != nil {
 			return fail("clone_key", fmt.Errorf("cloning %s service key: %w", svc.Name, err))
 		}
 		emit(TransplantEvent{Event: "clone_key", Status: "ok",
@@ -221,7 +220,7 @@ func TransplantVMPFromDonorDir(bootWimPath, donorDir, regExportPath string, onEv
 	}
 	defer export.Close()
 
-	keys, err := goregedit.ParseRegExport(export)
+	keys, err := regedit.ParseRegExport(export)
 	if err != nil {
 		return fail("read_export", fmt.Errorf("parsing service export: %w", err))
 	}
@@ -303,13 +302,13 @@ func TransplantVMPFromDonorDir(bootWimPath, donorDir, regExportPath string, onEv
 		}
 		start := spec.Values["Start"].DWord()
 		if override, ok := vmpBootStart[svc.Name]; ok {
-			spec.Values["Start"] = goregedit.Value{
-				Type: goregedit.TypeDWord,
+			spec.Values["Start"] = regedit.Value{
+				Type: regedit.TypeDWord,
 				Data: []byte{byte(override), 0, 0, 0},
 			}
 			start = override
 		}
-		if err := goregedit.WriteKey(hive, `ControlSet001\Services\`+svc.Name, spec); err != nil {
+		if err := regedit.WriteKey(hive, `ControlSet001\Services\`+svc.Name, spec); err != nil {
 			return fail("clone_key", fmt.Errorf("cloning %s service key: %w", svc.Name, err))
 		}
 		emit(TransplantEvent{Event: "clone_key", Status: "ok",

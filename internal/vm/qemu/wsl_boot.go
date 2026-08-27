@@ -2,6 +2,8 @@ package qemu
 
 import (
 	"strings"
+
+	"github.com/devcell-sh/go-winkit/templates"
 )
 
 const (
@@ -45,7 +47,7 @@ func GenerateWSLBootScript() []byte {
 		Rootfs:     WSLRootfsVolName,
 	}
 
-	out := renderTemplate("wsl-boot.ps1.tmpl", data)
+	out := templates.Render("wsl-boot.ps1.tmpl", data)
 	out = strings.ReplaceAll(out, "\n", "\r\n")
 	return []byte(out)
 }

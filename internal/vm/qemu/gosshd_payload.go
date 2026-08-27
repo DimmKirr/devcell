@@ -13,7 +13,7 @@ const (
 	GoSSHDPayloadName = "devcell-gosshd.exe"
 
 	// GoSSHDPackage is the package cross-compiled into that payload.
-	GoSSHDPackage = "github.com/DimmKirr/devcell/internal/gosshd/cmd/gosshd"
+	GoSSHDPackage = "github.com/devcell-sh/go-winkit/gosshd/cmd/gosshd"
 
 	// GoSSHDLogFile is the server's log on the shared volume. It is not
 	// written to the guest ramdisk: a session that fails minutes in still

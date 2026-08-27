@@ -57,3 +57,7 @@ docs/
 CLAUDE.local.md
 # task debug:windows runtime state
 .tmp/
+
+# local multi-repo workspace
+go.work
+go.work.sum

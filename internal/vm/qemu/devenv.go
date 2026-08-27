@@ -1,5 +1,7 @@
 package qemu
 
+import "github.com/devcell-sh/go-winkit/templates"
+
 // Dev-env provisioning: the scripts that turn a verified ssh-able image into
 // a development VM — virtio drivers + guest agent, project passthrough over
 // virtio-fs, WSL2 + NixOS-WSL, and the repo's nixhome home-manager profile.
@@ -49,7 +51,7 @@ type distroData struct{ Distro string }
 // kernel packages until testsigning is LIVE, which takes a reboot — so this
 // runs as its own stage, before one.
 func GenerateDriverTrustScript() string {
-	return renderTemplate("devenv/driver-trust.ps1.tmpl", nil)
+	return templates.Render("devenv/driver-trust.ps1.tmpl", nil)
 }
 
 // GenerateVirtioAgentInstallScript installs the ARM64 virtio drivers Windows
@@ -57,13 +59,13 @@ func GenerateDriverTrustScript() string {
 // guest agent — the x64 MSI under Win11's emulation, since no ARM64 agent
 // build exists (see .scratch/VIRTIO.md).
 func GenerateVirtioAgentInstallScript() string {
-	return renderTemplate("devenv/virtio-agent-install.ps1.tmpl", nil)
+	return templates.Render("devenv/virtio-agent-install.ps1.tmpl", nil)
 }
 
 // GenerateWinFspInstallScript fetches and installs WinFsp, the userspace
 // filesystem layer virtiofs.exe requires.
 func GenerateWinFspInstallScript() string {
-	return renderTemplate("devenv/winfsp-install.ps1.tmpl", nil)
+	return templates.Render("devenv/winfsp-install.ps1.tmpl", nil)
 }
 
 // GenerateVirtioFSMountScript registers virtiofs.exe (from the driver CD) as a
@@ -71,7 +73,7 @@ func GenerateWinFspInstallScript() string {
 // reading it. Service manager output is kept and dependencies are probed — the
 // first version piped sc.exe to Out-Null and a silent failure explained nothing.
 func GenerateVirtioFSMountScript(tag, drive string) string {
-	return renderTemplate("devenv/virtiofs-mount.ps1.tmpl", struct {
+	return templates.Render("devenv/virtiofs-mount.ps1.tmpl", struct {
 		Tag   string
 		Drive string
 	}{tag, drive})
@@ -82,7 +84,7 @@ func GenerateVirtioFSMountScript(tag, drive string) string {
 // probe never enables a feature, so a run can report "WSL2 was impossible"
 // without having changed the guest to find out.
 func GenerateVirtualizationProbeScript() string {
-	return renderTemplate("devenv/virtualization-probe.ps1.tmpl", nil)
+	return templates.Render("devenv/virtualization-probe.ps1.tmpl", nil)
 }
 
 // GenerateWSL2EnableScript enables both features WSL2 needs. NixOS-WSL does
@@ -90,7 +92,7 @@ func GenerateVirtualizationProbeScript() string {
 // so VirtualMachinePlatform is required rather than optional. The reboot
 // belongs to the caller, which can watch SSH drop and come back.
 func GenerateWSL2EnableScript() string {
-	return renderTemplate("devenv/wsl2-enable.ps1.tmpl", nil)
+	return templates.Render("devenv/wsl2-enable.ps1.tmpl", nil)
 }
 
 // GenerateWSLEngineInstallScript installs the WSL engine MSI. The inbox
@@ -98,13 +100,13 @@ func GenerateWSL2EnableScript() string {
 // microsoft/WSL releases. Installing it tears down the SSH session, so the
 // stage runs disconnect-tolerant and reboot-terminated.
 func GenerateWSLEngineInstallScript() string {
-	return renderTemplate("devenv/wsl-engine-install.ps1.tmpl", nil)
+	return templates.Render("devenv/wsl-engine-install.ps1.tmpl", nil)
 }
 
 // GenerateHyperVEnableScript asks Windows to install and launch its
 // hypervisor — what the WSL2 utility VM is actually created on.
 func GenerateHyperVEnableScript() string {
-	return renderTemplate("devenv/hyperv-enable.ps1.tmpl", nil)
+	return templates.Render("devenv/hyperv-enable.ps1.tmpl", nil)
 }
 
 // GenerateHyperVVerifyScript asserts the two independent facts the WSL2
@@ -112,7 +114,7 @@ func GenerateHyperVEnableScript() string {
 // fail for different reasons — a missing payload versus a hypervisor that
 // cannot launch on emulated EL2 — so they are reported and thrown separately.
 func GenerateHyperVVerifyScript() string {
-	return renderTemplate("devenv/hyperv-verify.ps1.tmpl", nil)
+	return templates.Render("devenv/hyperv-verify.ps1.tmpl", nil)
 }
 
 // GenerateNixOSWSLImportScript installs the official NixOS-WSL image as a WSL2
@@ -120,14 +122,14 @@ func GenerateHyperVVerifyScript() string {
 // latest release and `wsl --install --from-file` it (WSL 2.4.4+), falling back
 // to `wsl --import … --version 2` on older engines.
 func GenerateNixOSWSLImportScript() string {
-	return renderTemplate("devenv/nixos-wsl-import.ps1.tmpl", distroData{NixOSWSLDistro})
+	return templates.Render("devenv/nixos-wsl-import.ps1.tmpl", distroData{NixOSWSLDistro})
 }
 
 // GenerateWSLUserScript renames the distro's default user to the cell's
 // session user, following NixOS-WSL's documented procedure. Without it the
 // distro runs as "nixos" while every path the cell uses is /home/<user>.
 func GenerateWSLUserScript(user string) string {
-	return renderTemplate("devenv/wsl-user.ps1.tmpl", struct {
+	return templates.Render("devenv/wsl-user.ps1.tmpl", struct {
 		User   string
 		Distro string
 	}{user, NixOSWSLDistro})
@@ -137,13 +139,13 @@ func GenerateWSLUserScript(user string) string {
 // carries. NixOS *is* nix — running the upstream installer inside it would be
 // both redundant and non-idiomatic.
 func GenerateNixVerifyScript() string {
-	return renderTemplate("devenv/nix-verify.ps1.tmpl", distroData{NixOSWSLDistro})
+	return templates.Render("devenv/nix-verify.ps1.tmpl", distroData{NixOSWSLDistro})
 }
 
 // GenerateHomeManagerScript links the mounted project share to the agreed repo
 // path inside WSL and activates the repo's nixhome via home-manager.
 func GenerateHomeManagerScript(user, drive string) string {
-	return renderTemplate("devenv/home-manager.ps1.tmpl", struct {
+	return templates.Render("devenv/home-manager.ps1.tmpl", struct {
 		User   string
 		Mount  string
 		Drive  string

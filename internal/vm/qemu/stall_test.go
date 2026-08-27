@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devcell-sh/go-winkit/diag"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -114,17 +116,17 @@ func TestExtractRegister(t *testing.T) {
 		"X29=00000000476867c0 X30=000000013c3fb5d4  SP=00000000476867c0\n" +
 		"PSTATE=600003c5 -ZC- EL1h  BTYPE=0\n"
 
-	assert.Equal(t, "000000013c347200", ExtractRegister(regs, "PC="))
-	assert.Equal(t, "000000013c3fb5d4", ExtractRegister(regs, "X30="))
-	assert.Equal(t, "00000000476867c0", ExtractRegister(regs, "SP="))
-	assert.Equal(t, "", ExtractRegister(regs, "X99="), "a missing register yields empty, not a panic")
+	assert.Equal(t, "000000013c347200", diag.ExtractRegister(regs, "PC="))
+	assert.Equal(t, "000000013c3fb5d4", diag.ExtractRegister(regs, "X30="))
+	assert.Equal(t, "00000000476867c0", diag.ExtractRegister(regs, "SP="))
+	assert.Equal(t, "", diag.ExtractRegister(regs, "X99="), "a missing register yields empty, not a panic")
 }
 
 // "PC=" must not be matched inside another token — the naive strings.Index
 // approach would find "PC=" in "FPCR=" style neighbours if the needle were
 // looser.
 func TestExtractRegister_DoesNotMatchSubstringOfAnotherRegister(t *testing.T) {
-	assert.Equal(t, "", ExtractRegister("FPCR=00000000 FPSR=00000000", "PC="),
+	assert.Equal(t, "", diag.ExtractRegister("FPCR=00000000 FPSR=00000000", "PC="),
 		"FPCR= must not be read as PC=")
 }
 

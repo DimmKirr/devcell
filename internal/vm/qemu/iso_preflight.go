@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/DimmKirr/devcell/internal/isokit"
+	"github.com/devcell-sh/go-winkit/isokit"
 )
 
 type ISOInfo struct {

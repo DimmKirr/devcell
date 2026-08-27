@@ -18,10 +18,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/DimmKirr/devcell/internal/goregedit"
-	"github.com/DimmKirr/devcell/internal/gosshd"
-	"github.com/DimmKirr/devcell/internal/isokit"
-	"github.com/DimmKirr/devcell/internal/wimlib"
+	"github.com/devcell-sh/go-winkit/diag"
+	"github.com/devcell-sh/go-winkit/wim"
+	"github.com/devcell-sh/go-winkit/winpe"
+
+	"github.com/devcell-sh/go-regedit"
+	"github.com/devcell-sh/go-wimlib"
+	"github.com/devcell-sh/go-winkit/gosshd"
+	"github.com/devcell-sh/go-winkit/isokit"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	cryptossh "golang.org/x/crypto/ssh"
@@ -108,7 +112,7 @@ func runWimBuilder(t *testing.T, accel string, cfg WimPrepConfig, deadline time.
 
 	// ── 1. Extract boot.wim and EFI boot files ──
 	stageDir := filepath.Join(tmpDir, "stage")
-	require.NoError(t, ExtractWinPEStage(winISO, stageDir))
+	require.NoError(t, winpe.ExtractStage(winISO, stageDir))
 
 	// ── 2. Extract vioserial + vioscsi drivers ──
 	vioserialDrivers, err := LoadWinPEVioserialDrivers(virtioISO)
@@ -195,7 +199,7 @@ func runWimBuilder(t *testing.T, accel string, cfg WimPrepConfig, deadline time.
 			sharedFiles[name] = data
 		}
 		if source.agentCommand != "" {
-			sharedFiles["/"+AgentCommandFile] = []byte(source.agentCommand)
+			sharedFiles["/"+winpe.AgentCommandFile] = []byte(source.agentCommand)
 		}
 	}
 
@@ -215,7 +219,7 @@ func runWimBuilder(t *testing.T, accel string, cfg WimPrepConfig, deadline time.
 		}
 	}
 
-	payloadCfg := WinPEPayloadConfig{
+	payloadCfg := winpe.PayloadConfig{
 		WPEInit:      true,
 		ProgressPort: `\\.\Global\` + ProgressPortName,
 		PollSeconds:  5,
@@ -232,18 +236,18 @@ func runWimBuilder(t *testing.T, accel string, cfg WimPrepConfig, deadline time.
 
 	require.NoError(t, os.WriteFile(
 		filepath.Join(injectDir, "winpeshl.ini"),
-		GenerateWinPEShellINI_NoSetup(), 0644))
+		winpe.GenerateShellINI_NoSetup(), 0644))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(injectDir, "bootstrap.cmd"),
-		GenerateWinPEBootstrapCmd(), 0644))
+		winpe.GenerateBootstrapCmd(), 0644))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(injectDir, "bootstrap.ps1"),
-		GenerateWinPEBootstrap(payloadCfg), 0644))
+		winpe.GenerateBootstrap(payloadCfg), 0644))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(injectDir, "agent.ps1"),
-		GenerateWinPEAgent(payloadCfg), 0644))
+		winpe.GenerateAgent(payloadCfg), 0644))
 
-	require.NoError(t, InjectWinPEPayload(bootWimPath, injectDir))
+	require.NoError(t, wim.InjectWinPEPayload(bootWimPath, injectDir))
 
 	// ── 5. Create WinPE ISO ──
 	winpeISO := filepath.Join(tmpDir, "winpe-builder.iso")
@@ -371,8 +375,8 @@ func runWimBuilder(t *testing.T, accel string, cfg WimPrepConfig, deadline time.
 	// timezone spin loop fires. GDB Z0 breakpoints are VA-based in TCG
 	// and survive page table remaps, unlike memory writes.
 	type earlyBP struct {
-		gdb          *GDBConn
-		hvVectorHit  chan string
+		gdb         *GDBConn
+		hvVectorHit chan string
 	}
 	var ebp *earlyBP
 	if secureWorld && gdbSock != "" {
@@ -432,7 +436,10 @@ func runWimBuilder(t *testing.T, accel string, cfg WimPrepConfig, deadline time.
 					t.Logf("  HVC vector memory (live): %x", mem)
 				}
 				// Dump key registers: PC(32), ELR_EL1(68), SP_EL0(various)
-				for _, ri := range []struct{ idx int; name string }{
+				for _, ri := range []struct {
+					idx  int
+					name string
+				}{
 					{32, "PC"}, {33, "CPSR"},
 				} {
 					if raw, err := ebp.gdb.ReadRegister(ri.idx); err == nil {
@@ -460,7 +467,10 @@ func runWimBuilder(t *testing.T, accel string, cfg WimPrepConfig, deadline time.
 				// QEMU GDB exposes ELR_EL1 at index 68, but ELR_EL2 is what we need
 				// In QEMU TCG, when stopped at EL2, ELR_EL2 can be read via
 				// custom XML registers. Try indices 68-75 for system regs.
-				for _, ri := range []struct{ idx int; name string }{
+				for _, ri := range []struct {
+					idx  int
+					name string
+				}{
 					{68, "sysreg68"}, {69, "sysreg69"}, {70, "sysreg70"},
 					{71, "sysreg71"}, {72, "sysreg72"},
 				} {
@@ -537,7 +547,7 @@ func runWimBuilder(t *testing.T, accel string, cfg WimPrepConfig, deadline time.
 			}
 		}
 		if regs, err := QMPHumanMonitor(qmpSock, "info registers"); err == nil {
-			pollPC = ExtractRegister(regs, "PC=")
+			pollPC = diag.ExtractRegister(regs, "PC=")
 		}
 
 		n := stall.Observe(StallSignal{ScreenHash: pollHash, ReadBytes: pollRead, PC: pollPC})
@@ -549,7 +559,7 @@ func runWimBuilder(t *testing.T, accel string, cfg WimPrepConfig, deadline time.
 				t.Logf("=== HV spin registers ===\n%s", regs)
 				regPath := filepath.Join(resultsDir, "registers-hv-spin.txt")
 				os.WriteFile(regPath, []byte(regs), 0644)
-				x19 := ExtractRegister(regs, "X19=")
+				x19 := diag.ExtractRegister(regs, "X19=")
 				t.Logf("x19=%s (timezone bias at x19+0xc)", x19)
 			}
 
@@ -726,7 +736,7 @@ func runWimBuilder(t *testing.T, accel string, cfg WimPrepConfig, deadline time.
 	}
 	close(qemuExited)
 
-	agentOut := readAnswerVolumeFile(t, sharedImg, "/"+AgentResultFile)
+	agentOut := readAnswerVolumeFile(t, sharedImg, "/"+winpe.AgentResultFile)
 	t.Logf("=== builder output ===\n%s", agentOut)
 
 	doneMarker := readAnswerVolumeFile(t, sharedImg, "/"+WimBuilderDoneFile)
@@ -908,7 +918,7 @@ func TestWimBuilder(t *testing.T) {
 				hive := filepath.Join(hiveDir, "Windows", "System32", "config", "SYSTEM")
 
 				for _, svc := range VMPTransplantServices() {
-					key, err := goregedit.ReadServiceKey(hive, `ControlSet001\Services\`+svc.Name)
+					key, err := regedit.ReadServiceKey(hive, `ControlSet001\Services\`+svc.Name)
 					if err != nil {
 						t.Errorf("  VMP service NOT REGISTERED: %s (%v)", svc.Name, err)
 						continue
@@ -918,7 +928,7 @@ func TestWimBuilder(t *testing.T) {
 					t.Logf("  VMP registered: %-20s Start=%d", svc.Name, key.Values["Start"].DWord())
 				}
 
-				hvservice, err := goregedit.ReadServiceKey(hive, `ControlSet001\Services\hvservice`)
+				hvservice, err := regedit.ReadServiceKey(hive, `ControlSet001\Services\hvservice`)
 				require.NoError(t, err)
 				assert.Equal(t, uint32(0), hvservice.Values["Start"].DWord(),
 					"hvservice must be boot-start so WinPE brings up the hypervisor")
@@ -1271,7 +1281,7 @@ func TestWimBuilder(t *testing.T) {
 							patchBCD:     true,
 							secureWorld:  true,
 							agentCommand: WSLBootScriptCommand(),
-							extraFiles: wslBootVolumeFiles(t),
+							extraFiles:   wslBootVolumeFiles(t),
 						})
 
 					require.Contains(t, run.agentOut, WSLBootBanner,
@@ -1492,7 +1502,7 @@ func buildHCSBootExe(t *testing.T) []byte {
 
 	out := filepath.Join(t.TempDir(), HCSBootExeName)
 	cmd := exec.Command("go", "build", "-o", out,
-		"github.com/DimmKirr/devcell/internal/hcsvm/hcsboot")
+		"github.com/devcell-sh/go-winkit/hcsvm/hcsboot")
 	cmd.Env = append(os.Environ(), "GOOS=windows", "GOARCH=arm64", "CGO_ENABLED=0")
 	if b, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("cross-compiling hcsboot: %v\n%s", err, b)

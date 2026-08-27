@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devcell-sh/go-winkit/unattend"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -45,7 +47,7 @@ func TestControlVolume_RoundTrip(t *testing.T) {
 	workDir := t.TempDir()
 	home := filepath.Join(repoRoot(t), "test", "testdata", "cellhome")
 	keyPath := filepath.Join(home, ".devcell", "main", "qemu", "id_ed25519")
-	user := SessionUsername()
+	user := unattend.SessionUsername()
 
 	overlay := filepath.Join(workDir, "roundtrip.qcow2")
 	require.NoError(t, CloneDisk(baseImage, overlay))

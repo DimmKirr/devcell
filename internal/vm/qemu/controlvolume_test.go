@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/DimmKirr/devcell/internal/isokit"
+	"github.com/devcell-sh/go-winkit/isokit"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -16,8 +16,8 @@ import (
 func TestBuildControlVolume_CarriesMarkerAndPayload(t *testing.T) {
 	img := filepath.Join(t.TempDir(), "control.img")
 	payload := map[string][]byte{
-		"/devcell/Devcell.psm1":            []byte("function Write-DevcellLog {}\r\n"),
-		"/devcell/stages/wsl2-enable.ps1":  []byte("param()\r\n"),
+		"/devcell/Devcell.psm1":           []byte("function Write-DevcellLog {}\r\n"),
+		"/devcell/stages/wsl2-enable.ps1": []byte("param()\r\n"),
 	}
 	require.NoError(t, BuildControlVolume(img, payload))
 

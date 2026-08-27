@@ -16,6 +16,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devcell-sh/go-winkit/diag"
+
 	"github.com/DimmKirr/devcell/internal/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -801,10 +803,10 @@ func captureStallDiagnostics(t *testing.T, qmpSock, resultsDir string, spec Spec
 	}
 
 	interp := "PSTATE unavailable — cannot tell a dead loop from a WFI idle"
-	pc := ExtractRegister(regs, "PC=")
-	lr := ExtractRegister(regs, "X30=")
+	pc := diag.ExtractRegister(regs, "PC=")
+	lr := diag.ExtractRegister(regs, "X30=")
 	pcVal, pcValErr := strconv.ParseUint(pc, 16, 64)
-	if ps := ExtractRegister(regs, "PSTATE="); ps != "" {
+	if ps := diag.ExtractRegister(regs, "PSTATE="); ps != "" {
 		if decoded, err := DecodePSTATE(ps); err == nil {
 			interp = decoded.Summary()
 			// A masked-DAIF park at a vector-shaped offset names the

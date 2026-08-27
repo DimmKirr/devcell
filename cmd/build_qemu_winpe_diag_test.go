@@ -4,7 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/DimmKirr/devcell/internal/vm/qemu"
+	"github.com/devcell-sh/go-winkit/winpe"
+
 	"github.com/stretchr/testify/assert"
 )
 
@@ -28,9 +29,9 @@ func TestWinPEDiagCommand_ReadOnlyDiagnostics(t *testing.T) {
 	// (ERROR_NO_MORE_ITEMS — driver already loaded) after the agent's diag
 	// drvloaded the same INF that wpeinit had already picked up from
 	// $WinPEDriver$. The diagnostic must observe, never mutate.
-	assert.NotContains(t, qemu.WinPEDiagCommand, "drvload", "diag must not load drivers: it caused the double-load abort")
-	assert.Contains(t, qemu.WinPEDiagCommand, "diskpart.exe")
-	assert.Contains(t, qemu.WinPEDiagCommand, `reg.exe query HKLM\SYSTEM\CurrentControlSet\Services\vioscsi`)
-	assert.Contains(t, qemu.WinPEDiagCommand, "Panther")
-	assert.False(t, strings.Contains(qemu.WinPEDiagCommand, "\n"), "must stay a single line: the agent reads the first line via Get-Content")
+	assert.NotContains(t, winpe.DiagCommand, "drvload", "diag must not load drivers: it caused the double-load abort")
+	assert.Contains(t, winpe.DiagCommand, "diskpart.exe")
+	assert.Contains(t, winpe.DiagCommand, `reg.exe query HKLM\SYSTEM\CurrentControlSet\Services\vioscsi`)
+	assert.Contains(t, winpe.DiagCommand, "Panther")
+	assert.False(t, strings.Contains(winpe.DiagCommand, "\n"), "must stay a single line: the agent reads the first line via Get-Content")
 }

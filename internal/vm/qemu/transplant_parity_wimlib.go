@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/DimmKirr/devcell/internal/wimlib"
+	"github.com/devcell-sh/go-wimlib"
 )
 
 // resolveWinSxS finds the WinSxS component directory matching prefix and

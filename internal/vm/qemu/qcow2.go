@@ -6,7 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	"github.com/DimmKirr/devcell/internal/isokit"
+	"github.com/devcell-sh/go-winkit/isokit"
 )
 
 // CreateFATQcow2 creates a qcow2 disk image containing a FAT32 filesystem

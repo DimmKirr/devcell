@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/devcell-sh/go-winkit/unattend"
+
 	"github.com/DimmKirr/devcell/internal/vm/qemu"
 )
 
@@ -54,7 +56,7 @@ func main() {
 		{"devenv--home-manager.ps1", qemu.GenerateHomeManagerScript("testuser", "Z")},
 
 		// bootstrap
-		{"bootstrap.ps1", string(qemu.GenerateBootstrapScript(qemu.AutounattendConfig{
+		{"bootstrap.ps1", string(unattend.GenerateBootstrapScript(unattend.Config{
 			Username:       "testuser",
 			Password:       "P@ssw0rd!",
 			SSHPubKey:      "ssh-ed25519 AAAA_PLACEHOLDER_KEY",

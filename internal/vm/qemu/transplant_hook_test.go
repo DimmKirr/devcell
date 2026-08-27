@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/DimmKirr/devcell/internal/goregedit"
-	"github.com/DimmKirr/devcell/internal/wimlib"
+	"github.com/devcell-sh/go-regedit"
+	"github.com/devcell-sh/go-wimlib"
 	"github.com/stretchr/testify/require"
 )
 
@@ -27,7 +27,7 @@ import (
 func transplantBootWim(t *testing.T, bootWimPath, resultsDir string) {
 	t.Helper()
 
-	regExport := filepath.Join("..", "..", "goregedit", "testdata", "vmp-services.reg")
+	regExport := filepath.Join("testdata", "vmp-services.reg")
 	if _, err := os.Stat(regExport); err != nil {
 		t.Skip("no VMP service export available")
 	}
@@ -119,19 +119,19 @@ func patchStagedBCD(t *testing.T, stageDir string) {
 			continue
 		}
 		require.NoError(t,
-			goregedit.SetHypervisorLaunchType(bcd, goregedit.HypervisorLaunchAuto),
+			regedit.SetHypervisorLaunchType(bcd, regedit.HypervisorLaunchAuto),
 			"setting hypervisorlaunchtype in %s", rel)
 		require.NoError(t,
-			goregedit.SetBCDIntegerElement(bcd, goregedit.WinPELoaderGUID, "25000020", 3),
+			regedit.SetBCDIntegerElement(bcd, regedit.WinPELoaderGUID, "25000020", 3),
 			"setting NxPolicy=AlwaysOn in %s", rel)
 		require.NoError(t,
-			goregedit.SetBCDBooleanElement(bcd, goregedit.WinPELoaderGUID, "16000049", true),
+			regedit.SetBCDBooleanElement(bcd, regedit.WinPELoaderGUID, "16000049", true),
 			"setting AllowPrereleaseSignatures in %s", rel)
 		require.NoError(t,
-			goregedit.SetBCDBooleanElement(bcd, goregedit.WinPELoaderGUID, "16000009", true),
+			regedit.SetBCDBooleanElement(bcd, regedit.WinPELoaderGUID, "16000009", true),
 			"setting DisableIntegrityChecks in %s", rel)
 		require.NoError(t,
-			goregedit.SetBCDIntegerElement(bcd, goregedit.WinPELoaderGUID, "250000e3", 0),
+			regedit.SetBCDIntegerElement(bcd, regedit.WinPELoaderGUID, "250000e3", 0),
 			"setting VSMLaunchType=Off in %s", rel)
 		t.Logf("  BCD hypervisorlaunchtype=Auto VSMLaunchType=Off NxPolicy=AlwaysOn: %s", rel)
 		patched++
@@ -157,8 +157,9 @@ func patchStagedBootWim(t *testing.T, stageDir string) {
 // patch decouples the two: ramdisk boot still works, HV launches normally.
 //
 // Patch site (ARM64): file offset 0x1cd08, VMA 0x18001d908.
-//   Original: B.NE 0x18001d914  (0x54000061) — skips STRB wzr,[sp,#0x19]
-//   Patched:  NOP               (0xd503201f) — STRB always clears HV-skip flag
+//
+//	Original: B.NE 0x18001d914  (0x54000061) — skips STRB wzr,[sp,#0x19]
+//	Patched:  NOP               (0xd503201f) — STRB always clears HV-skip flag
 func patchWinloadHVGate(t *testing.T, bootWimPath string) {
 	t.Helper()
 

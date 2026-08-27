@@ -2,6 +2,8 @@ package qemu
 
 import (
 	"strings"
+
+	"github.com/devcell-sh/go-winkit/templates"
 )
 
 const (
@@ -40,7 +42,7 @@ func GenerateHCSBootScript() []byte {
 		Complete:   HCSBootComplete,
 	}
 
-	out := renderTemplate("hcs-boot.ps1.tmpl", data)
+	out := templates.Render("hcs-boot.ps1.tmpl", data)
 	out = strings.ReplaceAll(out, "\n", "\r\n")
 	return []byte(out)
 }

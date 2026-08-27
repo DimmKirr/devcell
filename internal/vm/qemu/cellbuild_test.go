@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devcell-sh/go-winkit/unattend"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -178,7 +180,7 @@ func TestCellBuildWindows_QEMU(t *testing.T) {
 				collectPantherLogs(t, qemuImgToolBase(t), filepath.Join(templateDir, ImageName("base", nil)), resultsDir)
 			}
 
-			if transcript, err := readGuestLog(answerImg, BootstrapLogName); err == nil {
+			if transcript, err := readGuestLog(answerImg, unattend.BootstrapLogName); err == nil {
 				steps := ParseBootstrapSteps(transcript)
 				t.Logf("bootstrap: %d ok, %d failed, %d unfinished", len(steps.OK), len(steps.Failed), len(steps.Unfinished))
 				require.Empty(t, steps.Failed, "bootstrap steps failed in the guest")

@@ -12,7 +12,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/DimmKirr/devcell/internal/isokit"
+	"github.com/devcell-sh/go-winkit/diag"
+	"github.com/devcell-sh/go-winkit/unattend"
+	"github.com/devcell-sh/go-winkit/winpe"
+
+	"github.com/devcell-sh/go-winkit/isokit"
 	"github.com/stretchr/testify/require"
 )
 
@@ -77,14 +81,14 @@ func testWindowsUnattendedInstall(t *testing.T, accel string) {
 
 	// autounattend.xml drives partitioning, account creation and OpenSSH
 	// setup; the FAT image is what Setup auto-discovers at boot.
-	cfg := DefaultAutounattendConfig()
+	cfg := unattend.DefaultConfig()
 	cfg.SSHPubKey = pubKey
 
 	// The NIC is virtio-net-pci and Windows ARM64 has no inbox driver for it,
 	// so without NetKVM the installed guest has no network — and SSH, the
 	// completion signal below, could never answer (CELL-363).
 	virtioISO := requireVirtioISO(t)
-	cfg.VirtIODrivers = NetKVMDriverPaths()
+	cfg.VirtIODrivers = unattend.NetKVMDriverPaths()
 	// Exercise the same guest config `cell rdp` depends on (CELL-369).
 	cfg.EnableRDP = true
 	// WinPE access channel: the agent snapshots Setup's Panther logs onto the
@@ -104,7 +108,7 @@ func testWindowsUnattendedInstall(t *testing.T, accel string) {
 	// — the image has no partition table, and Windows only mounts such a
 	// volume from removable media (CELL-362).
 	autounattendImg := filepath.Join(tmpDir, "autounattend.img")
-	require.NoError(t, BuildAnswerVolume(cfg, autounattendImg))
+	require.NoError(t, unattend.BuildAnswerVolume(cfg, autounattendImg))
 
 	diskPath, prepped := requireInstallDisk(t)
 
@@ -128,7 +132,7 @@ func testWindowsUnattendedInstall(t *testing.T, accel string) {
 		VarsPath:     varsPath,
 		QMPSocketDir: tmpDir,
 		DisplayType:  "none",
-		Accel: qemuAccel,
+		Accel:        qemuAccel,
 		// Throwaway VM: skip guest flushes, which are expensive under TCG.
 		DiskCacheMode: "unsafe",
 		VirtioISO:     virtioISO,
@@ -299,7 +303,7 @@ func testWindowsUnattendedInstall(t *testing.T, accel string) {
 		}
 
 		if !answerConsumed {
-			if s, ok := prevStats["usbfat0"]; ok && AnswerVolumeConsumed(s.ReadBytes) {
+			if s, ok := prevStats["usbfat0"]; ok && unattend.AnswerVolumeConsumed(s.ReadBytes) {
 				answerConsumed = true
 				t.Logf("[%d] autounattend.xml consumed by Setup (usbfat0 rd=%d)", attempt, s.ReadBytes)
 			} else if attempt >= answerConsumeDeadline {
@@ -429,7 +433,7 @@ func collectPantherLogs(t *testing.T, qemuBin, diskPath, resultsDir string) {
 		t.Logf("mmls failed (%v) — the disk may have no partition table yet", err)
 		return
 	}
-	offset, ok := ParseLargestPartitionOffset(string(mmls))
+	offset, ok := diag.ParseLargestPartitionOffset(string(mmls))
 	if !ok {
 		t.Logf("no usable partition found in the disk image:\n%s", mmls)
 		return
@@ -456,7 +460,7 @@ func collectPantherLogs(t *testing.T, qemuBin, diskPath, resultsDir string) {
 	}
 
 	found := 0
-	for _, want := range GuestLogPaths() {
+	for _, want := range diag.GuestLogPaths() {
 		inode, ok := inodes[want]
 		if !ok {
 			continue
@@ -482,7 +486,7 @@ func collectPantherLogs(t *testing.T, qemuBin, diskPath, resultsDir string) {
 	}
 	if found == 0 {
 		t.Logf("no guest logs on the disk image — Setup died before creating a Panther directory "+
-			"(searched %v at partition offset %s)", GuestLogPaths(), off)
+			"(searched %v at partition offset %s)", diag.GuestLogPaths(), off)
 	}
 }
 
@@ -677,11 +681,11 @@ func shutdownGuest(t *testing.T, spec Spec, qemuDone <-chan struct{}) {
 func reportGuestDiagnostics(t *testing.T, answerImage, resultsDir string) {
 	t.Helper()
 
-	if log, err := isokit.ReadFileFromFAT(answerImage, "/"+BootstrapLogName); err != nil {
-		t.Logf("bootstrap transcript unavailable (guest never ran %s): %v", BootstrapScriptName, err)
+	if log, err := isokit.ReadFileFromFAT(answerImage, "/"+unattend.BootstrapLogName); err != nil {
+		t.Logf("bootstrap transcript unavailable (guest never ran %s): %v", unattend.BootstrapScriptName, err)
 	} else {
 		t.Logf("=== bootstrap transcript ===\n%s", log)
-		dest := filepath.Join(resultsDir, BootstrapLogName)
+		dest := filepath.Join(resultsDir, unattend.BootstrapLogName)
 		if err := os.WriteFile(dest, log, 0o644); err == nil {
 			t.Logf("saved: %s", dest)
 		}
@@ -690,7 +694,7 @@ func reportGuestDiagnostics(t *testing.T, answerImage, resultsDir string) {
 	// WinPE agent artifacts: Setup log snapshots and any command output. All
 	// best-effort — their absence just means windowsPE never started the
 	// agent, which is itself worth logging.
-	for _, name := range []string{SetupActSnapshotName, SetupErrSnapshotName, AgentResultFile} {
+	for _, name := range []string{winpe.SetupActSnapshotName, winpe.SetupErrSnapshotName, winpe.AgentResultFile} {
 		data, err := isokit.ReadFileFromFAT(answerImage, "/"+name)
 		if err != nil {
 			t.Logf("%s: not written by the guest", name)
@@ -702,14 +706,14 @@ func reportGuestDiagnostics(t *testing.T, answerImage, resultsDir string) {
 		}
 	}
 
-	log, err := ReadGuestDiagnostics(answerImage)
+	log, err := unattend.ReadGuestDiagnostics(answerImage)
 	if err != nil {
 		t.Logf("guest diagnostics unavailable: %v", err)
 		return
 	}
 	t.Logf("=== guest diagnostics ===\n%s", log)
 
-	dest := filepath.Join(resultsDir, GuestDiagnosticsLogName)
+	dest := filepath.Join(resultsDir, unattend.GuestDiagnosticsLogName)
 	if err := os.WriteFile(dest, []byte(log), 0o644); err == nil {
 		t.Logf("saved: %s", dest)
 	}
@@ -722,10 +726,10 @@ func reportGuestDiagnostics(t *testing.T, answerImage, resultsDir string) {
 func verifyBootstrapRan(t *testing.T, answerImg, guestProgressLog string) {
 	t.Helper()
 
-	log, err := isokit.ReadFileFromFAT(answerImg, "/"+BootstrapLogName)
+	log, err := isokit.ReadFileFromFAT(answerImg, "/"+unattend.BootstrapLogName)
 	require.NoError(t, err,
 		"%s missing from the answer volume — FirstLogonCommands never ran %s",
-		BootstrapLogName, BootstrapScriptName)
+		unattend.BootstrapLogName, unattend.BootstrapScriptName)
 	transcript := string(log)
 	require.Contains(t, transcript, "devcell-bootstrap:",
 		"bootstrap transcript exists but holds no bootstrap output")

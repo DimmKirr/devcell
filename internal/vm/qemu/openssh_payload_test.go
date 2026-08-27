@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/devcell-sh/go-winkit/unattend"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -31,9 +33,9 @@ func parseOpenSSHMajorMinor(t *testing.T, tag string) (int, int) {
 // on Microsoft's release schedule rather than on a commit here, which is how
 // the guest silently moved from 9.5 to 10.0 and started failing.
 func TestOpenSSHReleaseURL_IsVersionPinned(t *testing.T) {
-	assert.NotContains(t, OpenSSHReleaseURL, "/latest/",
+	assert.NotContains(t, unattend.OpenSSHReleaseURL, "/latest/",
 		"the OpenSSH payload must be pinned to a tag, not tracked from latest")
-	assert.Contains(t, OpenSSHReleaseURL, OpenSSHVersion,
+	assert.Contains(t, unattend.OpenSSHReleaseURL, unattend.OpenSSHVersion,
 		"the release URL must name the pinned version")
 }
 
@@ -43,7 +45,7 @@ func TestOpenSSHReleaseURL_IsVersionPinned(t *testing.T) {
 // 0xC0000142 STATUS_DLL_INIT_FAILED, closing the connection right after
 // KEXINIT. Releases before 9.8 are a single sshd.exe with no such child.
 func TestOpenSSHRelease_PredatesPrivsepSplit(t *testing.T) {
-	major, minor := parseOpenSSHMajorMinor(t, OpenSSHVersion)
+	major, minor := parseOpenSSHMajorMinor(t, unattend.OpenSSHVersion)
 
 	got := fmt.Sprintf("%d.%d", major, minor)
 	assert.True(t, major < 9 || (major == 9 && minor < 8),
@@ -54,6 +56,6 @@ func TestOpenSSHRelease_PredatesPrivsepSplit(t *testing.T) {
 // old name is a silent no-op: the previously cached archive stays in place and
 // the guest keeps running the old binaries.
 func TestOpenSSHPayloadName_CarriesVersion(t *testing.T) {
-	assert.Contains(t, OpenSSHPayloadName, strings.TrimPrefix(OpenSSHVersion, "v"),
+	assert.Contains(t, unattend.OpenSSHPayloadName, strings.TrimPrefix(unattend.OpenSSHVersion, "v"),
 		"the cached payload name must carry the version so bumping it invalidates the cache")
 }

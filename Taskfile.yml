@@ -156,28 +156,30 @@ tasks:
         # own source — nix hashes `src` itself. So this only ever needs running
         # when go.mod/go.sum change; editing devcell code never invalidates it.
         #
-        # nix-update does the fake-hash → build → read `got:` dance that is the
-        # only way to learn a fixed-output hash, but with real error handling.
-        # It is declared in the devShell (flake.nix) precisely for this.
+        # Resolution is the fixed-output dance: build goModules with the current
+        # hash and read the `got:` value from the mismatch error. Deliberately
+        # NOT nix-update: its eval imports the flake via `getFlake <path>`,
+        # which copies the ENTIRE repo directory into the store — including
+        # gitignored VM images (test/ alone is >100 GB) — and fills the disk.
+        # `nix build` on a flake ref uses the git fetcher: tracked files only.
         FLAKE="{{.TASKFILE_DIR}}/flake.nix"
         OLD=$(grep 'vendorHash = "sha256-' "$FLAKE" | sed 's/.*"\(sha256-[^"]*\)".*/\1/')
-        echo "Resolving vendorHash for $(awk '{print $1}' go.sum | sort -u | wc -l | tr -d ' ') modules (this may take a minute)..."
-        if ! nix-update --flake --version=skip cell; then
-          echo "ERROR: could not resolve vendorHash — the build failed for a reason other than a hash mismatch." >&2
-          echo "       Check disk space and network, then re-run. flake.nix left untouched." >&2
+        echo "Verifying vendorHash against go.sum ($(awk '{print $1}' go.sum | sort -u | wc -l | tr -d ' ') modules — downloads on first run)..."
+        if OUT=$(nix build "{{.TASKFILE_DIR}}#cell.goModules" --no-link 2>&1); then
+          echo "vendorHash already correct ($OLD)"
+          exit 0
+        fi
+        NEW=$(printf '%s\n' "$OUT" | sed -n 's/.*got: *\(sha256-[^ ]*\).*/\1/p' | head -1)
+        if [ -z "$NEW" ]; then
+          echo "ERROR: goModules build failed for a reason other than a hash mismatch:" >&2
+          printf '%s\n' "$OUT" | tail -15 >&2
           exit 1
         fi
-        NEW=$(grep 'vendorHash = "sha256-' "$FLAKE" | sed 's/.*"\(sha256-[^"]*\)".*/\1/')
-        case "$NEW" in
-          sha256-AAAAAAAA*|"")
-            echo "ERROR: flake.nix left with a placeholder vendorHash — refusing to continue." >&2
-            git checkout -- "$FLAKE"
-            exit 1
-            ;;
-        esac
-        if [ "$OLD" = "$NEW" ]; then
-          echo "vendorHash already correct ($NEW)"
-          exit 0
+        sed "s|$OLD|$NEW|" "$FLAKE" > "$FLAKE.tmp" && mv "$FLAKE.tmp" "$FLAKE"
+        if ! nix build "{{.TASKFILE_DIR}}#cell.goModules" --no-link; then
+          echo "ERROR: resolved hash did not verify — flake.nix restored." >&2
+          git checkout -- "$FLAKE"
+          exit 1
         fi
         git add "$FLAKE"
         echo "vendorHash updated and staged: $OLD → $NEW"

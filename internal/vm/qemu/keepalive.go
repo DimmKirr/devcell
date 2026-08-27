@@ -1,6 +1,10 @@
 package qemu
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/devcell-sh/go-winkit/templates"
+)
 
 const (
 	// KeepAliveScriptName is the probe script's filename on the agent volume.
@@ -36,7 +40,7 @@ func GenerateKeepAliveScript() []byte {
 		ProbeFile:       KeepAliveProbeFile,
 	}
 
-	out := renderTemplate("keepalive.ps1.tmpl", data)
+	out := templates.Render("keepalive.ps1.tmpl", data)
 	out = strings.ReplaceAll(out, "\n", "\r\n")
 	return []byte(out)
 }

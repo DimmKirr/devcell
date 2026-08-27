@@ -9,8 +9,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/DimmKirr/devcell/internal/goregedit"
-	"github.com/DimmKirr/devcell/internal/isokit"
+	"github.com/devcell-sh/go-winkit/winpe"
+
+	"github.com/devcell-sh/go-regedit"
+	"github.com/devcell-sh/go-winkit/isokit"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -43,7 +45,7 @@ func TestWinPEVMPTransplant(t *testing.T) {
 		virtioISO := requireVirtioISO(t)
 
 		installWim := installWimFixture(t)
-		regExport := filepath.Join("..", "..", "goregedit", "testdata", "vmp-services.reg")
+		regExport := filepath.Join("testdata", "vmp-services.reg")
 		if _, err := os.Stat(regExport); err != nil {
 			t.Skip("no VMP service export available")
 		}
@@ -67,7 +69,7 @@ func TestWinPEVMPTransplant(t *testing.T) {
 			require.NoError(t, os.WriteFile(hostPath, data, 0644))
 		}
 
-		payloadCfg := WinPEPayloadConfig{
+		payloadCfg := winpe.PayloadConfig{
 			WPEInit:      true,
 			ProgressPort: `\\.\Global\` + ProgressPortName,
 			DriverINFs:   []string{`X:\devcell\drivers\vioserial\vioser.inf`},
@@ -75,11 +77,11 @@ func TestWinPEVMPTransplant(t *testing.T) {
 			SyncAgent:    true,
 		}
 		for name, data := range map[string][]byte{
-			"winpeshl.ini":            GenerateWinPEShellINI_NoSetup(),
-			"bootstrap.cmd":           GenerateWinPEBootstrapCmd(),
-			"bootstrap.ps1":           GenerateWinPEBootstrap(payloadCfg),
-			"agent.ps1":               GenerateWinPEAgent(payloadCfg),
-			WinPEHyperVDiagScriptName: GenerateWinPEHyperVDiagScript(payloadCfg.ProgressPort),
+			"winpeshl.ini":             winpe.GenerateShellINI_NoSetup(),
+			"bootstrap.cmd":            winpe.GenerateBootstrapCmd(),
+			"bootstrap.ps1":            winpe.GenerateBootstrap(payloadCfg),
+			"agent.ps1":                winpe.GenerateAgent(payloadCfg),
+			winpe.HyperVDiagScriptName: winpe.GenerateHyperVDiagScript(payloadCfg.ProgressPort),
 		} {
 			require.NoError(t, os.WriteFile(filepath.Join(injectDir, name), data, 0644))
 		}
@@ -104,7 +106,7 @@ func TestWinPEVMPTransplant(t *testing.T) {
 				continue
 			}
 			require.NoError(t,
-				goregedit.SetHypervisorLaunchType(bcd, goregedit.HypervisorLaunchAuto),
+				regedit.SetHypervisorLaunchType(bcd, regedit.HypervisorLaunchAuto),
 				"setting hypervisorlaunchtype in %s", bcd)
 			t.Logf("BCD patched: %s", bcd)
 		}
@@ -114,9 +116,9 @@ func TestWinPEVMPTransplant(t *testing.T) {
 
 		answerImg := filepath.Join(tmpDir, "answer.img")
 		require.NoError(t, isokit.CreateFATImage(answerImg, map[string][]byte{
-			"/" + AgentVolumeMarker:         []byte("1"),
-			"/" + AgentCommandFile:          []byte(WinPEHyperVDiagScriptCommand()),
-			"/" + WinPEHyperVDiagScriptName: GenerateWinPEHyperVDiagScript(payloadCfg.ProgressPort),
+			"/" + winpe.AgentVolumeMarker:    []byte("1"),
+			"/" + winpe.AgentCommandFile:     []byte(winpe.HyperVDiagScriptCommand()),
+			"/" + winpe.HyperVDiagScriptName: winpe.GenerateHyperVDiagScript(payloadCfg.ProgressPort),
 		}))
 
 		diskPath := filepath.Join(tmpDir, "disk.qcow2")
@@ -166,7 +168,7 @@ func TestWinPEVMPTransplant(t *testing.T) {
 			}
 		}
 
-		diagOut := readAnswerVolumeFile(t, answerImg, "/"+AgentResultFile)
+		diagOut := readAnswerVolumeFile(t, answerImg, "/"+winpe.AgentResultFile)
 		os.WriteFile(filepath.Join(resultsDir, "devcell-out.txt"), []byte(diagOut), 0644)
 		dumpSerialLog(t, serialLog, resultsDir)
 

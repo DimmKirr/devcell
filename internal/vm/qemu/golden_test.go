@@ -5,6 +5,9 @@ import (
 	"encoding/hex"
 	"testing"
 
+	"github.com/devcell-sh/go-winkit/unattend"
+	"github.com/devcell-sh/go-winkit/winpe"
+
 	"github.com/stretchr/testify/require"
 )
 
@@ -21,13 +24,13 @@ import (
 // reviewer sees both. A refactor that claims to change nothing must not touch
 // them at all.
 func TestGeneratedArtifacts_AreByteStable(t *testing.T) {
-	cfg := DefaultAutounattendConfig()
+	cfg := unattend.DefaultConfig()
 	cfg.Username = "dmitry"
 	cfg.Password = "rdp"
 	cfg.SSHPubKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIexample test@devcell"
-	cfg.VirtIODrivers = NetKVMDriverPaths()
+	cfg.VirtIODrivers = unattend.NetKVMDriverPaths()
 	cfg.EnableRDP = true
-	cfg.OpenSSHPayload = OpenSSHPayloadName
+	cfg.OpenSSHPayload = unattend.OpenSSHPayloadName
 	cfg.OpenSSHPayloadSize = 5026201
 	cfg.WinPEAgent = true
 
@@ -36,22 +39,22 @@ func TestGeneratedArtifacts_AreByteStable(t *testing.T) {
 		got  []byte
 		want string // sha256 of the rendered bytes
 	}{
-		{"autounattend.xml", GenerateAutounattendXML(cfg),
+		{"autounattend.xml", unattend.GenerateXML(cfg),
 			"cda4911e1a517553946024387f65e529fc46f89921fc04f24eb65768212874ec"},
-		// bootstrap hash updated 2026-08-23: OpenSSHPayloadName carries the
+		// bootstrap hash updated 2026-08-23: unattend.OpenSSHPayloadName carries the
 		// pinned version, and the payload's filename is rendered into the
 		// script. The installed-Windows path still ships Win32-OpenSSH —
 		// only the WinPE path moved to gosshd, and it renders no bootstrap.
-		{"devcell-bootstrap.ps1", GenerateBootstrapScript(cfg),
+		{"devcell-bootstrap.ps1", unattend.GenerateBootstrapScript(cfg),
 			"cc0bfbe535377c50e488e08021010f02c765684c7264f491529b658d739ef169"},
 		// diag hash updated 2026-08-13: added routing table, QEMU host
 		// connectivity, DNS resolution, and Get-NetIPConfiguration.
-		{"devcell-diag.ps1", GenerateGuestDiagnosticsScript(),
+		{"devcell-diag.ps1", unattend.GenerateGuestDiagnosticsScript(),
 			"c9414853b704ca0414de91ad507904dc04a2fad68963fcffe11eb55768a132fa"},
 		// winpe-agent hash updated 2026-08-22: CELL-453 template extraction
 		// (winpe-agent.ps1.tmpl) rendered the agent from a file instead of
 		// spliced Go strings.
-		{"winpe-agent", GenerateWinPEAgent(WinPEPayloadConfig{}),
+		{"winpe-agent", winpe.GenerateAgent(winpe.PayloadConfig{}),
 			"3b2f6af18f68d4a16bc9eeeebd29f90e0626baeb7ad2b3e6550a7161151f1e32"},
 		// The verify/boot pass scripts joined the golden set 2026-08-23 when
 		// the WSL pass4 script landed (CELL-456).

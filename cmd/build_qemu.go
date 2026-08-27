@@ -13,11 +13,16 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/devcell-sh/go-winkit/diag"
+	"github.com/devcell-sh/go-winkit/unattend"
+	"github.com/devcell-sh/go-winkit/wim"
+	"github.com/devcell-sh/go-winkit/winpe"
+
 	"github.com/DimmKirr/devcell/internal/cfg"
 	"github.com/DimmKirr/devcell/internal/config"
-	"github.com/DimmKirr/devcell/internal/isokit"
 	"github.com/DimmKirr/devcell/internal/ux"
 	"github.com/DimmKirr/devcell/internal/vm/qemu"
+	"github.com/devcell-sh/go-winkit/isokit"
 )
 
 // runBuildQemu creates a fully provisioned Windows VM template via QEMU.
@@ -279,7 +284,7 @@ func runBuildQemu(cellName, hostHome, baseDir, stack string, force, noCache, dry
 	// --- Phase 8: Generate autounattend ISO ---
 	var autounattendISO string
 	if err := pr.PhaseDetailed("Generating autounattend ISO", func() (string, error) {
-		cfg := qemu.DefaultAutounattendConfig()
+		cfg := unattend.DefaultConfig()
 		cfg.SSHPubKey = pubKey
 		// The guest's ComputerName was the literal "devcell-win" for every
 		// template and every cell. Name it after the cell, the way Docker cells
@@ -290,9 +295,9 @@ func runBuildQemu(cellName, hostHome, baseDir, stack string, force, noCache, dry
 		// (port allocation, forwarding, discovery) already ships — RDP just
 		// has to be on inside Windows (CELL-369).
 		cfg.EnableRDP = true
-		cfg.VirtIODrivers = append(qemu.NetKVMDriverPaths(), qemu.VioserialDriverPaths()...)
+		cfg.VirtIODrivers = append(unattend.NetKVMDriverPaths(), unattend.VioserialDriverPaths()...)
 		if len(opensshPayload) > 0 {
-			cfg.OpenSSHPayload = qemu.OpenSSHPayloadName
+			cfg.OpenSSHPayload = unattend.OpenSSHPayloadName
 			cfg.OpenSSHPayloadData = opensshPayload
 			cfg.OpenSSHPayloadSize = len(opensshPayload)
 		}
@@ -312,7 +317,7 @@ func runBuildQemu(cellName, hostHome, baseDir, stack string, force, noCache, dry
 
 		if winpeAgentDebugEnabled(os.Getenv) {
 			cfg.WinPEAgent = true
-			cfg.AgentCommand = qemu.WinPEDiagCommand
+			cfg.AgentCommand = winpe.DiagCommand
 			ux.Debugf("DEVCELL_QEMU_WINPE_AGENT=1: shipping WinPE agent + one-shot read-only diagnostic")
 		}
 
@@ -329,7 +334,7 @@ func runBuildQemu(cellName, hostHome, baseDir, stack string, force, noCache, dry
 		}
 
 		imgPath := filepath.Join(templateDir, "autounattend.img")
-		if err := qemu.BuildAnswerVolume(cfg, imgPath); err != nil {
+		if err := unattend.BuildAnswerVolume(cfg, imgPath); err != nil {
 			return "", fmt.Errorf("writing autounattend image: %w", err)
 		}
 		autounattendISO = imgPath
@@ -370,10 +375,10 @@ func runBuildQemu(cellName, hostHome, baseDir, stack string, force, noCache, dry
 		NestedVirt:    true,
 		MemoryGB:      budget.MemoryGB,
 		DiskCacheMode: budget.DiskCacheMode,
-		DiskPath:     templateDisk,
-		FirmwarePath: firmwarePath,
-		VarsPath:     varsPath,
-		VirtioISO:    virtioISO,
+		DiskPath:      templateDisk,
+		FirmwarePath:  firmwarePath,
+		VarsPath:      varsPath,
+		VirtioISO:     virtioISO,
 		// QEMU 11 on HVF: the firmware cannot boot USB CD-ROMs (CELL-429).
 		// SCSI CDs on a dedicated virtio-scsi-pci controller work — the
 		// answer volume's BOOTAA64.EFI chainloads the installer, and
@@ -540,7 +545,7 @@ func runBuildQemu(cellName, hostHome, baseDir, stack string, force, noCache, dry
 				}
 				if regs, err := qemu.QMPHumanMonitor(qmpSock, "info registers"); err == nil {
 					gotQMP = true
-					sig.PC = qemu.ExtractRegister(regs, "PC=")
+					sig.PC = diag.ExtractRegister(regs, "PC=")
 				}
 				if !gotQMP {
 					qmpFails++
@@ -644,7 +649,7 @@ func runBuildQemu(cellName, hostHome, baseDir, stack string, force, noCache, dry
 	// component logs streamed while they run. The dev-env test drives the same
 	// function, so what it proves is what this command does — previously each
 	// had its own loop and this one was the weaker.
-	steps := qemu.DefaultProvisionSteps(pubKey, qemu.SessionUsername(), qemu.DefaultSessionUser)
+	steps := qemu.DefaultProvisionSteps(pubKey, unattend.SessionUsername(), unattend.DefaultSessionUser)
 	ux.Debugf("provisioning: %d steps via SSH", len(steps))
 
 	if err := pr.PhaseDetailed(fmt.Sprintf("Provisioning (%d steps)", len(steps)), func() (string, error) {
@@ -778,7 +783,7 @@ func runQemuDevEnvFinalize(ctx context.Context, pr *ux.PhaseRunner, obs qemu.Obs
 	}
 	defer func() { _ = vm.ForceStop() }()
 
-	steps := qemu.DevEnvStages(qemu.SessionUsername(), shareTag, shareDrive)
+	steps := qemu.DevEnvStages(unattend.SessionUsername(), shareTag, shareDrive)
 	if err := pr.PhaseDetailed(fmt.Sprintf("Dev environment (%d stages)", len(steps)), func() (string, error) {
 		runErr := qemu.RunGuestStages(ctx, fin, steps, qemu.StageRunOptions{
 			SSHUser:    fin.SSHUser,
@@ -845,7 +850,7 @@ func runWimBuilder(ctx context.Context, templateDir, windowsISO, virtioISO, runD
 
 	// 1. Extract boot.wim and EFI boot files from Windows ISO
 	stageDir := filepath.Join(tmpDir, "stage")
-	if err := qemu.ExtractWinPEStage(windowsISO, stageDir); err != nil {
+	if err := winpe.ExtractStage(windowsISO, stageDir); err != nil {
 		return "", fmt.Errorf("extracting WinPE stage: %w", err)
 	}
 
@@ -913,7 +918,7 @@ func runWimBuilder(ctx context.Context, templateDir, windowsISO, virtioISO, runD
 		}
 	}
 
-	payloadCfg := qemu.WinPEPayloadConfig{
+	payloadCfg := winpe.PayloadConfig{
 		WPEInit:      true,
 		ProgressPort: `\\.\Global\` + qemu.ProgressPortName,
 		PollSeconds:  5,
@@ -929,16 +934,16 @@ func runWimBuilder(ctx context.Context, templateDir, windowsISO, virtioISO, runD
 	payloadCfg.DriverINFs = driverINFs
 
 	for name, gen := range map[string]func() []byte{
-		"winpeshl.ini":  func() []byte { return qemu.GenerateWinPEShellINI_NoSetup() },
-		"bootstrap.ps1": func() []byte { return qemu.GenerateWinPEBootstrap(payloadCfg) },
-		"agent.ps1":     func() []byte { return qemu.GenerateWinPEAgent(payloadCfg) },
+		"winpeshl.ini":  func() []byte { return winpe.GenerateShellINI_NoSetup() },
+		"bootstrap.ps1": func() []byte { return winpe.GenerateBootstrap(payloadCfg) },
+		"agent.ps1":     func() []byte { return winpe.GenerateAgent(payloadCfg) },
 	} {
 		if err := os.WriteFile(filepath.Join(injectDir, name), gen(), 0644); err != nil {
 			return "", fmt.Errorf("writing %s: %w", name, err)
 		}
 	}
 
-	if err := qemu.InjectWinPEPayload(bootWimPath, injectDir); err != nil {
+	if err := wim.InjectWinPEPayload(bootWimPath, injectDir); err != nil {
 		return "", fmt.Errorf("injecting WinPE payload: %w", err)
 	}
 
@@ -1086,7 +1091,7 @@ func runWimBuilder(ctx context.Context, templateDir, windowsISO, virtioISO, runD
 		return "", fmt.Errorf("builder timed out after %s", overallDeadline)
 	}
 
-	agentOut := readFATFile(sharedImg, "/"+qemu.AgentResultFile)
+	agentOut := readFATFile(sharedImg, "/"+winpe.AgentResultFile)
 	ux.Debugf("wim-builder output:\n%s", agentOut)
 
 	result := strings.TrimSpace(doneMarker)
@@ -1106,7 +1111,7 @@ func runWimBuilder(ctx context.Context, templateDir, windowsISO, virtioISO, runD
 
 	// 9. Apply registry patches — DISM created the service entries, now
 	// set correct Start values so they load at boot.
-	if err := qemu.PatchDevcellWim(cachedWim, 2, qemu.HyperVBootPatches()); err != nil {
+	if err := wim.PatchDevcellWim(cachedWim, 2, wim.HyperVBootPatches()); err != nil {
 		ux.Debugf("post-DISM registry patching failed: %v — devcell.wim may boot without Hyper-V services", err)
 	}
 

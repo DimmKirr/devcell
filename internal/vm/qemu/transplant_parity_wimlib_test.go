@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/DimmKirr/devcell/internal/wimlib"
+	"github.com/devcell-sh/go-wimlib"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

@@ -13,6 +13,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devcell-sh/go-winkit/diag"
+	"github.com/devcell-sh/go-winkit/unattend"
+	"github.com/devcell-sh/go-winkit/winpe"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -22,10 +26,12 @@ import (
 // dimensions:
 //
 //   - CD bus: usb-storage (inbox USBSTOR) vs scsi-cd (needs vioscsi drvload)
+//
 //   - accelerator: tcg vs hvf (hvf skipped on non-darwin)
+//
 //   - EL2: fake-el2 (virtualization=true, DISABLED) vs normal (plain virt)
 //
-//	go test -run TestWinPECDVisibility/scsi-cd/hvf/normal    -timeout 15m ./internal/vm/qemu/
+//     go test -run TestWinPECDVisibility/scsi-cd/hvf/normal    -timeout 15m ./internal/vm/qemu/
 func TestWinPECDVisibility(t *testing.T) {
 	if testing.Short() {
 		t.Skip("long: boots WinPE to check CD volume visibility")
@@ -124,10 +130,10 @@ func TestWinPECDVisibility(t *testing.T) {
 								require.NoError(t, PrepareVarsFile(fwPath, varsPath))
 							}
 
-							cfg := DefaultAutounattendConfig()
+							cfg := unattend.DefaultConfig()
 							cfg.SSHPubKey = "ssh-ed25519 AAAATESTKEY cd-visibility-test"
 							cfg.WinPEAgent = true
-							cfg.AgentCommand = WinPEDiagScriptCommand()
+							cfg.AgentCommand = winpe.DiagScriptCommand()
 
 							// Mirror cell build: always load vioscsi drivers
 							// (ARM64 WinPE has no inbox vioscsi — CELL-429).
@@ -148,7 +154,7 @@ func TestWinPECDVisibility(t *testing.T) {
 							t.Logf("embedded BOOTAA64.EFI (%d bytes, arch=%s) on answer volume", blInfo.Size, blInfo.Arch)
 
 							answerImg := filepath.Join(tmpDir, "autounattend.img")
-							require.NoError(t, BuildAnswerVolume(cfg, answerImg))
+							require.NoError(t, unattend.BuildAnswerVolume(cfg, answerImg))
 
 							serialLog := filepath.Join(resultsDir, "serial.log")
 							spec := Spec{
@@ -278,7 +284,7 @@ func TestWinPECDVisibility(t *testing.T) {
 								}
 
 								if regs, err := QMPHumanMonitor(qmpSock, "info registers"); err == nil {
-									pollPC = ExtractRegister(regs, "PC=")
+									pollPC = diag.ExtractRegister(regs, "PC=")
 								}
 
 								n := stall.Observe(StallSignal{ScreenHash: pollHash, ReadBytes: pollRead, PC: pollPC})
@@ -305,7 +311,7 @@ func TestWinPECDVisibility(t *testing.T) {
 								default:
 								}
 
-								doneMarker := readAnswerVolumeFile(t, answerImg, "/"+AgentDoneFile)
+								doneMarker := readAnswerVolumeFile(t, answerImg, "/"+winpe.AgentDoneFile)
 								if doneMarker != "" {
 									t.Logf("agent done marker appeared after %s (%d frames)", time.Since(start).Round(time.Second), frame)
 									break
@@ -323,7 +329,7 @@ func TestWinPECDVisibility(t *testing.T) {
 							cmd.Process.Kill()
 							cmd.Wait()
 
-							diagOut := readAnswerVolumeFile(t, answerImg, "/"+AgentResultFile)
+							diagOut := readAnswerVolumeFile(t, answerImg, "/"+winpe.AgentResultFile)
 
 							t.Logf("=== devcell-out.txt (WinPE diagnostics) ===\n%s", diagOut)
 							dumpSerialLog(t, serialLog, resultsDir)
@@ -344,7 +350,7 @@ func TestWinPECDVisibility(t *testing.T) {
 									"vioscsi should be loaded when AnswerDrivers ships the driver")
 							}
 
-							setupact := readAnswerVolumeFile(t, answerImg, "/"+SetupActSnapshotName)
+							setupact := readAnswerVolumeFile(t, answerImg, "/"+winpe.SetupActSnapshotName)
 							if setupact != "" {
 								t.Logf("=== setupact.log (tail) ===\n%s", setupact[max(0, len(setupact)-3000):])
 							}
@@ -419,18 +425,18 @@ func dumpStallDiagnostics(t *testing.T, qmpSock, resultsDir, qemuDebugLog string
 	// are landing or being swallowed by HVF. These are the registers
 	// EDK2 touches when it sees virtualization=true + VHE.
 	el2Regs := []string{
-		"HCR_EL2",     // hypervisor config — E2H bit enables VHE register aliasing
-		"VTTBR_EL2",   // stage-2 translation base — nonzero = guest tried nested virt
-		"SCTLR_EL2",   // EL2 system control — MMU/cache enable bits
-		"TCR_EL2",     // EL2 translation control
-		"VTCR_EL2",    // virtualization translation control
-		"ESR_EL2",     // exception syndrome — what exception stalled the CPU
-		"FAR_EL2",     // fault address
-		"ELR_EL2",     // exception link — return address from the trap
-		"SPSR_EL2",    // saved PSTATE from the trap
-		"MAIR_EL2",    // memory attribute indirection
-		"VBAR_EL2",    // EL2 vector base address
-		"CPTR_EL2",    // coprocessor trap register
+		"HCR_EL2",   // hypervisor config — E2H bit enables VHE register aliasing
+		"VTTBR_EL2", // stage-2 translation base — nonzero = guest tried nested virt
+		"SCTLR_EL2", // EL2 system control — MMU/cache enable bits
+		"TCR_EL2",   // EL2 translation control
+		"VTCR_EL2",  // virtualization translation control
+		"ESR_EL2",   // exception syndrome — what exception stalled the CPU
+		"FAR_EL2",   // fault address
+		"ELR_EL2",   // exception link — return address from the trap
+		"SPSR_EL2",  // saved PSTATE from the trap
+		"MAIR_EL2",  // memory attribute indirection
+		"VBAR_EL2",  // EL2 vector base address
+		"CPTR_EL2",  // coprocessor trap register
 	}
 	var el2Buf strings.Builder
 	fmt.Fprintf(&el2Buf, "=== EL2 system registers (stall) ===\n")

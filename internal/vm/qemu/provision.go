@@ -1,5 +1,7 @@
 package qemu
 
+import "github.com/devcell-sh/go-winkit/templates"
+
 // Build-time provisioning: the scripts `cell build --engine=qemu` runs in a
 // freshly installed guest over SSH. The script bodies live under
 // templates/provision/ — see templates.go for why they are files rather than
@@ -8,13 +10,13 @@ package qemu
 // GenerateSSHConfigScript returns a PowerShell script that configures
 // OpenSSH Server on Windows: sets default shell, authorized keys, and firewall rule.
 func GenerateSSHConfigScript(pubKey string) string {
-	return renderTemplate("provision/ssh-config.ps1.tmpl", struct{ PubKey string }{pubKey})
+	return templates.Render("provision/ssh-config.ps1.tmpl", struct{ PubKey string }{pubKey})
 }
 
 // GenerateCreateSessionUserScript returns a PowerShell script that creates a
 // local user matching the host user, with admin privileges and password-free SSH.
 func GenerateCreateSessionUserScript(username, password string) string {
-	return renderTemplate("provision/create-session-user.ps1.tmpl", struct {
+	return templates.Render("provision/create-session-user.ps1.tmpl", struct {
 		Username string
 		Password string
 	}{username, password})
@@ -24,7 +26,7 @@ func GenerateCreateSessionUserScript(username, password string) string {
 // WerFault and Defender real-time monitoring — the two biggest resource
 // wasters in a TCG-emulated build VM.
 func GenerateHardenEmulationScript() string {
-	return renderTemplate("provision/harden-emulation.ps1.tmpl", nil)
+	return templates.Render("provision/harden-emulation.ps1.tmpl", nil)
 }
 
 // GenerateDevToolsScript returns a PowerShell script that installs
@@ -35,14 +37,14 @@ func GenerateHardenEmulationScript() string {
 // still claimed ok because its stderr was discarded. The step now verifies
 // git actually landed and fails when it did not.
 func GenerateDevToolsScript() string {
-	return renderTemplate("provision/dev-tools.ps1.tmpl", nil)
+	return templates.Render("provision/dev-tools.ps1.tmpl", nil)
 }
 
 // GenerateProjectMountScript returns a PowerShell script that creates a
 // project directory. For QEMU, project files are shared via virtio-fs (see
 // the dev-env pipeline) or copied over SSH.
 func GenerateProjectMountScript(projectName, mountLetter string) string {
-	return renderTemplate("provision/project-mount.ps1.tmpl", struct{ ProjectName string }{projectName})
+	return templates.Render("provision/project-mount.ps1.tmpl", struct{ ProjectName string }{projectName})
 }
 
 // GenerateEnvSetupScript returns a PowerShell script that sets environment

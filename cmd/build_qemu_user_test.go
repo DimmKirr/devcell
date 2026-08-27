@@ -10,12 +10,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/devcell-sh/go-winkit/unattend"
+
 	"github.com/DimmKirr/devcell/internal/cfg"
 	"github.com/DimmKirr/devcell/internal/vm/qemu"
 )
 
 // The account the build connects to must be the account the answer file
-// creates. autounattend.xml creates qemu.SessionUsername() — the host's $USER,
+// creates. autounattend.xml creates unattend.SessionUsername() — the host's $USER,
 // mirroring HOST_USER in every other engine — and the guest bootstrap
 // authorizes the SSH key for that account and no other.
 //
@@ -28,7 +30,7 @@ import (
 func TestQemuBuildSSHUser_MatchesTheAccountTheAnswerFileCreates(t *testing.T) {
 	t.Setenv("USER", "dmitry")
 
-	if got, want := qemuBuildSSHUser(), qemu.SessionUsername(); got != want {
+	if got, want := qemuBuildSSHUser(), unattend.SessionUsername(); got != want {
 		t.Errorf("build connects as %q but the guest account is %q — provisioning cannot authenticate", got, want)
 	}
 }
@@ -38,7 +40,7 @@ func TestQemuBuildSSHUser_FallsBackToTheDefaultSessionUser(t *testing.T) {
 	os.Unsetenv("USER")
 	t.Setenv("USER", "")
 
-	if got, want := qemuBuildSSHUser(), qemu.DefaultSessionUser; got != want {
+	if got, want := qemuBuildSSHUser(), unattend.DefaultSessionUser; got != want {
 		t.Errorf("with no $USER the build must connect as %q, got %q", want, got)
 	}
 }

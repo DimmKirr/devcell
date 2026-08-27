@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/DimmKirr/devcell/internal/isokit"
+	"github.com/devcell-sh/go-winkit/unattend"
+	"github.com/devcell-sh/go-winkit/winpe"
+
+	"github.com/devcell-sh/go-winkit/isokit"
 )
 
 // GuestLog is one file the guest wrote to the answer volume, or the reason it
@@ -24,11 +27,11 @@ var errNoSuchGuestLog = errors.New("not written by the guest")
 // bootstrap writes the last two. Order is chronological, so a dump reads as the
 // install's own timeline.
 var guestLogNames = []string{
-	SetupActSnapshotName,
-	SetupErrSnapshotName,
-	AgentResultFile,
-	BootstrapLogName,
-	GuestDiagnosticsLogName,
+	winpe.SetupActSnapshotName,
+	winpe.SetupErrSnapshotName,
+	winpe.AgentResultFile,
+	unattend.BootstrapLogName,
+	unattend.GuestDiagnosticsLogName,
 }
 
 // CollectGuestLogs reads every log the guest may have written to the answer
