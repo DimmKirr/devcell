@@ -1,7 +1,6 @@
 package qemu
 
 import (
-	"archive/zip"
 	"context"
 	"fmt"
 	"io"
@@ -73,7 +72,7 @@ func DownloadWindowsISO(ctx context.Context, home, language string, noCache bool
 			// A cached image that firmware cannot boot (e.g. pure UDF with no
 			// El Torito, what hdiutil used to master) would burn a 20–40 min
 			// install cycle before failing at the EFI shell. Re-master instead.
-			if err := WindowsISOBootable(dest); err != nil {
+			if err := winpe.WindowsISOBootable(dest); err != nil {
 				obs.Logf("cached Windows ISO is unusable (%v) — re-mastering", err)
 				os.Remove(dest)
 				os.Remove(dest + ".done")
@@ -475,32 +474,3 @@ func DownloadPwsh(ctx context.Context, home string, noCache bool, obs Observer) 
 	return dest, nil
 }
 
-// ExtractPwshFiles reads a PowerShell zip and returns its contents as a map
-// keyed by answer-volume paths (e.g. "/pwsh/pwsh.exe"). The winpe.PwshVolDir
-// prefix is prepended automatically.
-func ExtractPwshFiles(zipPath string) (map[string][]byte, error) {
-	r, err := zip.OpenReader(zipPath)
-	if err != nil {
-		return nil, fmt.Errorf("opening pwsh zip: %w", err)
-	}
-	defer r.Close()
-
-	files := make(map[string][]byte)
-	for _, f := range r.File {
-		if f.FileInfo().IsDir() {
-			continue
-		}
-		rc, err := f.Open()
-		if err != nil {
-			return nil, fmt.Errorf("opening %s in zip: %w", f.Name, err)
-		}
-		data, err := io.ReadAll(rc)
-		rc.Close()
-		if err != nil {
-			return nil, fmt.Errorf("reading %s from zip: %w", f.Name, err)
-		}
-		volPath := "/" + winpe.PwshVolDir + "/" + f.Name
-		files[volPath] = data
-	}
-	return files, nil
-}

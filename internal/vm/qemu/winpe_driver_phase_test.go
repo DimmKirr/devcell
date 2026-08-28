@@ -90,7 +90,7 @@ func TestWindowsSetupDriverPhase(t *testing.T) {
 			varsPath := filepath.Join(tmpDir, "vars.fd")
 			require.NoError(t, PrepareVarsFile(fwPath, varsPath))
 
-			drivers, err := LoadWinPEStorageDrivers(virtioISO)
+			drivers, err := winpe.LoadWinPEStorageDrivers(virtioISO)
 			require.NoError(t, err)
 
 			cfg := unattend.DefaultConfig()

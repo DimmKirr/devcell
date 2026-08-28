@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/devcell-sh/go-winkit/unattend"
+	"github.com/devcell-sh/go-winkit/winpe"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -168,7 +169,7 @@ func TestCellBuildWindows_QEMU(t *testing.T) {
 					"serial.log must contain firmware boot manager output")
 			}
 
-			for _, l := range CollectGuestLogs(answerImg) {
+			for _, l := range winpe.CollectGuestLogs(answerImg) {
 				if l.Err != nil {
 					t.Logf("%s: %v", l.Name, l.Err)
 					continue
@@ -181,7 +182,7 @@ func TestCellBuildWindows_QEMU(t *testing.T) {
 			}
 
 			if transcript, err := readGuestLog(answerImg, unattend.BootstrapLogName); err == nil {
-				steps := ParseBootstrapSteps(transcript)
+				steps := winpe.ParseBootstrapSteps(transcript)
 				t.Logf("bootstrap: %d ok, %d failed, %d unfinished", len(steps.OK), len(steps.Failed), len(steps.Unfinished))
 				require.Empty(t, steps.Failed, "bootstrap steps failed in the guest")
 				require.Empty(t, steps.Unfinished, "bootstrap steps started but never reported — the guest died mid-step")
@@ -368,7 +369,7 @@ func extractLine(out, marker string) string {
 
 // readGuestLog pulls one log off the answer volume by name.
 func readGuestLog(answerImg, name string) (string, error) {
-	for _, l := range CollectGuestLogs(answerImg) {
+	for _, l := range winpe.CollectGuestLogs(answerImg) {
 		if l.Name == name {
 			if l.Err != nil {
 				return "", l.Err
@@ -376,7 +377,7 @@ func readGuestLog(answerImg, name string) (string, error) {
 			return string(l.Content), nil
 		}
 	}
-	return "", errNoSuchGuestLog
+	return "", winpe.ErrNoSuchGuestLog
 }
 
 // A three-hour build that reveals nothing until it exits is how a failure went

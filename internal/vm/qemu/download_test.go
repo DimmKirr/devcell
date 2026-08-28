@@ -1,13 +1,10 @@
 package qemu
 
 import (
-	"archive/zip"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/devcell-sh/go-winkit/winpe"
 
 	"github.com/devcell-sh/go-winkit/isokit"
 	"github.com/stretchr/testify/assert"
@@ -221,29 +218,6 @@ func TestPwshZipPath(t *testing.T) {
 	path := PwshZipPath("/home/user")
 	assert.Contains(t, path, ".devcell/cache/qemu")
 	assert.Contains(t, path, PwshZipName)
-}
-
-func TestExtractPwshFiles(t *testing.T) {
-	zipPath := filepath.Join(t.TempDir(), "test-pwsh.zip")
-	f, err := os.Create(zipPath)
-	require.NoError(t, err)
-	w := zip.NewWriter(f)
-	for _, name := range []string{"pwsh.exe", "pwsh.dll", "Modules/PSReadLine/PSReadLine.psd1"} {
-		fw, err := w.Create(name)
-		require.NoError(t, err)
-		_, err = fw.Write([]byte("content-" + name))
-		require.NoError(t, err)
-	}
-	require.NoError(t, w.Close())
-	require.NoError(t, f.Close())
-
-	files, err := ExtractPwshFiles(zipPath)
-	require.NoError(t, err)
-	assert.Len(t, files, 3)
-	assert.Contains(t, files, "/"+winpe.PwshVolDir+"/pwsh.exe")
-	assert.Contains(t, files, "/"+winpe.PwshVolDir+"/pwsh.dll")
-	assert.Contains(t, files, "/"+winpe.PwshVolDir+"/Modules/PSReadLine/PSReadLine.psd1")
-	assert.Equal(t, []byte("content-pwsh.exe"), files["/"+winpe.PwshVolDir+"/pwsh.exe"])
 }
 
 func TestAlpineConstants(t *testing.T) {

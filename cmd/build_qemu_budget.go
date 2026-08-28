@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/devcell-sh/go-winkit/unattend"
+	"github.com/devcell-sh/go-winkit/winpe"
 
 	"github.com/DimmKirr/devcell/internal/cfg"
 	"github.com/DimmKirr/devcell/internal/ux"
@@ -123,9 +124,9 @@ func qemuBuildSSHUser() string {
 // it here means a failed `cell build` explains itself on stdout instead of
 // leaving an image file for someone to mount by hand.
 func dumpGuestLogs(answerImagePath string) {
-	logs := qemu.CollectGuestLogs(answerImagePath)
+	logs := winpe.CollectGuestLogs(answerImagePath)
 	fmt.Printf("\n%s\n", ux.StyleSection.Render(" Guest logs (read from the answer volume)"))
-	fmt.Print(qemu.FormatGuestLogs(logs))
+	fmt.Print(winpe.FormatGuestLogs(logs))
 }
 
 // qemuBuildResources is what the accelerator choice implies for the rest of the

@@ -58,14 +58,12 @@ func TestGeneratedArtifacts_AreByteStable(t *testing.T) {
 			"3b2f6af18f68d4a16bc9eeeebd29f90e0626baeb7ad2b3e6550a7161151f1e32"},
 		// The verify/boot pass scripts joined the golden set 2026-08-23 when
 		// the WSL pass4 script landed (CELL-456).
-		// vmp-verify hash updated 2026-08-25: HCS boot diagnostics expanded.
-		{"devcell-vmp-verify.ps1", GenerateVMPVerifyScript(),
-			"c370431b4d5dabdae473e14412d4a9063e3dc6c446181f2e82204bdaae372386"},
-		// hcs-boot hash updated 2026-08-25: expanded HV/VID diagnostics.
-		{"devcell-hcs-boot.ps1", GenerateHCSBootScript(),
+		// vmp-verify hash updated 2026-08-27: moved to go-winkit; sc.exe → New-Service.
+		{"devcell-vmp-verify.ps1", winpe.GenerateVMPVerifyScript(),
+			"ae3e57b581c5c9f78ba46b80f8b3dceba6859225965dfb9c120ecd252f4b2a42"},
+		{"devcell-hcs-boot.ps1", winpe.GenerateHCSBootScript(),
 			"5f74309af5aa67d8f61787b02105db22da8d2b14105882c0fcc91b15c2fd7d11"},
-		// wsl-boot hash updated 2026-08-25: HCS boot diagnostics expanded.
-		{"devcell-wsl-boot.ps1", GenerateWSLBootScript(),
+		{"devcell-wsl-boot.ps1", winpe.GenerateWSLBootScript(),
 			"c9ea446dce74a348976966d6fd591f079ee291bea9f9d838e5e6e81fefdcedb1"},
 	} {
 		sum := hex.EncodeToString(func() []byte { h := sha256.Sum256(tc.got); return h[:] }())

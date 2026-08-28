@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
@@ -282,13 +281,6 @@ func verifySSHReachable(hostname string) error {
 // ---------------------------------------------------------------------------
 
 func sshRunNixInstall(hostname string) error {
-	// Locate the Vagrantfile.macOS nix-install script relative to this binary.
-	// In dev, use the images/ dir from the repo root.
-	vagrantfileDir := imagesDir()
-
-	// Extract nix-install script from images/Vagrantfile.macOS and run via SSH.
-	// We inline the script body directly rather than invoking vagrant, because the
-	// VM was created manually (no vagrant state directory exists).
 	nixScript := strings.Join([]string{
 		"set -euo pipefail",
 		"if command -v nix >/dev/null 2>&1; then",
@@ -301,8 +293,6 @@ func sshRunNixInstall(hostname string) error {
 		". /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh",
 		"echo \"Nix $(nix --version) installed successfully.\"",
 	}, "\n")
-	_ = vagrantfileDir // documents the source of truth; script is kept in sync manually
-
 	keyPaths := []string{
 		filepath.Join(os.Getenv("HOME"), ".vagrant.d", "insecure_private_keys", "vagrant.key.ed25519"),
 		filepath.Join(os.Getenv("HOME"), ".vagrant.d", "insecure_private_keys", "vagrant.key.rsa"),
@@ -330,20 +320,6 @@ func sshRunNixInstall(hostname string) error {
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin
 	return cmd.Run()
-}
-
-// imagesDir returns the absolute path to the images/ directory in the devcell repo.
-// In dev builds it walks up from the source file; in release builds it falls back
-// to a path relative to the binary.
-func imagesDir() string {
-	_, file, _, ok := runtime.Caller(0)
-	if ok {
-		// cmd/init_macos.go → cmd/ → repo root → images/
-		return filepath.Clean(filepath.Join(filepath.Dir(file), "..", "images"))
-	}
-	// Fallback: same directory as the binary
-	exe, _ := os.Executable()
-	return filepath.Join(filepath.Dir(exe), "images")
 }
 
 // ---------------------------------------------------------------------------

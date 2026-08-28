@@ -1,10 +1,7 @@
 package main
 
 import (
-	"strings"
 	"testing"
-
-	"github.com/devcell-sh/go-winkit/winpe"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -22,16 +19,4 @@ func TestWinPEAgentDebugEnabled(t *testing.T) {
 		return ""
 	}))
 	assert.False(t, winpeAgentDebugEnabled(func(string) string { return "" }))
-}
-
-func TestWinPEDiagCommand_ReadOnlyDiagnostics(t *testing.T) {
-	// Read-only on purpose: run 20260812T143146 died with 0x80070103
-	// (ERROR_NO_MORE_ITEMS — driver already loaded) after the agent's diag
-	// drvloaded the same INF that wpeinit had already picked up from
-	// $WinPEDriver$. The diagnostic must observe, never mutate.
-	assert.NotContains(t, winpe.DiagCommand, "drvload", "diag must not load drivers: it caused the double-load abort")
-	assert.Contains(t, winpe.DiagCommand, "diskpart.exe")
-	assert.Contains(t, winpe.DiagCommand, `reg.exe query HKLM\SYSTEM\CurrentControlSet\Services\vioscsi`)
-	assert.Contains(t, winpe.DiagCommand, "Panther")
-	assert.False(t, strings.Contains(winpe.DiagCommand, "\n"), "must stay a single line: the agent reads the first line via Get-Content")
 }

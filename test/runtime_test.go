@@ -323,13 +323,8 @@ func TestEnv_BasePermissions(t *testing.T) {
 }
 
 // TestEnv_ImageVersionStamps -- build metadata must be discoverable from
-// /etc/devcell/metadata.json (the canonical source per CELL-139). Legacy
-// /etc/devcell/{base,user}-image-version files are no longer the contract:
-// base-image-version is impure-only (written by images/Dockerfile but absent
-// on pure images), and user-image-version was never written by any build path
-// (entrypoint.sh:49 reads it with `|| echo unknown` fallback). metadata.json
-// is staged by both variants (nixhome/packages/image.nix:258 for pure;
-// internal/scaffold writes it for impure user builds).
+// /etc/devcell/metadata.json (the canonical source per CELL-139).
+// metadata.json is staged by the thin build (internal/scaffold).
 func TestEnv_ImageVersionStamps(t *testing.T) {
 	c := startEnvContainer(t)
 

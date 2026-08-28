@@ -60,11 +60,11 @@ func TestWinPEEchoProbe(t *testing.T) {
 			extractWinPEStage(t, winISO, stageDir)
 
 			// ── 2. Extract vioserial + viofs drivers from virtio-win ISO ──
-			vioserialDrivers, err := LoadWinPEVioserialDrivers(virtioISO)
+			vioserialDrivers, err := winpe.LoadWinPEVioserialDrivers(virtioISO)
 			require.NoError(t, err, "extracting vioserial drivers from virtio-win ISO")
 			t.Logf("extracted %d vioserial driver files", len(vioserialDrivers))
 
-			viofsDrivers, err := LoadWinPEViofsDrivers(virtioISO)
+			viofsDrivers, err := winpe.LoadWinPEViofsDrivers(virtioISO)
 			require.NoError(t, err, "extracting viofs drivers from virtio-win ISO")
 			t.Logf("extracted %d viofs driver files", len(viofsDrivers))
 

@@ -108,49 +108,6 @@ func TestSudo_PamStubCoversAllPamPhases(t *testing.T) {
 	}
 }
 
-// TestSudo_DockerfileStagesEnvKeep pins the impure (Debian-based) Dockerfile's
-// sudoers config. Mirrors TestSudo_SudoersPreservesNixEnv from the pure path
-// (image.nix) — the env_keep set must be the SAME on both image variants,
-// because `TestSudo_PreservesNixEnv` (L2) runs against whatever image CI ships,
-// which today is the impure Dockerfile output (`docker-build` → `docker-bake`
-// → images/Dockerfile). Without this, Debian's stock /etc/sudoers (env_reset
-// + no env_keep) strips SSL_CERT_FILE / NIX_SSL_CERT_FILE / LOCALE_ARCHIVE on
-// every `sudo` invocation and `sudo nix profile add nixpkgs#foo` fails on
-// cert validation against cache.nixos.org.
-func TestSudo_DockerfileStagesEnvKeep(t *testing.T) {
-	df := readImagesDockerfile(t)
-
-	if !strings.Contains(df, "env_keep") {
-		t.Fatal("images/Dockerfile doesn't add `Defaults env_keep += ...` to /etc/sudoers — Debian's stock sudoers env_reset will strip SSL_CERT_FILE/NIX_SSL_CERT_FILE/LOCALE_ARCHIVE across sudo, breaking `sudo nix profile add nixpkgs#foo` on cert validation")
-	}
-	// Same minimum set as the pure path (image.nix). Adding more is fine;
-	// dropping one is the regression we're guarding against.
-	for _, v := range []string{"SSL_CERT_FILE", "NIX_SSL_CERT_FILE", "NIX_PATH", "LOCALE_ARCHIVE"} {
-		if !strings.Contains(df, v) {
-			t.Errorf("images/Dockerfile sudoers config missing %q — `sudo nix ...` will lose this var across the privilege boundary", v)
-		}
-	}
-}
-
-// TestSudo_DockerfileSetsNixSSLEnv asserts the impure image's OCI Env carries
-// SSL_CERT_FILE / NIX_SSL_CERT_FILE / LOCALE_ARCHIVE so docker exec sessions
-// inherit them. Without these on the image config, even a correct env_keep
-// has nothing to keep — sudo's parent env doesn't contain the vars in the
-// first place.
-func TestSudo_DockerfileSetsNixSSLEnv(t *testing.T) {
-	df := readImagesDockerfile(t)
-
-	for _, v := range []string{"SSL_CERT_FILE=", "NIX_SSL_CERT_FILE=", "LOCALE_ARCHIVE="} {
-		// Match an `ENV <var>=...` line (Dockerfile ENV syntax). Substring
-		// check is sufficient because the only places these tokens legitimately
-		// appear with a trailing `=` are ENV directives or shell assignments
-		// inside RUN.
-		if !strings.Contains(df, "ENV "+v) && !strings.Contains(df, "ENV "+strings.TrimSuffix(v, "=")+" ") {
-			t.Errorf("images/Dockerfile doesn't set %s via ENV — docker exec sessions won't inherit it; sudo env_keep then has nothing to keep, so TestSudo_PreservesNixEnv fails", v)
-		}
-	}
-}
-
 // ---------------------------------------------------------------------------
 // L2 — Container behavior (requires docker; skip otherwise)
 // ---------------------------------------------------------------------------

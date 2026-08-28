@@ -137,7 +137,7 @@ func TestWinPECDVisibility(t *testing.T) {
 
 							// Mirror cell build: always load vioscsi drivers
 							// (ARM64 WinPE has no inbox vioscsi — CELL-429).
-							drivers, err := LoadWinPEStorageDrivers(virtioISO)
+							drivers, err := winpe.LoadWinPEStorageDrivers(virtioISO)
 							require.NoError(t, err, "extracting vioscsi drivers from virtio ISO")
 							cfg.AnswerDrivers = drivers
 
@@ -146,9 +146,9 @@ func TestWinPECDVisibility(t *testing.T) {
 							// EDK2 firmware has no ISO9660 driver — ISOs appear as
 							// BLK-only (no FS mapping), so the bootloader must live
 							// on a FAT volume the firmware can mount.
-							bootloader, err := InstallerBootloader(winISO)
+							bootloader, err := winpe.InstallerBootloader(winISO)
 							require.NoError(t, err, "extracting BOOTAA64.EFI from Windows ISO")
-							blInfo, err := ValidateBootloaderPE(bootloader)
+							blInfo, err := winpe.ValidateBootloaderPE(bootloader)
 							require.NoError(t, err, "validating BOOTAA64.EFI")
 							cfg.EFIBootLoader = bootloader
 							t.Logf("embedded BOOTAA64.EFI (%d bytes, arch=%s) on answer volume", blInfo.Size, blInfo.Arch)

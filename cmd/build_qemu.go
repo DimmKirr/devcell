@@ -165,7 +165,7 @@ func runBuildQemu(cellName, hostHome, baseDir, stack string, force, noCache, dry
 		if err != nil {
 			return "", fmt.Errorf("downloading PowerShell: %w", err)
 		}
-		files, err := qemu.ExtractPwshFiles(zipPath)
+		files, err := winpe.ExtractPwshFiles(zipPath)
 		if err != nil {
 			return "", fmt.Errorf("extracting PowerShell zip: %w", err)
 		}
@@ -220,7 +220,7 @@ func runBuildQemu(cellName, hostHome, baseDir, stack string, force, noCache, dry
 		qemuVersion, _ = qemu.QEMUVersion(binPath)
 		accel := qemu.Accelerator()
 
-		if info, err := qemu.ISOPreflight(windowsISO); err != nil {
+		if info, err := winpe.ISOPreflight(windowsISO); err != nil {
 			ux.Debugf("ISO preflight: %v", err)
 		} else {
 			ux.Debugf("ISO preflight: format=%s size=%d hasBootEFI=%v", info.Format, info.Size, info.HasBootEFI)
@@ -290,7 +290,7 @@ func runBuildQemu(cellName, hostHome, baseDir, stack string, force, noCache, dry
 		// template and every cell. Name it after the cell, the way Docker cells
 		// are named, and honour the same override chain
 		// (DEVCELL_HOSTNAME > [cell] hostname > computed).
-		cfg.Hostname = cellCfg.ResolvedHostname(qemu.GuestHostname(cellName))
+		cfg.Hostname = cellCfg.ResolvedHostname(winpe.GuestHostname(cellName))
 		// The template is what `cell rdp` connects to, and the host side
 		// (port allocation, forwarding, discovery) already ships — RDP just
 		// has to be on inside Windows (CELL-369).
@@ -309,7 +309,7 @@ func runBuildQemu(cellName, hostHome, baseDir, stack string, force, noCache, dry
 		// (CELL-429). Hard error: there is no fallback bus (ahci: no EDK2
 		// boot option; usb-bot: kills USB on QEMU 11/HVF; usb-storage
 		// mirror: cdboot crash).
-		drivers, err := qemu.LoadWinPEStorageDrivers(virtioISO)
+		drivers, err := winpe.LoadWinPEStorageDrivers(virtioISO)
 		if err != nil {
 			return "", fmt.Errorf("extracting WinPE storage drivers: %w", err)
 		}
@@ -321,10 +321,10 @@ func runBuildQemu(cellName, hostHome, baseDir, stack string, force, noCache, dry
 			ux.Debugf("DEVCELL_QEMU_WINPE_AGENT=1: shipping WinPE agent + one-shot read-only diagnostic")
 		}
 
-		bootloader, err := qemu.InstallerBootloader(windowsISO)
+		bootloader, err := winpe.InstallerBootloader(windowsISO)
 		if err != nil {
 			ux.Debugf("could not extract BOOTAA64.EFI from ISO (startup.nsh fallback will rely on CD reads): %v", err)
-		} else if blInfo, err := qemu.ValidateBootloaderPE(bootloader); err != nil {
+		} else if blInfo, err := winpe.ValidateBootloaderPE(bootloader); err != nil {
 			ux.Debugf("extracted BOOTAA64.EFI but it failed validation: %v", err)
 		} else {
 			cfg.EFIBootLoader = bootloader
@@ -855,11 +855,11 @@ func runWimBuilder(ctx context.Context, templateDir, windowsISO, virtioISO, runD
 	}
 
 	// 2. Extract vioserial + vioscsi drivers for WinPE injection
-	vioserialDrivers, err := qemu.LoadWinPEVioserialDrivers(virtioISO)
+	vioserialDrivers, err := winpe.LoadWinPEVioserialDrivers(virtioISO)
 	if err != nil {
 		return "", fmt.Errorf("loading vioserial drivers: %w", err)
 	}
-	vioscsiDrivers, err := qemu.LoadWinPEStorageDrivers(virtioISO)
+	vioscsiDrivers, err := winpe.LoadWinPEStorageDrivers(virtioISO)
 	if err != nil {
 		return "", fmt.Errorf("loading vioscsi drivers: %w", err)
 	}
@@ -875,24 +875,24 @@ func runWimBuilder(ctx context.Context, templateDir, windowsISO, virtioISO, runD
 	// EDK2 pflash can't read ISO9660 on SCSI CDs, so the FAT volume
 	// ships the bootloader and startup.nsh does the chainload.
 	var efiBootLoader []byte
-	if bl, err := qemu.InstallerBootloader(windowsISO); err != nil {
+	if bl, err := winpe.InstallerBootloader(windowsISO); err != nil {
 		ux.Debugf("wim-builder: could not extract BOOTAA64.EFI: %v", err)
-	} else if _, err := qemu.ValidateBootloaderPE(bl); err != nil {
+	} else if _, err := winpe.ValidateBootloaderPE(bl); err != nil {
 		ux.Debugf("wim-builder: BOOTAA64.EFI validation failed: %v", err)
 	} else {
 		efiBootLoader = bl
 		ux.Debugf("wim-builder: embedded BOOTAA64.EFI (%d bytes) on shared volume", len(bl))
 	}
 
-	var ops []qemu.WimPrepOp
-	ops = append(ops, qemu.HyperVPrepOps()...)
-	ops = append(ops, qemu.WSL2PrepOps()...)
-	ops = append(ops, qemu.OpenSSHPrepOps()...)
-	ops = append(ops, qemu.VirtIODriverPrepOps()...)
-	cfg := qemu.WimPrepConfig{
+	var ops []winpe.WimPrepOp
+	ops = append(ops, winpe.HyperVPrepOps()...)
+	ops = append(ops, winpe.WSL2PrepOps()...)
+	ops = append(ops, winpe.OpenSSHPrepOps()...)
+	ops = append(ops, winpe.VirtIODriverPrepOps()...)
+	cfg := winpe.WimPrepConfig{
 		Ops: ops,
 	}
-	sharedFiles := qemu.SharedVolumeFiles(cfg, efiBootLoader, pwshFiles)
+	sharedFiles := winpe.SharedVolumeFiles(cfg, efiBootLoader, pwshFiles)
 	sharedFiles["/boot.wim"] = bootWimData
 
 	sharedImg := filepath.Join(tmpDir, "shared.qcow2")
@@ -1071,7 +1071,7 @@ func runWimBuilder(ctx context.Context, templateDir, windowsISO, virtioISO, runD
 		elapsed := time.Since(start).Round(time.Second)
 		ux.Debugf("wim-builder: polling for completion (%s elapsed)", elapsed)
 
-		doneMarker = readFATFile(sharedImg, "/"+qemu.WimBuilderDoneFile)
+		doneMarker = readFATFile(sharedImg, "/"+winpe.WimBuilderDoneFile)
 		if doneMarker != "" {
 			ux.Debugf("wim-builder: done marker: %q (after %s)",
 				strings.TrimSpace(doneMarker), elapsed)

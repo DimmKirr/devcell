@@ -65,7 +65,7 @@ func TestWinPEHyperVInjection(t *testing.T) {
 			extractWinPEStage(t, winISO, stageDir)
 
 			// ── 1b. Extract vioserial driver for progress channel ──
-			vioserialDrivers, err := LoadWinPEVioserialDrivers(virtioISO)
+			vioserialDrivers, err := winpe.LoadWinPEVioserialDrivers(virtioISO)
 			require.NoError(t, err, "extracting vioserial drivers from virtio-win ISO")
 
 			// ── 1c. Extract diagnostic tools from install.wim ──

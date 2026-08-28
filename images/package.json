@@ -1,8 +1,0 @@
-{
-  "name": "devcell-tools",
-  "version": "1.0.0",
-  "description": "npm tools for devcell",
-  "private": true,
-  "dependencies": {
-  }
-}

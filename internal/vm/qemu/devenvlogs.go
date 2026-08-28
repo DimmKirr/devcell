@@ -46,15 +46,15 @@ func BuildControlVolume(destPath string, payload map[string][]byte) error {
 // CollectVolumeLogs reads the named files off a guest log volume — one entry
 // per name, absence reported rather than skipped, same contract as
 // CollectGuestLogs.
-func CollectVolumeLogs(imgPath string, names []string) []GuestLog {
-	logs := make([]GuestLog, 0, len(names))
+func CollectVolumeLogs(imgPath string, names []string) []winpe.GuestLog {
+	logs := make([]winpe.GuestLog, 0, len(names))
 	for _, name := range names {
 		data, err := isokit.ReadFileFromFAT(imgPath, "/"+name)
 		if err != nil {
-			logs = append(logs, GuestLog{Name: name, Err: fmt.Errorf("%w: %v", errNoSuchGuestLog, err)})
+			logs = append(logs, winpe.GuestLog{Name: name, Err: fmt.Errorf("%w: %v", winpe.ErrNoSuchGuestLog, err)})
 			continue
 		}
-		logs = append(logs, GuestLog{Name: name, Content: data})
+		logs = append(logs, winpe.GuestLog{Name: name, Content: data})
 	}
 	return logs
 }

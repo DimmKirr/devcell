@@ -18,6 +18,7 @@ import (
 
 	"github.com/devcell-sh/go-wimlib"
 	"github.com/devcell-sh/go-winkit/isokit"
+	"github.com/devcell-sh/go-winkit/winpe"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -119,13 +120,13 @@ func TestBuildWindows(t *testing.T) {
 			cfg.EnableRDP = true
 			cfg.InstallWimPath = `X:\devcell-install.wim`
 
-			drivers, err := LoadWinPEStorageDrivers(virtioISO)
+			drivers, err := winpe.LoadWinPEStorageDrivers(virtioISO)
 			require.NoError(t, err, "extracting vioscsi drivers from virtio ISO")
 			cfg.AnswerDrivers = drivers
 
-			bootloader, err := InstallerBootloader(winISO)
+			bootloader, err := winpe.InstallerBootloader(winISO)
 			require.NoError(t, err, "extracting BOOTAA64.EFI from Windows ISO")
-			blInfo, err := ValidateBootloaderPE(bootloader)
+			blInfo, err := winpe.ValidateBootloaderPE(bootloader)
 			require.NoError(t, err, "validating BOOTAA64.EFI")
 			cfg.EFIBootLoader = bootloader
 			t.Logf("embedded BOOTAA64.EFI (%d bytes, arch=%s) on answer volume", blInfo.Size, blInfo.Arch)
@@ -324,7 +325,7 @@ func TestBuildWindows(t *testing.T) {
 			// --- Collect guest logs ---
 			dumpSerialLog(t, serialLog, resultsDir)
 
-			for _, l := range CollectGuestLogs(answerImg) {
+			for _, l := range winpe.CollectGuestLogs(answerImg) {
 				if l.Err != nil {
 					t.Logf("%s: %v", l.Name, l.Err)
 					continue
@@ -335,7 +336,7 @@ func TestBuildWindows(t *testing.T) {
 
 			// --- Bootstrap assertions ---
 			if transcript, err := readGuestLog(answerImg, BootstrapLogName); err == nil {
-				steps := ParseBootstrapSteps(transcript)
+				steps := winpe.ParseBootstrapSteps(transcript)
 				t.Logf("bootstrap: %d ok, %d failed, %d unfinished", len(steps.OK), len(steps.Failed), len(steps.Unfinished))
 				assert.Empty(t, steps.Failed, "bootstrap steps failed in the guest")
 				assert.Empty(t, steps.Unfinished, "bootstrap steps started but never reported — the guest died mid-step")
@@ -388,7 +389,7 @@ func buildAndVerifyDevcellWim(t *testing.T, qemuBin, fwPath, winISO, virtioISO, 
 	require.NoError(t, ExtractWinPEStage(winISO, stageDir))
 
 	// ── 2. Extract vioserial drivers ──
-	vioserialDrivers, err := LoadWinPEVioserialDrivers(virtioISO)
+	vioserialDrivers, err := winpe.LoadWinPEVioserialDrivers(virtioISO)
 	require.NoError(t, err)
 
 	// ── 3. Create shared FAT volume with boot.wim + builder script ──
@@ -404,13 +405,13 @@ func buildAndVerifyDevcellWim(t *testing.T, qemuBin, fwPath, winISO, virtioISO, 
 	ops = append(ops, VirtIODriverPrepOps()...)
 	prepCfg := WimPrepConfig{Ops: ops}
 	var efiBootLoader []byte
-	if bl, err := InstallerBootloader(winISO); err == nil {
-		if _, err := ValidateBootloaderPE(bl); err == nil {
+	if bl, err := winpe.InstallerBootloader(winISO); err == nil {
+		if _, err := winpe.ValidateBootloaderPE(bl); err == nil {
 			efiBootLoader = bl
 			t.Logf("BOOTAA64.EFI: %d bytes", len(bl))
 		}
 	}
-	sharedFiles := SharedVolumeFiles(prepCfg, efiBootLoader, pwshFiles)
+	sharedFiles := winpe.SharedVolumeFiles(prepCfg, efiBootLoader, pwshFiles)
 	sharedFiles["/boot.wim"] = bootWimData
 
 	sharedImg := filepath.Join(wimDir, "shared.qcow2")

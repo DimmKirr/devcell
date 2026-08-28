@@ -56,7 +56,7 @@ func TestWinPEVMPTransplant(t *testing.T) {
 		stageDir := filepath.Join(tmpDir, "stage")
 		extractWinPEStage(t, winISO, stageDir)
 
-		vioserialDrivers, err := LoadWinPEVioserialDrivers(virtioISO)
+		vioserialDrivers, err := winpe.LoadWinPEVioserialDrivers(virtioISO)
 		require.NoError(t, err, "extracting vioserial drivers")
 
 		diagTools := extractDiagToolsFromInstallWim(t, winISO)
@@ -93,7 +93,7 @@ func TestWinPEVMPTransplant(t *testing.T) {
 		injectIntoBootWim(t, bootWimPath, injectDir, diagTools)
 
 		require.NoError(t,
-			TransplantVMPIntoBootWim(bootWimPath, installWim, regExport),
+			winpe.TransplantVMPIntoBootWim(bootWimPath, installWim, regExport),
 			"transplanting the VMP stack into boot.wim")
 
 		// winload only starts the hypervisor when the loader entry says so,

@@ -84,7 +84,7 @@ type wimSourceOverride struct {
 // returns the captured output. The caller supplies the WIM prep config and
 // the deadline; everything else (QEMU config, polling, stall detection) is
 // shared across subtests.
-func runWimBuilder(t *testing.T, accel string, cfg WimPrepConfig, deadline time.Duration, guestMemGB uint64, source *wimSourceOverride) wimBuilderRun {
+func runWimBuilder(t *testing.T, accel string, cfg winpe.WimPrepConfig, deadline time.Duration, guestMemGB uint64, source *wimSourceOverride) wimBuilderRun {
 	t.Helper()
 
 	qemuAccel := "tcg,thread=multi"
@@ -115,9 +115,9 @@ func runWimBuilder(t *testing.T, accel string, cfg WimPrepConfig, deadline time.
 	require.NoError(t, winpe.ExtractStage(winISO, stageDir))
 
 	// ── 2. Extract vioserial + vioscsi drivers ──
-	vioserialDrivers, err := LoadWinPEVioserialDrivers(virtioISO)
+	vioserialDrivers, err := winpe.LoadWinPEVioserialDrivers(virtioISO)
 	require.NoError(t, err)
-	vioscsiDrivers, err := LoadWinPEStorageDrivers(virtioISO)
+	vioscsiDrivers, err := winpe.LoadWinPEStorageDrivers(virtioISO)
 	require.NoError(t, err)
 
 	// ── 3. Create shared FAT volume with source WIM ──
@@ -183,16 +183,16 @@ func runWimBuilder(t *testing.T, accel string, cfg WimPrepConfig, deadline time.
 	}
 
 	var efiBootLoader []byte
-	if bl, err := InstallerBootloader(winISO); err != nil {
+	if bl, err := winpe.InstallerBootloader(winISO); err != nil {
 		t.Logf("could not extract BOOTAA64.EFI: %v", err)
-	} else if _, err := ValidateBootloaderPE(bl); err != nil {
+	} else if _, err := winpe.ValidateBootloaderPE(bl); err != nil {
 		t.Logf("BOOTAA64.EFI validation failed: %v", err)
 	} else {
 		efiBootLoader = bl
 		t.Logf("BOOTAA64.EFI: %d bytes", len(bl))
 	}
 
-	sharedFiles := SharedVolumeFiles(cfg, efiBootLoader, pwshFiles)
+	sharedFiles := winpe.SharedVolumeFiles(cfg, efiBootLoader, pwshFiles)
 	sharedFiles["/"+sourceWimName] = sourceWimData
 	if source != nil {
 		for name, data := range source.extraFiles {
@@ -632,13 +632,13 @@ func runWimBuilder(t *testing.T, accel string, cfg WimPrepConfig, deadline time.
 			break
 		}
 
-		if progressLogContains(guestProgressLog, WimBuilderCompleteToken) {
+		if progressLogContains(guestProgressLog, winpe.WimBuilderCompleteToken) {
 			t.Logf("builder complete token in progress log (after %s, %d frames)",
 				time.Since(start).Round(time.Second), frame)
 			break
 		}
 
-		doneMarker := readAnswerVolumeFile(t, sharedImg, "/"+WimBuilderDoneFile)
+		doneMarker := readAnswerVolumeFile(t, sharedImg, "/"+winpe.WimBuilderDoneFile)
 		if doneMarker != "" {
 			t.Logf("builder done marker: %q (after %s, %d frames)",
 				strings.TrimSpace(doneMarker), time.Since(start).Round(time.Second), frame)
@@ -739,7 +739,7 @@ func runWimBuilder(t *testing.T, accel string, cfg WimPrepConfig, deadline time.
 	agentOut := readAnswerVolumeFile(t, sharedImg, "/"+winpe.AgentResultFile)
 	t.Logf("=== builder output ===\n%s", agentOut)
 
-	doneMarker := readAnswerVolumeFile(t, sharedImg, "/"+WimBuilderDoneFile)
+	doneMarker := readAnswerVolumeFile(t, sharedImg, "/"+winpe.WimBuilderDoneFile)
 
 	return wimBuilderRun{
 		agentOut:   agentOut,
@@ -772,7 +772,7 @@ func TestWimBuilder(t *testing.T) {
 			}
 
 			t.Run("boot-wim", func(t *testing.T) {
-				cfg := WimPrepConfig{Ops: VirtIODriverPrepOps()}
+				cfg := winpe.WimPrepConfig{Ops: winpe.VirtIODriverPrepOps()}
 				run := runWimBuilder(t, accel, cfg, 10*time.Minute, 3, nil)
 
 				require.NotEmpty(t, run.doneMarker, "builder never completed")
@@ -845,10 +845,10 @@ func TestWimBuilder(t *testing.T) {
 			// (0x800f080c). Copying the signed binaries in and cloning the
 			// service keys bypasses CBS entirely.
 			t.Run("inject-features", func(t *testing.T) {
-				var ops []WimPrepOp
-				ops = append(ops, OpenSSHPrepOps()...)
-				ops = append(ops, VirtIODriverPrepOps()...)
-				cfg := WimPrepConfig{Ops: ops, TransplantVMP: true}
+				var ops []winpe.WimPrepOp
+				ops = append(ops, winpe.OpenSSHPrepOps()...)
+				ops = append(ops, winpe.VirtIODriverPrepOps()...)
+				cfg := winpe.WimPrepConfig{Ops: ops, TransplantVMP: true}
 				run := runWimBuilder(t, accel, cfg, 45*time.Minute, 5, nil)
 
 				require.NotEmpty(t, run.doneMarker, "builder never completed")
@@ -889,7 +889,7 @@ func TestWimBuilder(t *testing.T) {
 				require.NoError(t, wim.ExtractImage(2, extractDir, nil))
 
 				// --- Transplant results: binaries in place ---
-				for _, svc := range VMPTransplantServices() {
+				for _, svc := range winpe.VMPTransplantServices() {
 					fullPath := filepath.Join(extractDir, filepath.FromSlash(svc.File))
 					info, err := os.Stat(fullPath)
 					if err != nil {
@@ -900,7 +900,7 @@ func TestWimBuilder(t *testing.T) {
 				}
 
 				// --- Transplant results: VMP parity payload in place ---
-				for _, f := range VMPParityFiles() {
+				for _, f := range winpe.VMPParityFiles() {
 					fullPath := filepath.Join(extractDir, filepath.FromSlash(f.Dest))
 					info, err := os.Stat(fullPath)
 					if err != nil {
@@ -917,7 +917,7 @@ func TestWimBuilder(t *testing.T) {
 					[]string{`\Windows\System32\config\SYSTEM`}))
 				hive := filepath.Join(hiveDir, "Windows", "System32", "config", "SYSTEM")
 
-				for _, svc := range VMPTransplantServices() {
+				for _, svc := range winpe.VMPTransplantServices() {
 					key, err := regedit.ReadServiceKey(hive, `ControlSet001\Services\`+svc.Name)
 					if err != nil {
 						t.Errorf("  VMP service NOT REGISTERED: %s (%v)", svc.Name, err)
@@ -999,7 +999,7 @@ func TestWimBuilder(t *testing.T) {
 					if artifact != nil {
 						t.Skip("using DEVCELL_VMP_ARTIFACT; skipping build")
 					}
-					cfg := WimPrepConfig{Ops: VirtIODriverPrepOps(), TransplantVMP: true}
+					cfg := winpe.WimPrepConfig{Ops: winpe.VirtIODriverPrepOps(), TransplantVMP: true}
 					run := runWimBuilder(t, accel, cfg, 45*time.Minute, 5, nil)
 
 					require.Equal(t, "SUCCESS", run.doneMarker, "pass 1 must produce devcell.wim")
@@ -1024,7 +1024,7 @@ func TestWimBuilder(t *testing.T) {
 				require.NotEmpty(t, artifact, "pass 1 must produce devcell.wim")
 
 				t.Run("pass2-boot", func(t *testing.T) {
-					run := runWimBuilder(t, accel, WimPrepConfig{}, 30*time.Minute, 4,
+					run := runWimBuilder(t, accel, winpe.WimPrepConfig{}, 30*time.Minute, 4,
 						&wimSourceOverride{
 							name:        "devcell.wim",
 							data:        artifact,
@@ -1033,9 +1033,9 @@ func TestWimBuilder(t *testing.T) {
 							// DEVCELL_VMP_NO_BCD=1 to boot the artifact without
 							// telling winload to start the hypervisor.
 							patchBCD:     os.Getenv("DEVCELL_VMP_NO_BCD") == "",
-							agentCommand: VMPVerifyScriptCommand(),
+							agentCommand: winpe.VMPVerifyScriptCommand(),
 							extraFiles: map[string][]byte{
-								"/" + VMPVerifyScriptName: GenerateVMPVerifyScript(),
+								"/" + winpe.VMPVerifyScriptName: winpe.GenerateVMPVerifyScript(),
 							},
 						})
 
@@ -1043,14 +1043,14 @@ func TestWimBuilder(t *testing.T) {
 					// the builder's done marker. Reaching the banner is the
 					// proof that the transplanted image booted far enough to
 					// run an agent command.
-					require.Contains(t, run.agentOut, VMPVerifyBanner,
+					require.Contains(t, run.agentOut, winpe.VMPVerifyBanner,
 						"verify script did not start")
-					require.Contains(t, run.agentOut, VMPVerifyComplete,
+					require.Contains(t, run.agentOut, winpe.VMPVerifyComplete,
 						"verify script did not run to completion")
 
 					// SCM must recognise every cloned key. NOT_EXIST here means
 					// the key is in the hive but unusable at runtime.
-					for _, svc := range VMPTransplantServices() {
+					for _, svc := range winpe.VMPTransplantServices() {
 						assert.NotContains(t, run.agentOut, svc.Name+"_SC=NOT_EXIST",
 							"SCM does not recognise %s", svc.Name)
 						assert.NotContains(t, run.agentOut, svc.Name+"_START=ABSENT",
@@ -1101,7 +1101,7 @@ func TestWimBuilder(t *testing.T) {
 
 					var sshOut string
 					var sshErr error
-					run := runWimBuilder(t, accel, WimPrepConfig{}, 30*time.Minute, 4,
+					run := runWimBuilder(t, accel, winpe.WimPrepConfig{}, 30*time.Minute, 4,
 						&wimSourceOverride{
 							name:         "devcell.wim",
 							data:         artifact,
@@ -1150,23 +1150,23 @@ func TestWimBuilder(t *testing.T) {
 						"the ssh server must be running in the guest")
 				})
 				t.Run("pass3-hcs", func(t *testing.T) {
-					run := runWimBuilder(t, accel, WimPrepConfig{}, 60*time.Minute, 4,
+					run := runWimBuilder(t, accel, winpe.WimPrepConfig{}, 60*time.Minute, 4,
 						&wimSourceOverride{
 							name:         "devcell.wim",
 							data:         artifact,
 							asBootMedia:  true,
 							patchBCD:     true,
 							secureWorld:  true,
-							agentCommand: HCSBootScriptCommand(),
+							agentCommand: winpe.HCSBootScriptCommand(),
 							extraFiles: map[string][]byte{
-								"/" + HCSBootScriptName: GenerateHCSBootScript(),
-								"/" + HCSBootExeName:    buildHCSBootExe(t),
+								"/" + winpe.HCSBootScriptName: winpe.GenerateHCSBootScript(),
+								"/" + winpe.HCSBootExeName:    buildHCSBootExe(t),
 							},
 						})
 
-					require.Contains(t, run.agentOut, HCSBootBanner,
+					require.Contains(t, run.agentOut, winpe.HCSBootBanner,
 						"hcs-boot script did not start")
-					require.Contains(t, run.agentOut, HCSBootComplete,
+					require.Contains(t, run.agentOut, winpe.HCSBootComplete,
 						"hcs-boot script did not run to completion")
 
 					assert.Contains(t, run.agentOut, "VMCOMPUTE_START=OK",
@@ -1213,7 +1213,7 @@ func TestWimBuilder(t *testing.T) {
 						files[name] = data
 					}
 
-					run := runWimBuilder(t, accel, WimPrepConfig{}, 4*time.Hour, 4,
+					run := runWimBuilder(t, accel, winpe.WimPrepConfig{}, 4*time.Hour, 4,
 						&wimSourceOverride{
 							name:         "devcell.wim",
 							data:         artifact,
@@ -1250,7 +1250,7 @@ func TestWimBuilder(t *testing.T) {
 						files[name] = data
 					}
 
-					run := runWimBuilder(t, accel, WimPrepConfig{}, 4*time.Hour, 4,
+					run := runWimBuilder(t, accel, winpe.WimPrepConfig{}, 4*time.Hour, 4,
 						&wimSourceOverride{
 							name:         "devcell.wim",
 							data:         artifact,
@@ -1273,20 +1273,20 @@ func TestWimBuilder(t *testing.T) {
 				// until registered), so this is where the MSI-less install
 				// either works or names what is still missing.
 				t.Run("pass4-wsl", func(t *testing.T) {
-					run := runWimBuilder(t, accel, WimPrepConfig{}, 45*time.Minute, 4,
+					run := runWimBuilder(t, accel, winpe.WimPrepConfig{}, 45*time.Minute, 4,
 						&wimSourceOverride{
 							name:         "devcell.wim",
 							data:         artifact,
 							asBootMedia:  true,
 							patchBCD:     true,
 							secureWorld:  true,
-							agentCommand: WSLBootScriptCommand(),
+							agentCommand: winpe.WSLBootScriptCommand(),
 							extraFiles:   wslBootVolumeFiles(t),
 						})
 
-					require.Contains(t, run.agentOut, WSLBootBanner,
+					require.Contains(t, run.agentOut, winpe.WSLBootBanner,
 						"wsl-boot script did not start")
-					require.Contains(t, run.agentOut, WSLBootComplete,
+					require.Contains(t, run.agentOut, winpe.WSLBootComplete,
 						"wsl-boot script did not run to completion")
 
 					// If the engine files are absent the artifact predates the
@@ -1333,7 +1333,7 @@ func TestWimBuilder(t *testing.T) {
 					files[name] = data
 				}
 
-				run := runWimBuilder(t, accel, WimPrepConfig{}, 4*time.Hour, 4,
+				run := runWimBuilder(t, accel, winpe.WimPrepConfig{}, 4*time.Hour, 4,
 					&wimSourceOverride{
 						name:         "devcell.wim",
 						data:         artifact,
@@ -1360,7 +1360,7 @@ func TestWimBuilder(t *testing.T) {
 				var devcellWimData []byte
 
 				t.Run("pass1-drivers", func(t *testing.T) {
-					driverCfg := WimPrepConfig{Ops: VirtIODriverPrepOps()}
+					driverCfg := winpe.WimPrepConfig{Ops: winpe.VirtIODriverPrepOps()}
 					run := runWimBuilder(t, accel, driverCfg, 10*time.Minute, 3, nil)
 
 					require.Equal(t, "SUCCESS", run.doneMarker, "pass 1 (drivers) must succeed")
@@ -1377,8 +1377,8 @@ func TestWimBuilder(t *testing.T) {
 				require.NotEmpty(t, devcellWimData, "pass 1 must produce devcell.wim")
 
 				t.Run("pass2-features", func(t *testing.T) {
-					hypervCfg := WimPrepConfig{
-						Ops:       append(HyperVPrepOps(), WSL2PrepOps()...),
+					hypervCfg := winpe.WimPrepConfig{
+						Ops:       append(winpe.HyperVPrepOps(), winpe.WSL2PrepOps()...),
 						SourceWim: "devcell.wim",
 						TargetWim: "devcell.wim",
 					}
@@ -1479,7 +1479,7 @@ func requirePwshFiles(t *testing.T) map[string][]byte {
 		zipPath = p
 	}
 
-	files, err := ExtractPwshFiles(zipPath)
+	files, err := winpe.ExtractPwshFiles(zipPath)
 	require.NoError(t, err, "extracting pwsh files from %s", zipPath)
 	require.NotEmpty(t, files, "pwsh zip contained no files")
 	t.Logf("pwsh: %d files extracted from %s", len(files), filepath.Base(zipPath))
@@ -1500,7 +1500,7 @@ func progressLogContains(path, token string) bool {
 func buildHCSBootExe(t *testing.T) []byte {
 	t.Helper()
 
-	out := filepath.Join(t.TempDir(), HCSBootExeName)
+	out := filepath.Join(t.TempDir(), winpe.HCSBootExeName)
 	cmd := exec.Command("go", "build", "-o", out,
 		"github.com/devcell-sh/go-winkit/hcsvm/hcsboot")
 	cmd.Env = append(os.Environ(), "GOOS=windows", "GOARCH=arm64", "CGO_ENABLED=0")
@@ -1543,7 +1543,7 @@ func wslBootVolumeFiles(t *testing.T) map[string][]byte {
 	t.Helper()
 
 	files := map[string][]byte{
-		"/" + WSLBootScriptName: GenerateWSLBootScript(),
+		"/" + winpe.WSLBootScriptName: winpe.GenerateWSLBootScript(),
 	}
 
 	home, err := os.UserHomeDir()
@@ -1555,8 +1555,8 @@ func wslBootVolumeFiles(t *testing.T) map[string][]byte {
 	}
 	data, err := os.ReadFile(tarPath)
 	require.NoError(t, err)
-	files["/"+WSLRootfsVolName] = data
-	t.Logf("alpine rootfs on volume: %s (%d bytes)", WSLRootfsVolName, len(data))
+	files["/"+winpe.WSLRootfsVolName] = data
+	t.Logf("alpine rootfs on volume: %s (%d bytes)", winpe.WSLRootfsVolName, len(data))
 	return files
 }
 
