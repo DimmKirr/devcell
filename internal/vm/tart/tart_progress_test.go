@@ -9,9 +9,9 @@ import (
 
 func TestParseTartProgressLine_Percent(t *testing.T) {
 	tests := []struct {
-		line    string
-		want    TartProgress
-		wantOK  bool
+		line   string
+		want   TartProgress
+		wantOK bool
 	}{
 		{"0%", TartProgress{Percent: 0, Raw: "0%"}, true},
 		{"42%", TartProgress{Percent: 42, Raw: "42%"}, true},

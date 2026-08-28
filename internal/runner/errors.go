@@ -23,6 +23,12 @@ func TranslateError(err error) string {
 		strings.Contains(lower, "docker daemon"):
 		return "Docker isn't running. Start Docker Desktop / OrbStack / Colima and re-run."
 
+	// `[cell] kvm = true` on a daemon host without /dev/kvm. Checked before the
+	// generic device/disk cases because the fix is specific: enable nested
+	// virtualization, or turn the flag back off.
+	case strings.Contains(lower, "adding custom device") && strings.Contains(lower, "/dev/kvm"):
+		return "No /dev/kvm on the docker daemon host, but `[cell] kvm = true` asked for it. Enable nested virtualization (Colima: `vmType: vz` + `nestedVirtualization: true`, needs M3+/macOS 15+), or set `kvm = false` in .devcell.toml (or DEVCELL_KVM=0) to fall back to TCG emulation."
+
 	// Network glitch fetching a Nix-pinned source (registry hash != download hash).
 	// Usually transient; a retry fixes it.
 	case strings.Contains(lower, "hash mismatch in fixed-output derivation"):
@@ -53,7 +59,7 @@ func TranslateError(err error) string {
 
 	// Host UID mismatch — files in mounted project become owned by wrong UID.
 	case strings.Contains(lower, "uid") && strings.Contains(lower, "mismatch"):
-		return "UID mismatch between host and container. Pass `--uid $(id -u)` or check `[cell].docker_privileged` in .devcell.toml."
+		return "UID mismatch between host and container. Pass `--uid $(id -u)` or check `[docker].privileged` in .devcell.toml."
 
 	// Port already in use — common when multiple cells try to claim the same port.
 	case strings.Contains(lower, "address already in use") ||

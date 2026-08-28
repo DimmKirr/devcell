@@ -1,6 +1,5 @@
 .workspaces
 .worktrees
-nixhome/user.nix
 .venv
 .env.devcell
 *.egg-info
@@ -18,20 +17,46 @@ web/src/content/cell/
 bin/
 .playwright-mcp
 test/testdata/**/nixhome
+test/testdata/windows-arm64.*
+# Versioned ssh-able base images (13+ GB each) the dev-env test builds on.
+test/testdata/windows-sshable-*.qcow
+# WSL-ready checkpoints (drivers + share + WSL engine baked in).
+test/testdata/windows-wsl-*.qcow
+# Nix-provisioned checkpoints (WSL checkpoint + home-manager activated).
+test/testdata/windows-nix-*.qcow
+# UTM bundle: the debug VM's full disk + EFI vars + config (~24 GB).
+test/testdata/Windows.utm/
+# Kernel-bootable firmware shared with the host for task debug:windows:start.
+test/testdata/QEMU_EFI.kernel.fd
+# Stable $HOME for the CLI-driven Windows build test: holds the cached ISOs and
+# the installed template, so a rerun is a boot rather than a 2h47m reinstall.
+test/testdata/cellhome/
 test/results
+test/results_archive
 .devcell
 .devcell.toml
 .gocache
 .gomodcache
 docs/
 .nixhome-tmp/
+.rendered-ps1/
 
 # macOS
 .DS_Store
 
-# Personal dev config / scratch (not project state)
-.claude/
+# Personal dev config / scratch (not project state).
+# `.claude/*` (not `.claude/`) so the shared subdirs below can be re-included —
+# git cannot un-ignore a path inside an excluded directory.
+.claude/*
+!.claude/rules/
 .context/
+.scratch/
 .envrc
 .idea/
-CLAUDE.md
+CLAUDE.local.md
+# task debug:windows runtime state
+.tmp/
+
+# local multi-repo workspace
+go.work
+go.work.sum

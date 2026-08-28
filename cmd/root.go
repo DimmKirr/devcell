@@ -13,6 +13,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mattn/go-isatty"
+
 	"github.com/DimmKirr/devcell/internal/backup"
 	"github.com/DimmKirr/devcell/internal/cfg"
 	"github.com/DimmKirr/devcell/internal/config"
@@ -20,8 +22,10 @@ import (
 	"github.com/DimmKirr/devcell/internal/runner"
 	"github.com/DimmKirr/devcell/internal/scaffold"
 	"github.com/DimmKirr/devcell/internal/session"
+	"github.com/DimmKirr/devcell/internal/telemetry"
 	"github.com/DimmKirr/devcell/internal/ux"
 	"github.com/DimmKirr/devcell/internal/version"
+	"github.com/DimmKirr/devcell/internal/vm/libvirt"
 	"github.com/spf13/cobra"
 )
 
@@ -38,11 +42,8 @@ tools inside a consistent Docker dev environment.`,
 			fmt.Fprintf(os.Stderr, "cell %s\n", version.Full())
 		}
 		// Set runner globals BEFORE any subcommand RunE so that
-		// runner.UserImageTag() / UserImageTagPure() / PickImageTag() reflect
-		// the project's stack from .devcell.toml. Without this, `cell build`
-		// (which fires buildCmd.RunE, NOT rootCmd.RunE) leaves Stack="" and
-		// tags every image as devcell-user:base-pure regardless of what
-		// stack the nix derivation actually built.
+		// runner.UserImageTag() / PickImageTag() reflect the project's
+		// stack from .devcell.toml.
 		//
 		// Best-effort: silently skips when config can't be loaded (e.g.,
 		// `cell --help` before cwd has a .devcell.toml, or stray cwd).
@@ -59,12 +60,75 @@ tools inside a consistent Docker dev environment.`,
 		if len(args) > 0 {
 			return fmt.Errorf("unknown command %q — run 'cell --help' for usage", args[0])
 		}
+		// A valid default_command never reaches here — applyDefaultCommand
+		// rewrites os.Args before Execute, so cobra dispatches to the
+		// subcommand directly (with user args forwarded). Only an invalid
+		// value falls through; surface the validation error.
+		if c, err := config.LoadFromOS(); err == nil {
+			cellCfg := cfg.LoadFromOS(c.ConfigDir, c.BaseDir)
+			if dc := cellCfg.Cell.ResolvedDefaultCommand(); dc != "" {
+				if err := cfg.ValidateDefaultCommand(dc); err != nil {
+					return err
+				}
+			}
+		}
 		return cmd.Help()
 	},
 }
 
+// rewriteDefaultCommand injects the configured default command in front of
+// the user's args (os.Args[1:]) so flags and positionals reach the inner
+// binary: `cell -c` becomes `cell claude -c`. This must happen BEFORE
+// rootCmd.Execute() — the root command parses flags, so an agent flag like
+// -c would die there as "unknown shorthand flag" and never reach the
+// default-command dispatch in RunE. An explicit subcommand, help/version,
+// or completion invocation is left untouched.
+func rewriteDefaultCommand(args []string, defaultCmd string, knownCmds map[string]bool) []string {
+	if defaultCmd == "" {
+		return args
+	}
+	if len(args) > 0 {
+		first := args[0]
+		if knownCmds[first] {
+			return args
+		}
+		switch first {
+		case "--help", "-h", "--version", "help", "completion", "__complete", "__completeNoDesc":
+			return args
+		}
+	}
+	return append([]string{defaultCmd}, args...)
+}
+
+// applyDefaultCommand resolves default_command from config and rewrites
+// os.Args in place. Invalid values are left for rootCmd.RunE to report.
+func applyDefaultCommand() {
+	c, err := config.LoadFromOS()
+	if err != nil {
+		return
+	}
+	cellCfg := cfg.LoadFromOS(c.ConfigDir, c.BaseDir)
+	dc := cellCfg.Cell.ResolvedDefaultCommand()
+	if dc == "" || cfg.ValidateDefaultCommand(dc) != nil {
+		return
+	}
+	known := make(map[string]bool)
+	for _, sub := range rootCmd.Commands() {
+		known[sub.Name()] = true
+		for _, a := range sub.Aliases {
+			known[a] = true
+		}
+	}
+	rewritten := rewriteDefaultCommand(os.Args[1:], dc, known)
+	os.Args = append([]string{os.Args[0]}, rewritten...)
+	osArgs = os.Args // keep scanFlag/scanStringFlag on the rewritten argv
+}
+
 func Execute() {
 	defer ux.CloseDebugLog()
+	telemetry.Init(resolveConfigDir())
+	defer telemetry.Close()
+	applyDefaultCommand()
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "\n cell %s\n", version.Full())
 		baseVer, userVer := runner.ImageVersions(context.Background())
@@ -85,13 +149,18 @@ func init() {
 	rootCmd.PersistentFlags().Bool("plain-text", false, "disable spinners, use plain log output (for CI/non-TTY)")
 	rootCmd.PersistentFlags().Bool("debug", false, "plain-text mode plus stream full build log to stdout")
 	rootCmd.PersistentFlags().String("format", "text", "output format: text, yaml, or json")
-	rootCmd.PersistentFlags().String("engine", "docker", "execution engine: docker, vagrant, or tart")
+	rootCmd.PersistentFlags().String("engine", "docker", "execution engine: docker, vagrant, tart, qemu, or libvirt")
+	rootCmd.PersistentFlags().Bool("local", false, "pin --engine=qemu to the in-container path (skip the libvirt auto-default)")
 	rootCmd.PersistentFlags().Bool("background", false, "keep VM/container running after shell exit")
 	rootCmd.PersistentFlags().Bool("macos", false, "use macOS VM via Vagrant (alias for --engine=vagrant)")
 	rootCmd.PersistentFlags().String("vagrant-provider", "utm", "Vagrant provider (e.g. utm)")
 	rootCmd.PersistentFlags().String("vagrant-box", "", "Vagrant box name override")
 	rootCmd.PersistentFlags().String("tart-ssh-port", "", "SSH port for tart engine (default: 22)")
 	rootCmd.PersistentFlags().String("tart-ssh-host", "", "SSH host for tart engine (default: localhost)")
+	rootCmd.PersistentFlags().String("qemu-ssh-port", "", "SSH port for QEMU engine (default: 2222)")
+	rootCmd.PersistentFlags().String("qemu-ssh-host", "", "SSH host for QEMU engine (default: 127.0.0.1)")
+	rootCmd.PersistentFlags().String("qemu-windows-iso", "", "path to Windows ARM64 ISO for QEMU engine")
+	rootCmd.PersistentFlags().String("qemu-display", "", "QEMU display: none, cocoa, sdl (default: none)")
 	rootCmd.PersistentFlags().String("base-image", "", "core image for scaffold Dockerfile (default: ghcr.io/devcell-sh/devcell:core-local)")
 	rootCmd.PersistentFlags().String("cell-name", "", "cell name for persistent home (~/.devcell/<name>)")
 	rootCmd.AddCommand(
@@ -100,6 +169,8 @@ func init() {
 		opencodeCmd,
 		geminiCmd,
 		shellCmd,
+		startCmd,
+		stopCmd,
 		buildCmd,
 		initCmd,
 		vncCmd,
@@ -108,6 +179,7 @@ func init() {
 		modulesCmd,
 		serveCmd,
 		authCmd,
+		telemetryCmd,
 	)
 }
 
@@ -148,21 +220,22 @@ func applyOutputFlagsWithLog(commandName string) {
 
 // cellBoolFlags are boolean flags consumed by devcell: strip the flag token only.
 var cellBoolFlags = map[string]bool{
-	"--build":      true,
-	"--background": true,
-	"--dry-run":    true,
-	"--plain-text": true,
-	"--debug":      true,
-	"--macos":      true,
-	"--ollama":     true,
-	"--impure":     true, // legacy Dockerfile path (CELL-165 canonical name)
-	"--debian":     true, // deprecated alias for --impure (kept stripping for one release)
-	"--pure":       true, // silent no-op after flip; kept stripped from forwarded args
-	"--nix-daemon": true, // enable nix-daemon inside container for runtime package installs
-	"--thin":       true, // thin image mode — nix store on Docker volume (CELL-156)
-	"--no-thin":    true, // disable thin mode (thick image)
-	"--thick":      true, // alias for --no-thin
+	"--build":        true,
+	"--background":   true,
+	"--dry-run":      true,
+	"--plain-text":   true,
+	"--debug":        true,
+	"--macos":        true,
+	"--ollama":       true,
+	"--openrouter":   true,
+	"--nix-daemon":   true, // enable nix-daemon inside container for runtime package installs
+	"--thin":         true, // thin image mode (default)
+	"--no-thin":      true, // legacy, ignored
+	"--thick":        true, // legacy, ignored
 	"--no-1password": true, // skip [op] documents resolution at cell-open (CELL-42)
+	"--local":        true, // pin --engine=qemu to the in-container path (CELL-378)
+	"--auto-cleanup": true, // run the CELL-334 root reaper at cell start (CELL-390)
+	"--skip-flake":   true, // skip project-level flake.nix install (CELL-447)
 }
 
 // cellStringFlags are string flags consumed by devcell: strip the flag token
@@ -173,6 +246,10 @@ var cellStringFlags = map[string]bool{
 	"--vagrant-box":      true,
 	"--tart-ssh-port":    true,
 	"--tart-ssh-host":    true,
+	"--qemu-ssh-port":    true,
+	"--qemu-ssh-host":    true,
+	"--qemu-windows-iso": true,
+	"--qemu-display":     true,
 	"--base-image":       true,
 	"--cell-name":        true,
 	"--format":           true,
@@ -232,10 +309,7 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 		os.Setenv("DEVCELL_CELL_NAME", sn)
 	}
 
-	// First-run: scaffold .devcell.toml + .devcell/ files. Image acquisition
-	// is owned by the unified pure-path orchestrator below — scaffolding
-	// must not eagerly invoke a docker build that the next step won't even
-	// use (the orchestrator's first try is a registry pull of the pure tag).
+	// First-run: scaffold .devcell.toml + .devcell/ files.
 	if !scaffold.IsInitialized(c.BaseDir) {
 		globalCfg := cfg.LoadFromOS(c.ConfigDir, c.BaseDir)
 		result, err := RunInitFlow(InitFlowOptions{
@@ -262,6 +336,7 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 		engine = "vagrant"
 	}
 	if engine == "vagrant" {
+		telemetry.Track("command_run", map[string]any{"command": filepath.Base(binary), "engine": "vagrant"})
 		vagrantBox := scanStringFlag("--vagrant-box")
 		if vagrantBox == "" {
 			vagrantBox = cellCfgForEngine.Cell.VagrantBox
@@ -288,7 +363,37 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 		)
 	}
 	if engine == "tart" {
+		telemetry.Track("command_run", map[string]any{"command": filepath.Base(binary), "engine": "tart"})
 		return runTartAgent(
+			binary, defaultFlags, userArgs,
+			cellCfgForEngine,
+			c.BaseDir, c.HostHome, c.CellName,
+			scanFlag("--dry-run"),
+			scanFlag("--background"),
+			scanFlag("--debug"),
+		)
+	}
+	// qemu→libvirt auto-default (CELL-378): in a Docker cell on a Mac,
+	// local qemu can only mean TCG; the host's HVF behind libvirtd is the
+	// only fast path. Explicit intent wins: --local pins local qemu.
+	if ok, reason := libvirt.ShouldDefaultToLibvirt(engine, scanFlag("--local"), libvirt.DefaultProbes()); ok {
+		fmt.Printf(" engine: qemu → libvirt (%s)\n", reason)
+		engine = "libvirt"
+	}
+	if engine == "qemu" {
+		telemetry.Track("command_run", map[string]any{"command": filepath.Base(binary), "engine": "qemu"})
+		return runQemuAgent(
+			binary, defaultFlags, userArgs,
+			cellCfgForEngine,
+			c.BaseDir, c.HostHome, c.CellName,
+			scanFlag("--dry-run"),
+			scanFlag("--background"),
+			scanFlag("--debug"),
+		)
+	}
+	if engine == "libvirt" {
+		telemetry.Track("command_run", map[string]any{"command": filepath.Base(binary), "engine": "libvirt"})
+		return runLibvirtAgent(
 			binary, defaultFlags, userArgs,
 			cellCfgForEngine,
 			c.BaseDir, c.HostHome, c.CellName,
@@ -313,46 +418,27 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 	runner.Modules = cellCfg.Cell.Modules
 	runner.PerCellImage = cellCfg.Cell.ResolvedPerCellImage()
 
-	// After the 2026-05-15 flip (CELL-183), pure is the default for every
-	// agent (claude, shell, codex, gemini). `--impure` (CELL-165 canonical;
-	// `--debian` is a deprecated alias) opts into the legacy Dockerfile
-	// build path. `--pure` is kept as a silent no-op (same as default).
-	impure := scanFlag("--impure") || scanFlag("--debian")
-	thin := !scanFlag("--no-thin") && !scanFlag("--thick") && (scanFlag("--thin") || cellCfg.Cell.ResolvedThin())
-	if !thin {
-		runner.WarnThickDeprecation()
-	}
+	thin := true
+	telemetry.TrackCommandRun(filepath.Base(binary), "docker", runner.Stack, runner.Modules, thin)
 	imageTag := func() string {
-		if thin {
-			return runner.PickImageTagThin()
-		}
-		return runner.PickImageTag(impure)
+		return runner.PickImageTagThin()
 	}
 	dryRun := scanFlag("--dry-run")
 	explicitBuild := scanFlag("--build")
 
 	// Resolve available GUI ports — probe and bump if already bound
-	if cellCfg.Cell.ResolvedGUI() {
+	if cellCfg.GUI.ResolvedEnabled() {
 		c.ResolveAvailablePorts()
 	}
 
 	// ── Image acquisition ────────────────────────────────────────────────────
-	// Default (pure): runner.AcquireImage walks the fallback chain —
-	// local → pull-pure → pull-impure → build (pure if host nix, otherwise
-	// impure docker build). Each closure performs its action; on the last
-	// action's failure the user sees a joined chain error.
-	//
-	// --impure (legacy CLI flag): autoDetect (missing image) + staleness check.
-	// Staleness is not consulted for the pure path: pure images are
-	// content-addressed, so a local tag equals what a rebuild would produce
-	// from the same flake.lock.
-	//
 	// Daemon preflight: surface a single actionable error if docker is down
 	// before any pull/build attempt (CELL-44). Skip in dry-run.
 	if !dryRun {
 		if err := runner.DockerDaemonReachable(context.Background()); err != nil {
 			return err
 		}
+		logDockerDiagnostics(context.Background(), c)
 	}
 	// ── Thin image path (CELL-156) ──────────────────────────────────────────
 	if thin {
@@ -375,75 +461,6 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 				fmt.Println(reason)
 			}
 			if err := runBuildThin(c, "", "", false); err != nil {
-				return err
-			}
-		}
-	} else if !impure {
-		// HasNix means "nix is on PATH AND can build the target arch from
-		// this host" (the preflight catches macOS-without-linux-builder).
-		// When false the orchestrator skips ActionBuildPure and runs
-		// ActionBuildImpure instead — docker build still works without nix
-		// on the host because nix runs inside the build.
-		_, nixErr := exec.LookPath("nix")
-		hasNix := nixErr == nil && runner.PreflightNixBuilder(runner.Stack) == nil
-
-		err := runner.AcquireImage(context.Background(), runner.AcquireDeps{
-			Inputs: runner.LaunchInputs{
-				DryRun:        dryRun,
-				ExplicitBuild: explicitBuild,
-				LocalExists:   runner.ImageExists(context.Background(), imageTag()),
-				HasNix:        hasNix,
-			},
-			PullPure: pullWithSpinner(
-				runner.StackImageTagPure(runner.Stack), runner.PullAndTagPure),
-			PullImpure: pullWithSpinner(
-				runner.StackImageTagImpure(runner.Stack), runner.PullAndTagImpure),
-			BuildPure: func(context.Context) error {
-				// Passing "" means runBuildPure falls back to the TOML-resolved
-				// stack (see CELL-93). The user overrides via `cell build
-				// --stack <name>` explicitly.
-				return runBuildPure(c, "")
-			},
-			BuildImpure: func(ctx context.Context) error {
-				return runFallbackImpureBuild(ctx, c, cellCfg)
-			},
-		})
-		if err != nil {
-			return err
-		}
-	} else {
-		needsBuild := explicitBuild && !dryRun
-		autoDetect := !dryRun && !explicitBuild &&
-			!runner.ImageExists(context.Background(), imageTag())
-		var changedFiles []string
-		staleImage := false
-		if !dryRun && !explicitBuild && !autoDetect {
-			changedFiles, staleImage = runner.ChangedBuildFiles(c.BuildDir)
-		}
-		if needsBuild || autoDetect || staleImage {
-			if autoDetect {
-				fmt.Printf(" No %s image found — building automatically\n", imageTag())
-			} else if staleImage {
-				fmt.Printf(" Build context changed (%s in %s) — rebuilding %s\n",
-					strings.Join(changedFiles, ", "), c.BuildDir, imageTag())
-				if ux.Verbose {
-					for _, f := range changedFiles {
-						if diff := runner.DiffBuildFile(c.BuildDir, f); diff != "" {
-							fmt.Printf("\n%s\n", diff)
-						}
-					}
-				}
-			}
-			if err := config.EnsureBuildDir(c.BuildDir); err != nil {
-				return fmt.Errorf("ensure build dir: %w", err)
-			}
-			if err := syncNixhomeWithConfirmation(c, cellCfg); err != nil {
-				return err
-			}
-			if err := scaffold.RegenerateBuildContext(c.BuildDir, cellCfg); err != nil {
-				return fmt.Errorf("regenerate build context: %w", err)
-			}
-			if err := buildImageWithSpinner(c.BuildDir, needsBuild, "Building devcell image", false); err != nil {
 				return err
 			}
 		}
@@ -536,6 +553,23 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 		return err
 	}
 
+	// CELL-390: read-only nix-store health report (thin mode only).
+	// Non-fatal; mutation only behind the explicit --auto-cleanup opt-in.
+	// CELL-391: may nudge when this cell's lock is behind the volume's
+	// newest — the only error path is the user explicitly answering "n".
+	if err := nixStorePhase(ctx, pr, thin, c.BaseDir, cellCfg.Cell.StaleWarningEnabled()); err != nil {
+		return err
+	}
+
+	// CELL-418: check that the thin image's baked-in nix closure is still
+	// alive on the shared volume. A dead closure means GC reaped the store
+	// paths — prompt for rebuild (auto-rebuild in non-TTY).
+	if err := closureCheckPhase(ctx, pr, thin, imageTag(), func() error {
+		return runBuildThin(c, "", "", false)
+	}); err != nil {
+		return err
+	}
+
 	_ = pr.Phase("Backup", func() error { return backup.Backup(c.CellHome, time.Now()) })
 
 	// Pin the container to the exact image ID so a concurrent `cell build`
@@ -556,25 +590,64 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 		}
 		return short, nil
 	})
+	if ux.Verbose && !dryRun {
+		source := runner.DockerHostPath(c.BaseDir)
+		probeVolume := ""
+		if thin {
+			probeVolume = runner.ThinStoreVolume()
+		}
+		out, probeErr := runner.ProbeDockerBind(
+			ctx, imageID, probeVolume, source, ".devcell.toml")
+		if probeErr != nil {
+			ux.Debugf("docker bind probe: FAILED source=%q marker=.devcell.toml: %v output=%q",
+				source, probeErr, out)
+		} else {
+			ux.Debugf("docker bind probe: OK source=%q %s", source, out)
+		}
+	}
 
-	// Inject system prompt for Claude Code — container context (mounts, host
-	// paths, constraints) plus the operator/project prompt resolved from env
-	// vars and devcell.toml. See runner.AssembleSystemPrompt for the full
-	// source-precedence chain. Fatal: a bad system prompt produces a broken
+	// Inject prompts for Claude Code as generated files. The overlay carries
+	// container context (mounts, host paths, constraints) plus the append
+	// prompt; the base, when configured, replaces Claude Code's built-in
+	// prompt entirely. See runner.ResolveSystemPrompt / ResolveAppendPrompt
+	// for the source-precedence chains. Fatal: a bad prompt produces a broken
 	// claude session, fail loudly here.
 	if binary == "claude" {
 		if err := pr.PhaseDetailed("System prompt", func() (string, error) {
-			prompt, spErr := runner.AssembleSystemPrompt(c, cellCfg, runner.ResolveOpts{
-				EnvFile:    os.Getenv("DEVCELL_SYSTEM_PROMPT_FILE"),
-				EnvInline:  os.Getenv("DEVCELL_SYSTEM_PROMPT"),
-				CellCfg:    cellCfg,
-				CfgBaseDir: c.BaseDir,
+			flags, spErr := claudePromptFlags(c, cellCfg, runner.ResolveOpts{
+				EnvFile:         os.Getenv("DEVCELL_SYSTEM_PROMPT_FILE"),
+				EnvInline:       os.Getenv("DEVCELL_SYSTEM_PROMPT"),
+				AppendEnvFile:   os.Getenv("DEVCELL_APPEND_SYSTEM_PROMPT_FILE"),
+				AppendEnvInline: os.Getenv("DEVCELL_APPEND_SYSTEM_PROMPT"),
+				CellCfg:         cellCfg,
+				CfgBaseDir:      c.BaseDir,
 			})
 			if spErr != nil {
 				return "", spErr
 			}
-			defaultFlags = append(defaultFlags, "--append-system-prompt", prompt)
-			return fmt.Sprintf("%d bytes", len(prompt)), nil
+			defaultFlags = append(defaultFlags, flags...)
+			return flags[len(flags)-1], nil
+		}); err != nil {
+			return fmt.Errorf("system prompt: %w", err)
+		}
+	}
+
+	if binary == "codex" {
+		if err := pr.PhaseDetailed("System prompt", func() (string, error) {
+			flags, spErr := codexPromptFlags(c, cellCfg, runner.ResolveOpts{
+				AppendEnvFile:   os.Getenv("DEVCELL_APPEND_SYSTEM_PROMPT_FILE"),
+				AppendEnvInline: os.Getenv("DEVCELL_APPEND_SYSTEM_PROMPT"),
+				CellCfg:         cellCfg,
+				CfgBaseDir:      c.BaseDir,
+			})
+			if spErr != nil {
+				return "", spErr
+			}
+			defaultFlags = append(defaultFlags, flags...)
+			if cellCfg.LLM.SystemPrompt != "" || cellCfg.LLM.SystemPromptFile != "" {
+				ux.Warn("[llm].system_prompt is set but Codex has no way to replace its built-in prompt. This setting is ignored for cell codex. Only [llm].append_system_prompt is wired.")
+			}
+			return "developer_instructions", nil
 		}); err != nil {
 			return fmt.Errorf("system prompt: %w", err)
 		}
@@ -659,6 +732,44 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 		ux.Debugf("1Password: skipped (--no-1password / DEVCELL_NO_1PASSWORD)")
 	}
 
+	// Resolve deferred API keys that depend on 1Password secrets.
+	if extraEnv != nil {
+		if extraEnv["ANTHROPIC_BASE_URL"] == openRouterAnthropicBaseURL {
+			if err := ResolveOpenRouterKey(extraEnv); err != nil {
+				return err
+			}
+		} else if v, ok := extraEnv["OPENROUTER_API_KEY"]; ok && v == "" {
+			// codex/opencode set an empty placeholder to request the key.
+			if err := FillOpenRouterKey(extraEnv); err != nil {
+				return err
+			}
+		}
+	}
+
+	// Inject a deterministic session ID so agents resume the same
+	// conversation when relaunched in the same tmux pane.
+	// Claude Code: CLAUDE_CODE_SESSION_ID env var names a new/existing session.
+	// OpenCode: --session requires an existing ID (no create-or-resume), so
+	// we skip it. OpenCode's --continue resumes the last session in the
+	// project directory, which the user can invoke manually.
+	if binary == "claude" {
+		sessID := sessionUUID(c.AppName)
+		if extraEnv == nil {
+			extraEnv = make(map[string]string)
+		}
+		extraEnv["CLAUDE_CODE_SESSION_ID"] = sessID
+	}
+
+	// Validate and prepare WireGuard configs before docker run.
+	if cfg.WireguardEnabled(cellCfg) {
+		if err := cfg.ValidateWireguard(cellCfg); err != nil {
+			return fmt.Errorf("wireguard config: %w", err)
+		}
+		if err := runner.PrepareWireguard(c.CellHome, cellCfg); err != nil {
+			return fmt.Errorf("wireguard prepare: %w", err)
+		}
+	}
+
 	// Final ✓ row before docker exec takes the TTY. The phase checklist
 	// stays on screen — the child TUI (claude, codex, …) draws on the row
 	// immediately below `✓ Cell ready`, so users keep the full boot story
@@ -692,6 +803,13 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 		defer bootWatcher.Close()
 	}
 
+	// CELL-447: detect project flake.nix and prompt for trust host-side.
+	skipFlake := scanFlag("--skip-flake")
+	trustFlake := false
+	if !skipFlake {
+		trustFlake = resolveTrustFlake(c.BaseDir, c.CellHome)
+	}
+
 	spec := runner.RunSpec{
 		Config:       c,
 		CellCfg:      cellCfg,
@@ -700,11 +818,15 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 		UserArgs:     userArgs,
 		Debug:        ux.Verbose,
 		NixDaemon:    scanFlag("--nix-daemon"),
+		SkipFlake:    skipFlake,
+		TrustFlake:   trustFlake,
 		Image:        imageID,
 		ExtraEnv:     extraEnv,
 		InheritEnv:   inheritEnv,
 		ThinImage:    thin,
 		BootDir:      bootDirEnv,
+		TTY:          isatty.IsTerminal(os.Stdin.Fd()),
+		Detach:       startDetach,
 	}
 	argv := runner.BuildArgv(spec, runner.OsFS, exec.LookPath)
 
@@ -714,6 +836,18 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 	}
 
 	cmd := exec.Command(argv[0], argv[1:]...)
+
+	if startDetach {
+		// Detached: docker run -d prints container ID and exits.
+		// Suppress stdout (container ID) and only show errors.
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("start container: %w", err)
+		}
+		fmt.Printf("Container %s started\n", c.ContainerName)
+		return nil
+	}
+
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -722,6 +856,7 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 	if sessErr != nil {
 		ux.Debugf("session begin: %v", sessErr)
 	}
+	startTime := time.Now()
 
 	if err := cmd.Start(); err != nil {
 		if sess != nil {
@@ -749,6 +884,7 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 	}()
 
 	waitErr := cmd.Wait()
+	telemetry.TrackCommandFinish(filepath.Base(binary), time.Since(startTime).Milliseconds(), waitErr == nil)
 	if sess != nil {
 		if err := sess.Finish(c.BaseDir, waitErr); err != nil {
 			ux.Debugf("session finish: %v", err)
@@ -792,125 +928,46 @@ func scanStringFlag(flag string) string {
 	return ""
 }
 
-// buildImageWithSpinner runs docker build with a spinner.
-// In verbose mode (--debug), build output streams to stdout.
-// In quiet mode, output is captured and replayed to stderr only on failure.
-// If silent is true, the spinner is cleared on success (no lingering output).
-func buildImageWithSpinner(configDir string, noCache bool, label string, silent bool) error {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+// resolveTrustFlake checks if the project has a flake.nix and whether the
+// user has trusted it. On first encounter, prompts interactively and caches
+// the answer in cellHome. Returns true if DEVCELL_FLAKE_TRUST=1 should be
+// passed to the container.
+func resolveTrustFlake(baseDir, cellHome string) bool {
+	flakePath := filepath.Join(baseDir, "flake.nix")
+	if _, err := os.Stat(flakePath); err != nil {
+		return false
+	}
 
-	var buf bytes.Buffer
-	var out io.Writer = &buf
-	if ux.Verbose {
-		out = os.Stdout
+	trustFile := filepath.Join(cellHome, "flake-trust")
+	if data, err := os.ReadFile(trustFile); err == nil {
+		return strings.TrimSpace(string(data)) == "1"
 	}
-	sp := ux.NewProgressSpinner(label)
-	if err := runner.BuildImage(ctx, configDir, noCache, ux.Verbose, out); err != nil {
-		sp.Fail(label + " failed")
-		if !ux.Verbose {
-			if hint := ux.ClassifyBuildOutput(buf.String()); hint != nil {
-				ux.PrintBuildErrorHint(hint)
-			} else if buf.Len() > 0 {
-				fmt.Fprint(os.Stderr, buf.String())
-			}
-		}
-		return err
+
+	if !isatty.IsTerminal(os.Stdin.Fd()) {
+		ux.Debugf("project-flake: found flake.nix but stdin is not a terminal — skipping trust prompt")
+		return false
 	}
-	if silent {
-		sp.Stop()
+
+	fmt.Printf("\n Found flake.nix in %s\n", baseDir)
+	fmt.Printf(" Install its packages into this cell? [Y/n] ")
+
+	var answer string
+	fmt.Scanln(&answer)
+	answer = strings.TrimSpace(answer)
+
+	trusted := answer == "" || strings.HasPrefix(strings.ToLower(answer), "y")
+
+	_ = os.MkdirAll(cellHome, 0o755)
+	if trusted {
+		_ = os.WriteFile(trustFile, []byte("1\n"), 0o644)
 	} else {
-		sp.Success(label)
+		_ = os.WriteFile(trustFile, []byte("0\n"), 0o644)
 	}
-	return nil
-}
 
-// pullWithSpinner returns an AcquireDeps closure that calls pullFn with the
-// active stack, wrapping it in a spinner for non-verbose mode. Used to build
-// both the pure-pull and impure-pull dependencies from a single shape.
-func pullWithSpinner(
-	remoteTag string,
-	pullFn func(context.Context, string, bool) error,
-) func(context.Context) error {
-	return func(ctx context.Context) error {
-		label := fmt.Sprintf("Pulling %s", remoteTag)
-		var sp *ux.ProgressSpinner
-		if !ux.Verbose {
-			sp = ux.NewProgressSpinner(label)
-		} else {
-			ux.Debugf("%s", label)
-		}
-		if err := pullFn(ctx, runner.Stack, ux.Verbose); err != nil {
-			if sp != nil {
-				sp.Stop()
-			}
-			ux.Debugf("pull %s failed: %v", remoteTag, err)
-			return err
-		}
-		if sp != nil {
-			sp.Success("Pulled " + remoteTag)
-		}
-		return nil
-	}
-}
-
-// syncNixhomeWithConfirmation syncs the configured nixhome path into the
-// build context, prompting the user before overwriting an existing sync that
-// came from a different source. No-op when no nixhome path is configured.
-//
-// Only the impure (Dockerfile) build path needs this — runBuildPure resolves
-// and consumes nixhome internally via runner.ResolvePureNixhomeRef.
-func syncNixhomeWithConfirmation(c config.Config, cellCfg cfg.CellConfig) error {
-	nixhomePath := cellCfg.Nix.NixhomePath
-	if nixhomePath == "" {
-		return nil
-	}
-	prevSource := scaffold.NixhomeSource(c.BuildDir)
-	if prevSource != "" && prevSource != nixhomePath {
-		ux.Debugf("nixhome source changed: %s → %s", prevSource, nixhomePath)
-		fmt.Printf(" ⚠ nixhome source changed: %s → %s\n", prevSource, nixhomePath)
-		overwrite, cErr := ux.GetConfirmation("Overwrite .devcell/nixhome with new source?")
-		if cErr != nil || !overwrite {
-			ux.Debugf("Skipping nixhome sync (user declined or error)")
-			return nil
-		}
-	}
-	ux.Debugf("Syncing nixhome: %s → %s/nixhome/", nixhomePath, c.BuildDir)
-	if err := scaffold.SyncNixhome(nixhomePath, c.BuildDir); err != nil {
-		return fmt.Errorf("sync nixhome: %w", err)
-	}
-	return nil
-}
-
-// runFallbackImpureBuild is the BuildImpure closure for the pure path's
-// final fallback: docker-build the scaffolded Dockerfile and retag the
-// result under the pure tag so a subsequent launch finds it locally without
-// retrying the whole pull chain. Reached when both registry pulls failed
-// and the host has no usable nix.
-func runFallbackImpureBuild(ctx context.Context, c config.Config, cellCfg cfg.CellConfig) error {
-	if err := config.EnsureBuildDir(c.BuildDir); err != nil {
-		return fmt.Errorf("ensure build dir: %w", err)
-	}
-	if err := syncNixhomeWithConfirmation(c, cellCfg); err != nil {
-		return err
-	}
-	if err := scaffold.RegenerateBuildContext(c.BuildDir, cellCfg); err != nil {
-		return fmt.Errorf("regenerate build context: %w", err)
-	}
-	if err := buildImageWithSpinner(
-		c.BuildDir, false, "Building devcell image (impure fallback)", false); err != nil {
-		return err
-	}
-	if err := exec.CommandContext(ctx, "docker", "tag",
-		runner.UserImageTag(), runner.UserImageTagPure()).Run(); err != nil {
-		ux.Debugf("retag %s → %s failed: %v",
-			runner.UserImageTag(), runner.UserImageTagPure(), err)
-	}
-	return nil
+	return trusted
 }
 
 // updateFlakeLockWithSpinner runs nix flake lock/update with a spinner.
-// Same pattern as buildImageWithSpinner.
 func updateFlakeLockWithSpinner(configDir string, lockOnly bool, label string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

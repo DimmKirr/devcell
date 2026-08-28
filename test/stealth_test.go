@@ -287,6 +287,28 @@ func TestStealth_PatchrightMetadataPatch(t *testing.T) {
 	}
 }
 
+// TestStealth_NavigatorPlatformCDPOverride asserts the nix build patches
+// patchright-core's _updateUserAgent to include a `platform` field in the
+// Emulation.setUserAgentOverride CDP call.
+//
+// Without this patch, navigator.platform is only overridden via init-script
+// Object.defineProperty in the main world. patchright's Chromium patches
+// redirect page.evaluate() to an isolated V8 world where JS-level overrides
+// are invisible, so browser_evaluate sees the real platform (CELL-329).
+func TestStealth_NavigatorPlatformCDPOverride(t *testing.T) {
+	src := readScrapingNix(t)
+
+	if !strings.Contains(src, `platform: (function(_m)`) {
+		t.Fatal("nix build does not patch patchright-core's _updateUserAgent " +
+			"to include navigator.platform in the Emulation.setUserAgentOverride " +
+			"CDP call — page.evaluate / browser_evaluate will see the real " +
+			"navigator.platform instead of the spoofed value (CELL-329)")
+	}
+	if !strings.Contains(src, `_m.platform==="macOS"?"MacIntel"`) {
+		t.Fatal("CELL-329 platform patch missing macOS→MacIntel mapping")
+	}
+}
+
 // TestStealth_ArchConsistency_NoHardcoded_x86_64 asserts there are no
 // hardcoded "x86_64" architecture values in userAgentMetadata blocks.
 //

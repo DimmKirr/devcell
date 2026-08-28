@@ -38,11 +38,23 @@ func PreflightPlatformCheckWithLookPath(ctx context.Context, nixhomeFlakeRef, ta
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
-		errLines := extractNixErrors(stderr.String())
+		stderrStr := stderr.String()
+		if isAttributeMissing(stderrStr) {
+			return nil
+		}
+		errLines := extractNixErrors(stderrStr)
 		return fmt.Errorf("platform compatibility check failed for %s:\n%s\n\nFix: move the incompatible package behind a platform guard (lib.optionals pkgs.stdenv.isLinux/isDarwin) in its nixhome module",
 			targetSystem, errLines)
 	}
 	return nil
+}
+
+// isAttributeMissing detects nix errors indicating the queried attribute
+// doesn't exist in the flake (e.g. platformStrictCheck has no key for
+// the target system). Nix says "does not provide attribute" when the
+// flake output path is valid but the specific key is absent.
+func isAttributeMissing(stderr string) bool {
+	return strings.Contains(stderr, "does not provide attribute")
 }
 
 func extractNixErrors(stderr string) string {

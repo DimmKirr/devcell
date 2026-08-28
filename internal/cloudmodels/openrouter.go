@@ -53,7 +53,7 @@ func FetchProviderModels(ctx context.Context, baseURL string) ([]ollama.Model, e
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
-	req.Header.Set("HTTP-Referer", "https://github.com/DimmKirr/devcell")
+	req.Header.Set("HTTP-Referer", "https://github.com/devcell-sh/devcell")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

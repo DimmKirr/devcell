@@ -32,7 +32,6 @@
 // ProgressSpinner.Success because PhaseRunner is a thin convenience wrapper
 // around it. CELL-261's FormatSecretsPhase produces strings that drop into
 // the `<detail>` slot verbatim.
-//
 package ux
 
 // PhaseRunner owns the sequential phase list above the resumed parent
@@ -77,6 +76,30 @@ func (p *PhaseRunner) PhaseDetailed(name string, fn func() (detail string, err e
 		p.cur.Success(name)
 	} else {
 		p.cur.Success(name + " — " + detail)
+	}
+	p.cur = nil
+	return nil
+}
+
+// PhaseDetailedWarn is like PhaseDetailed but the callback also returns a
+// warn bool. When warn is true, the permanent row renders ⚠ (warning)
+// instead of ✓ (success).
+func (p *PhaseRunner) PhaseDetailedWarn(name string, fn func() (detail string, warn bool, err error)) error {
+	p.cur = NewProgressSpinner(name)
+	detail, warn, err := fn()
+	if err != nil {
+		p.cur.Fail(name + " — " + err.Error())
+		p.cur = nil
+		return err
+	}
+	label := name
+	if detail != "" {
+		label = name + " — " + detail
+	}
+	if warn {
+		p.cur.Warn(label)
+	} else {
+		p.cur.Success(label)
 	}
 	p.cur = nil
 	return nil

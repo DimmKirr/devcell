@@ -107,11 +107,11 @@ type ResponsesOutputItem struct {
 // input_tokens_details.cached_tokens — that's claude's
 // cache_read_input_tokens and is real money saved, so we surface it.
 type ResponsesUsage struct {
-	InputTokens         int                          `json:"input_tokens" example:"42"`
-	InputTokensDetails  *ResponsesInputTokensDetails `json:"input_tokens_details,omitempty"`
-	OutputTokens        int                          `json:"output_tokens" example:"7"`
+	InputTokens         int                           `json:"input_tokens" example:"42"`
+	InputTokensDetails  *ResponsesInputTokensDetails  `json:"input_tokens_details,omitempty"`
+	OutputTokens        int                           `json:"output_tokens" example:"7"`
 	OutputTokensDetails *ResponsesOutputTokensDetails `json:"output_tokens_details,omitempty"`
-	TotalTokens         int                          `json:"total_tokens" example:"49"`
+	TotalTokens         int                           `json:"total_tokens" example:"49"`
 }
 
 // ResponsesInputTokensDetails carries the cached-input breakdown.
@@ -401,7 +401,7 @@ func buildPrompt(instructions string, input json.RawMessage) (string, error) {
 // @Failure 405 {object} APIError "Only POST is allowed"
 // @Security BearerAuth
 // @Router /v1/responses [post]
-func NewResponsesHandler(exec Executor, store *JobStore, logPrompts bool, systemPrompt string) http.Handler {
+func NewResponsesHandler(exec Executor, store *JobStore, logPrompts bool, systemPromptFile, basePromptFile string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeAPIError(w, http.StatusMethodNotAllowed,
@@ -473,11 +473,12 @@ func NewResponsesHandler(exec Executor, store *JobStore, logPrompts bool, system
 		}
 
 		opts := ExecOpts{
-			Agent:        agent,
-			Prompt:       prompt,
-			Model:        submodel,
-			Effort:       effort,
-			SystemPrompt: systemPrompt,
+			Agent:            agent,
+			Prompt:           prompt,
+			Model:            submodel,
+			Effort:           effort,
+			SystemPromptFile: systemPromptFile,
+			BasePromptFile:   basePromptFile,
 		}
 
 		// stream + background together is unsupported in the first pass:

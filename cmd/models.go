@@ -10,6 +10,7 @@ import (
 	"github.com/DimmKirr/devcell/internal/cache"
 	"github.com/DimmKirr/devcell/internal/cloudmodels"
 	"github.com/DimmKirr/devcell/internal/ollama"
+	"github.com/DimmKirr/devcell/internal/telemetry"
 	"github.com/DimmKirr/devcell/internal/ux"
 	"github.com/spf13/cobra"
 )
@@ -59,6 +60,7 @@ Examples:
 		baseURL := ollama.DefaultBaseURL
 
 		source, _ := cmd.Flags().GetString("source")
+		telemetry.Track("models", map[string]any{"source": source})
 		wantLocal := source == "local" || source == "all"
 		wantCloud := source == "cloud" || source == "all"
 

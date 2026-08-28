@@ -81,8 +81,9 @@ func TestUserImageTag_BareLocal_PureSuffixOnVariant(t *testing.T) {
 }
 
 // PickImageTag — post-flip direction (CELL-183) + CELL-165 vocab:
-//   false (default) → pure tag
-//   true (--impure, alias --debian) → bare tag
+//
+//	false (default) → pure tag
+//	true (--impure, alias --debian) → bare tag
 func TestPickImageTag_FlippedDirection(t *testing.T) {
 	saved := os.Getenv("DEVCELL_USER_IMAGE")
 	defer os.Setenv("DEVCELL_USER_IMAGE", saved)

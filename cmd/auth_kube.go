@@ -6,6 +6,7 @@ import (
 	"time"
 
 	authkube "github.com/DimmKirr/devcell/internal/auth/kube"
+	"github.com/DimmKirr/devcell/internal/telemetry"
 	"github.com/DimmKirr/devcell/internal/ux"
 	"github.com/spf13/cobra"
 )
@@ -33,6 +34,8 @@ will both use it transparently.
 Requires kubectl on the host PATH.`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
+		telemetry.Track("auth_kube", map[string]any{"skip_cluster": authKubeSkipCluster})
+
 		var source string
 		if len(args) == 1 {
 			source = args[0]

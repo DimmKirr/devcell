@@ -131,15 +131,15 @@ var cloudModelRatings = map[string]float64{
 	"claude-3-opus":     11.1, // Claude 3 Opus (older baseline)
 
 	// OpenAI — SWE-bench Verified scores
-	"o3":       71.7, // o3 (high-compute)
-	"o4-mini":  68.1, // o4-mini
-	"o3-mini":  49.3, // o3-mini
-	"gpt-4-1":  54.6, // GPT-4.1
-	"o1":       48.9, // o1
-	"gpt-4o":   33.2, // GPT-4o
+	"o3":           71.7, // o3 (high-compute)
+	"o4-mini":      68.1, // o4-mini
+	"o3-mini":      49.3, // o3-mini
+	"gpt-4-1":      54.6, // GPT-4.1
+	"o1":           48.9, // o1
+	"gpt-4o":       33.2, // GPT-4o
 	"gpt-4-1-mini": 34.6, // GPT-4.1 mini
-	"o1-mini":  16.7, // o1-mini
-	"gpt-4o-mini": 23.7, // GPT-4o mini
+	"o1-mini":      16.7, // o1-mini
+	"gpt-4o-mini":  23.7, // GPT-4o mini
 
 	// Google — SWE-bench Verified scores
 	"gemini-2-5-pro":   63.8, // Gemini 2.5 Pro
@@ -199,9 +199,9 @@ func EstimateCloudSpeedTPM(pricePerToken float64) float64 {
 func EstimateLocalSpeedTPM(paramsB, bandwidthGBs float64) float64 {
 	if bandwidthGBs > 0 && paramsB > 0 {
 		const (
-			q4BytesPerParam  = 0.5625 // Q4_K_M ≈ 4.5 bits/param = 0.5625 bytes/param
-			bandwidthEff     = 0.78   // llama.cpp Metal achieves ~75-80% of theoretical bandwidth
-			maxTokPerSec     = 200    // compute-bound ceiling for sub-3B models on Apple Silicon
+			q4BytesPerParam = 0.5625 // Q4_K_M ≈ 4.5 bits/param = 0.5625 bytes/param
+			bandwidthEff    = 0.78   // llama.cpp Metal achieves ~75-80% of theoretical bandwidth
+			maxTokPerSec    = 200    // compute-bound ceiling for sub-3B models on Apple Silicon
 		)
 		tokPerSec := (bandwidthGBs * bandwidthEff) / (paramsB * q4BytesPerParam)
 		if tokPerSec > maxTokPerSec {

@@ -19,7 +19,7 @@ import (
 func TestResponses_Background_Returns202(t *testing.T) {
 	fe := &fakeExec{stdout: "should not appear in immediate response"}
 	store := NewJobStore()
-	h := NewResponsesHandler(fe, store, false, "")
+	h := NewResponsesHandler(fe, store, false, "", "")
 
 	rec := postResponses(t, h, `{"model":"anthropic/sonnet","input":"hello","background":true}`)
 
@@ -126,7 +126,7 @@ func pollGet(t *testing.T, h http.Handler, id string) (ResponsesObject, int) {
 func TestResponses_Background_InProgressThenCompleted(t *testing.T) {
 	be := &blockExec{release: make(chan struct{}), stdout: "ASYNC OK"}
 	store := NewJobStore()
-	postH := NewResponsesHandler(be, store, false, "")
+	postH := NewResponsesHandler(be, store, false, "", "")
 	getH := NewResponseGetHandler(store)
 
 	rec := postResponses(t, postH, `{"model":"anthropic/sonnet","input":"go","background":true}`)
@@ -181,7 +181,7 @@ func TestResponses_Background_InProgressThenCompleted(t *testing.T) {
 func TestResponses_Background_Failed(t *testing.T) {
 	fe := &fakeExec{stderr: "agent blew up", exitCode: 1}
 	store := NewJobStore()
-	postH := NewResponsesHandler(fe, store, false, "")
+	postH := NewResponsesHandler(fe, store, false, "", "")
 	getH := NewResponseGetHandler(store)
 
 	rec := postResponses(t, postH, `{"model":"anthropic/sonnet","input":"x","background":true}`)
@@ -224,7 +224,7 @@ func TestResponses_Background_Failed(t *testing.T) {
 func TestResponseCancel_InProgress(t *testing.T) {
 	be := &blockExec{release: make(chan struct{}), stdout: "never delivered"}
 	store := NewJobStore()
-	postH := NewResponsesHandler(be, store, false, "")
+	postH := NewResponsesHandler(be, store, false, "", "")
 	cancelH := NewResponseCancelHandler(store)
 	getH := NewResponseGetHandler(store)
 
@@ -279,7 +279,7 @@ func TestResponseCancel_InProgress(t *testing.T) {
 func TestResponses_Background_WithStream_Returns400(t *testing.T) {
 	fe := &fakeExec{stdout: "x"}
 	store := NewJobStore()
-	h := NewResponsesHandler(fe, store, false, "")
+	h := NewResponsesHandler(fe, store, false, "", "")
 
 	rec := postResponses(t, h, `{"model":"anthropic/sonnet","input":"hi","background":true,"stream":true}`)
 
@@ -311,7 +311,7 @@ func TestResponses_Background_WithStream_Returns400(t *testing.T) {
 func TestResponses_Background_SurvivesRequestCtxCancel(t *testing.T) {
 	be := &blockExec{release: make(chan struct{}), stdout: "SURVIVED"}
 	store := NewJobStore()
-	postH := NewResponsesHandler(be, store, false, "")
+	postH := NewResponsesHandler(be, store, false, "", "")
 	getH := NewResponseGetHandler(store)
 
 	ctx, cancel := context.WithCancel(context.Background())

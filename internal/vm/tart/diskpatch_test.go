@@ -84,11 +84,11 @@ func TestGenerateUserPlist_DefaultUser(t *testing.T) {
 	}
 	// Check basic fields
 	checks := map[string]any{
-		"name":    []string{"devcell"},
-		"uid":     []string{"501"},
-		"gid":     []string{"20"},
-		"shell":   []string{"/bin/zsh"},
-		"home":    []string{"/Users/devcell"},
+		"name":     []string{"devcell"},
+		"uid":      []string{"501"},
+		"gid":      []string{"20"},
+		"shell":    []string{"/bin/zsh"},
+		"home":     []string{"/Users/devcell"},
 		"realname": []string{"devcell"},
 	}
 	for key, want := range checks {

@@ -89,28 +89,46 @@ func opencodeConfigPath(cellHome string) string {
 // via OPENCODE_CONFIG_CONTENT.
 func opencodeEnv() map[string]string {
 	dbg := scanFlag("--debug")
+	useOpenRouter := scanFlag("--openrouter")
 	c, err := config.LoadFromOS()
 	if err != nil {
 		if dbg {
 			fmt.Fprintf(os.Stderr, " opencode: config load failed, using minimal config\n")
 		}
-		return map[string]string{
+		env := map[string]string{
 			"OPENCODE_CONFIG_CONTENT": string(buildOpencodeJSON(cfg.LLMModelsSection{})),
 		}
+		if useOpenRouter {
+			env["OPENROUTER_API_KEY"] = ""
+		}
+		return env
 	}
 
 	// Resolve models: devcell.toml [llm.models] > auto-detect ollama > empty.
 	cellCfg := cfg.LoadFromOS(c.ConfigDir, c.BaseDir)
+	if !useOpenRouter {
+		useOpenRouter = cellCfg.LLM.UseOpenRouter
+	}
 	models := cellCfg.LLM.Models
 	if len(models.Providers) > 0 {
 		if dbg {
 			fmt.Fprintf(os.Stderr, " opencode: using models from devcell.toml [llm.models]\n")
 		}
-	} else {
+	} else if !useOpenRouter {
 		if dbg {
 			fmt.Fprintf(os.Stderr, " opencode: no [llm.models] in devcell.toml, probing ollama...\n")
 		}
 		models = autoDetectOllamaModels()
+	}
+
+	// OpenRouter mode: opencode has a built-in openrouter provider keyed off
+	// OPENROUTER_API_KEY, so only the default model needs the provider prefix.
+	if useOpenRouter {
+		if m := resolveOpenRouterModel(models.Default, models, dbg); m != "" {
+			models.Default = "openrouter/" + m
+		} else {
+			models.Default = ""
+		}
 	}
 
 	if dbg {
@@ -140,9 +158,14 @@ func opencodeEnv() map[string]string {
 		fmt.Fprintf(os.Stderr, " opencode: config written to %s\n", configPath)
 	}
 
-	return map[string]string{
+	env := map[string]string{
 		"OPENCODE_CONFIG_CONTENT": string(merged),
 	}
+	if useOpenRouter {
+		// Empty placeholder — filled after 1Password by FillOpenRouterKey.
+		env["OPENROUTER_API_KEY"] = ""
+	}
+	return env
 }
 
 // mergeOpencodeConfig reads an existing .opencode.json and merges model/provider
@@ -264,8 +287,8 @@ type opencodeJSON struct {
 }
 
 type opencodeProviderJSON struct {
-	NPM     string                       `json:"npm"`
-	Options map[string]string            `json:"options"`
+	NPM     string                       `json:"npm,omitempty"`
+	Options map[string]string            `json:"options,omitempty"`
 	Models  map[string]opencodeModelJSON `json:"models"`
 }
 
@@ -293,14 +316,22 @@ func buildOpencodeJSON(ms cfg.LLMModelsSection) []byte {
 	for _, name := range names {
 		prov := ms.Providers[name]
 
-		baseURL := prov.BaseURL
-		if baseURL == "" {
-			baseURL = knownProviderDefaults[name]
-		}
-
 		models := make(map[string]opencodeModelJSON, len(prov.Models))
 		for _, m := range prov.Models {
 			models[m] = opencodeModelJSON{Name: m}
+		}
+
+		// openrouter is a built-in opencode provider — it ships its own SDK
+		// and base URL, keyed off OPENROUTER_API_KEY. Overriding npm here
+		// would detach it from that auth path.
+		if name == "openrouter" {
+			doc.Provider[name] = opencodeProviderJSON{Models: models}
+			continue
+		}
+
+		baseURL := prov.BaseURL
+		if baseURL == "" {
+			baseURL = knownProviderDefaults[name]
 		}
 
 		doc.Provider[name] = opencodeProviderJSON{

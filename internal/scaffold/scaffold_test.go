@@ -152,8 +152,8 @@ func TestScaffold_FlakeNixContainsUpstreamURL(t *testing.T) {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(filepath.Join(dir, ".devcell", "flake.nix"))
-	if !strings.Contains(string(data), "DimmKirr/devcell") {
-		t.Errorf("flake.nix should reference DimmKirr/devcell, got:\n%s", string(data))
+	if !strings.Contains(string(data), runner.UpstreamOwner+"/"+runner.UpstreamRepo) {
+		t.Errorf("flake.nix should reference %s/%s, got:\n%s", runner.UpstreamOwner, runner.UpstreamRepo, string(data))
 	}
 }
 
@@ -169,8 +169,9 @@ func TestScaffold_FlakeNixVersionSubstituted(t *testing.T) {
 	}
 	// v0.0.0 (dev build) coerces to DefaultNixhomeGitRef via runner.UpstreamFlakeRef
 	// — literal v0.0.0 would 404 against github (no such tag).
-	if !strings.Contains(s, "DimmKirr/devcell/"+runner.DefaultNixhomeGitRef+"?dir=nixhome") {
-		t.Errorf("flake.nix should contain coerced upstream URL, got:\n%s", s)
+	want := runner.UpstreamOwner + "/" + runner.UpstreamRepo + "/" + runner.DefaultNixhomeGitRef
+	if !strings.Contains(s, want) {
+		t.Errorf("flake.nix should contain coerced upstream URL %q, got:\n%s", want, s)
 	}
 }
 
@@ -572,8 +573,9 @@ func TestGenerateFlakeNix_VersionSubstituted(t *testing.T) {
 	if strings.Contains(content, "{{VERSION}}") {
 		t.Errorf("unreplaced {{VERSION}} placeholder:\n%s", content)
 	}
-	if !strings.Contains(content, "DimmKirr/devcell/v2.3.4?dir=nixhome") {
-		t.Errorf("expected versioned URL with v2.3.4:\n%s", content)
+	want := runner.UpstreamOwner + "/" + runner.UpstreamRepo + "/v2.3.4"
+	if !strings.Contains(content, want) {
+		t.Errorf("expected versioned URL containing %q:\n%s", want, content)
 	}
 }
 
@@ -636,6 +638,52 @@ func TestGenerateFlakeNix_AllStacks(t *testing.T) {
 				t.Errorf("expected %s in output:\n%s", want, content)
 			}
 		})
+	}
+}
+
+// ── CELL-445: NixPackages in GenerateFlakeNix ───────────────────────────────
+
+func TestGenerateFlakeNix_NixPackagesStable(t *testing.T) {
+	pkgs := cfg.NixPackages{Stable: []string{"tmux", "htop"}}
+	content := scaffold.GenerateFlakeNix("go", nil, "v1.0.0", false, pkgs)
+	if !strings.Contains(content, "map lib.hiPri (with pkgs; [ tmux htop ])") {
+		t.Errorf("expected hiPri stable packages:\n%s", content)
+	}
+}
+
+func TestGenerateFlakeNix_NixPackagesAllTiers(t *testing.T) {
+	pkgs := cfg.NixPackages{
+		Stable:   []string{"tmux"},
+		Unstable: []string{"tool-a"},
+		Edge:     []string{"edge-pkg"},
+	}
+	content := scaffold.GenerateFlakeNix("base", nil, "v1.0.0", false, pkgs)
+	if !strings.Contains(content, "map lib.hiPri (with pkgs; [ tmux ])") {
+		t.Errorf("expected hiPri stable:\n%s", content)
+	}
+	if !strings.Contains(content, "map lib.hiPri (with pkgsUnstable; [ tool-a ])") {
+		t.Errorf("expected hiPri unstable:\n%s", content)
+	}
+	if !strings.Contains(content, "map lib.hiPri (with pkgsEdge; [ edge-pkg ])") {
+		t.Errorf("expected hiPri edge:\n%s", content)
+	}
+}
+
+func TestGenerateFlakeNix_NixPackagesEmpty(t *testing.T) {
+	content := scaffold.GenerateFlakeNix("go", nil, "v1.0.0", false, cfg.NixPackages{})
+	if strings.Contains(content, "lib.hiPri") {
+		t.Errorf("no hiPri expected when all tiers empty:\n%s", content)
+	}
+}
+
+func TestGenerateFlakeNix_NixPackagesWithModules(t *testing.T) {
+	pkgs := cfg.NixPackages{Stable: []string{"cowsay"}}
+	content := scaffold.GenerateFlakeNix("go", []string{"electronics"}, "v1.0.0", false, pkgs)
+	if !strings.Contains(content, "devcell.modules.electronics") {
+		t.Errorf("expected modules still present:\n%s", content)
+	}
+	if !strings.Contains(content, "map lib.hiPri (with pkgs; [ cowsay ])") {
+		t.Errorf("expected hiPri stable packages alongside modules:\n%s", content)
 	}
 }
 

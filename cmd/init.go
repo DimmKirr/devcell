@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/DimmKirr/devcell/internal/cfg"
 	"github.com/DimmKirr/devcell/internal/config"
+	"github.com/DimmKirr/devcell/internal/telemetry"
 	"github.com/DimmKirr/devcell/internal/ux"
 	"github.com/spf13/cobra"
 )
@@ -22,9 +22,6 @@ func init() {
 	initCmd.Flags().Bool("macos", false, "Set up a macOS VM box via UTM + Vagrant")
 	initCmd.Flags().Bool("force", false, "Overwrite existing files and update flake inputs (implies --update)")
 	initCmd.Flags().Bool("update", false, "update nix flake inputs (pull latest) instead of just resolving")
-	initCmd.Flags().String("nixhome", "", "nixhome source: local path or git URL (default: upstream repo)")
-	initCmd.Flags().String("local-nixhome", "", "deprecated: use --nixhome instead")
-	_ = initCmd.Flags().MarkHidden("local-nixhome")
 	initCmd.Flags().Bool("no-cache", false, "Force re-download of cached IPSW restore image (tart only)")
 	initCmd.Flags().String("stack", "", "stack name (base, dev [seed, ~3 GB], ultimate [~15 GB]; legacy: go, node, python, fullstack, electronics)")
 	initCmd.Flags().StringSlice("modules", nil, "explicit module list (comma-separated, e.g. go,infra,electronics)")
@@ -34,6 +31,7 @@ func runInit(cmd *cobra.Command, _ []string) error {
 	applyOutputFlagsWithLog("init")
 
 	engine := scanStringFlag("--engine")
+	telemetry.Track("init", map[string]any{"engine": engine, "stack": cmd.Flags().Lookup("stack").Value.String()})
 	if engine == "tart" {
 		c, err := config.LoadFromOS()
 		if err != nil {
@@ -42,13 +40,19 @@ func runInit(cmd *cobra.Command, _ []string) error {
 		stack, _ := cmd.Flags().GetString("stack")
 		force, _ := cmd.Flags().GetBool("force")
 		noCache, _ := cmd.Flags().GetBool("no-cache")
-		nixhomePath := c.BaseDir + "/nixhome"
-		if nh, _ := cmd.Flags().GetString("nixhome"); nh != "" {
-			nixhomePath = nh
-		} else if nh := os.Getenv("DEVCELL_NIXHOME_PATH"); nh != "" {
-			nixhomePath = nh
+		return runInitTart(c.CellName, c.HostHome, c.BaseDir, stack, force, noCache)
+	}
+
+	if engine == "qemu" || engine == "libvirt" {
+		// libvirt reuses the qemu scaffold: init only creates directories,
+		// an SSH keypair, and VirtIO drivers on the shared mount (CELL-372).
+		c, err := config.LoadFromOS()
+		if err != nil {
+			return fmt.Errorf("load config: %w", err)
 		}
-		return runInitTart(c.CellName, c.HostHome, c.BaseDir, stack, nixhomePath, force, noCache)
+		stack, _ := cmd.Flags().GetString("stack")
+		force, _ := cmd.Flags().GetBool("force")
+		return runInitQemu(c.CellName, c.HostHome, stack, force)
 	}
 
 	macos, _ := cmd.Flags().GetBool("macos")
@@ -77,47 +81,15 @@ func runInit(cmd *cobra.Command, _ []string) error {
 		ux.Debugf("stack: %s (--stack flag)", stack)
 	}
 
-	// Nixhome source: --nixhome > --local-nixhome (deprecated) > env > global config > git.
-	nixhomeSrc, _ := cmd.Flags().GetString("nixhome")
-	nixhomeSrcOrigin := ""
-	if nixhomeSrc != "" {
-		nixhomeSrcOrigin = "--nixhome flag"
-	}
-	if nixhomeSrc == "" {
-		nixhomeSrc, _ = cmd.Flags().GetString("local-nixhome")
-		if nixhomeSrc != "" {
-			nixhomeSrcOrigin = "--local-nixhome flag (deprecated)"
-		}
-	}
-	if nixhomeSrc == "" {
-		nixhomeSrc = os.Getenv("DEVCELL_NIXHOME_PATH")
-		if nixhomeSrc != "" {
-			nixhomeSrcOrigin = "DEVCELL_NIXHOME_PATH env"
-		}
-	}
-	if nixhomeSrc == "" {
-		globalCfg, _ := cfg.LoadFile(c.ConfigDir + "/devcell.toml")
-		nixhomeSrc = globalCfg.Nix.NixhomePath
-		if nixhomeSrc != "" {
-			nixhomeSrcOrigin = "global config (" + c.ConfigDir + "/devcell.toml)"
-		}
-	}
-	if nixhomeSrc == "" {
-		nixhomeSrcOrigin = "upstream git (default)"
-	}
-	ux.Debugf("nixhome source: %s (%s)", nixhomeSrc, nixhomeSrcOrigin)
-
 	modules, _ := cmd.Flags().GetStringSlice("modules")
 
-	// Shared init flow: resolve nixhome, pick stack/modules, scaffold.
 	result, err := RunInitFlow(InitFlowOptions{
-		BaseDir:    c.BaseDir,
-		ConfigDir:  c.ConfigDir,
-		NixhomeSrc: nixhomeSrc,
-		Stack:      stack,
-		Modules:    modules,
-		Yes:        yes,
-		Force:      force,
+		BaseDir:   c.BaseDir,
+		ConfigDir: c.ConfigDir,
+		Stack:     stack,
+		Modules:   modules,
+		Yes:       yes,
+		Force:     force,
 	})
 	if err != nil {
 		return err

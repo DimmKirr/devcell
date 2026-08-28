@@ -10,6 +10,8 @@ import (
 	"syscall"
 
 	"github.com/DimmKirr/devcell/internal/runner"
+	"github.com/DimmKirr/devcell/internal/telemetry"
+	"github.com/DimmKirr/devcell/internal/ux"
 	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 )
@@ -62,6 +64,8 @@ func runBuildPrune(cmd *cobra.Command, _ []string) error {
 	force, _ := cmd.Flags().GetBool("force")
 	yes, _ := cmd.Flags().GetBool("yes")
 
+	telemetry.Track("build_prune", map[string]any{"pure": pure, "force": force})
+
 	homeDir, _ := os.UserHomeDir()
 	opts := runner.PruneOpts{
 		GOOS:    runtime.GOOS,
@@ -75,6 +79,24 @@ func runBuildPrune(cmd *cobra.Command, _ []string) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// CELL-334 preflight gate: resolve every RUNNING cell's closure so the
+	// plan can stamp its GC roots before the sweep. A cell whose closure
+	// cannot be resolved aborts the prune (named in the error) — proceeding
+	// on "some roots exist" is exactly the gap this closes.
+	if pure && !force {
+		closures, err := runner.CollectLiveClosures(
+			func() ([]string, error) { return runner.DockerRunningDevcellContainers(ctx) },
+			func(container, link string) (string, error) {
+				return runner.DockerResolveContainerLink(ctx, container, link)
+			},
+			ux.Debugf,
+		)
+		if err != nil {
+			return err
+		}
+		opts.LiveClosures = closures
+	}
 
 	return runner.RunPrune(runner.RunPruneArgs{
 		Opts:    opts,
@@ -103,4 +125,3 @@ func detectRootlessDocker() bool {
 	}
 	return strings.Contains(strings.ToLower(string(out)), "rootless")
 }
-

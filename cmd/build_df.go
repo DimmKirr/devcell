@@ -8,6 +8,7 @@ import (
 	"syscall"
 
 	"github.com/DimmKirr/devcell/internal/runner"
+	"github.com/DimmKirr/devcell/internal/telemetry"
 	"github.com/spf13/cobra"
 )
 
@@ -46,6 +47,8 @@ func runBuildDf(cmd *cobra.Command, _ []string) error {
 	jsonOut, _ := cmd.Flags().GetBool("json")
 	all, _ := cmd.Flags().GetBool("all")
 	kinds, _ := cmd.Flags().GetStringSlice("kind")
+
+	telemetry.Track("build_df", map[string]any{"json": jsonOut, "all": all, "kinds": kinds})
 	if all {
 		topN = 0
 	}

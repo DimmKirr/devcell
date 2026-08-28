@@ -1,6 +1,7 @@
 package cfg
 
 import (
+	"encoding/base64"
 	"fmt"
 	"os"
 	"runtime"
@@ -9,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+	wg "github.com/hydrz/wireguard"
 )
 
 // DefaultRegistry is the default container registry for devcell images.
@@ -23,31 +25,117 @@ const DefaultNixImage = "nixos/nix:2.34.7"
 // DefaultTartOCIImage is the default macOS base image for tart VMs.
 const DefaultTartOCIImage = "ghcr.io/cirruslabs/macos-sequoia-base:latest"
 
+// DefaultLibvirtURI targets the macOS host's session libvirtd as seen from
+// inside a Docker cell (CELL-372).
+const DefaultLibvirtURI = "qemu+tcp://host.docker.internal/session"
+
 // CellSection holds [cell] config.
 type CellSection struct {
-	ImageTag        string   `toml:"image_tag"`
-	Registry        string   `toml:"registry"`         // container registry; default: DefaultRegistry; env: DEVCELL_REGISTRY
-	GUI             *bool    `toml:"gui"`               // default: true (nil = not set → true)
-	Timezone        string   `toml:"timezone"`          // IANA tz (e.g. "Europe/Prague"); default: host $TZ
-	Locale          string   `toml:"locale"`            // POSIX locale (e.g. "en_US.UTF-8"); default: "en_US.UTF-8"
-	Stack           string   `toml:"stack"`             // nix stack name (e.g. "go", "python"); default: "base" (see ResolvedStack)
-	Modules         []string `toml:"modules"`           // extra nix modules to compose on top of stack
-	NixhomePath     string   `toml:"nixhome"`           // deprecated: use [nix] nixhome instead
-	Engine          string   `toml:"engine"`            // execution engine: "docker" (default) or "vagrant"
-	VagrantProvider string   `toml:"vagrant_provider"`  // vagrant provider: "utm" (default) or "libvirt"
-	VagrantBox      string   `toml:"vagrant_box"`       // vagrant box name override (default: "utm/bookworm")
-	DockerPrivileged  bool     `toml:"docker_privileged"`   // run container with --privileged; default: false
-	DockerCapAdd      []string `toml:"docker_cap_add"`      // extra Linux capabilities (e.g. ["SYS_ADMIN"]); default: none
-	PerCellImage   *bool    `toml:"per_cell_image"`   // tag user image per cell instead of per stack; default: false
-	Hostname          string   `toml:"hostname"`            // override container hostname; default: computed "cell-<basename>-<bunk>"; env: DEVCELL_HOSTNAME
-	MacAddress        string   `toml:"mac_address"`         // MAC for the container's NIC (XX:XX:XX:XX:XX:XX); pinned across restarts for infra-side identity persistence. Honored on user-defined bridge networks (devcell uses --network devcell-network). Empty → docker auto-assigns a random MAC per launch.
-	Thin              *bool    `toml:"thin"`                // thin image mode; default: true; disable with thin=false or DEVCELL_THIN=0
-	Background        *bool    `toml:"background"`          // keep VM/container running after shell exit; default: false; env: DEVCELL_BACKGROUND
-	TartSSHPort       int      `toml:"tart_ssh_port"`       // SSH port for tart engine; default: 22; env: DEVCELL_TART_SSH_PORT
-	TartSSHHost       string   `toml:"tart_ssh_host"`       // SSH host for tart engine; default: "localhost"; env: DEVCELL_TART_SSH_HOST
-	TartSSHUser       string   `toml:"tart_ssh_user"`       // SSH user for tart engine; default: "admin"; env: DEVCELL_TART_SSH_USER
-	TartSSHKey        string   `toml:"tart_ssh_key"`        // path to SSH private key for tart; env: DEVCELL_TART_SSH_KEY
-	TartOCIImage      string   `toml:"tart_oci_image"`      // OCI base image for tart VMs; default: DefaultTartOCIImage; env: DEVCELL_TART_OCI_IMAGE
+	ImageTag        string            `toml:"image_tag"`
+	Registry        string            `toml:"registry"`          // container registry; default: DefaultRegistry; env: DEVCELL_REGISTRY
+	GUI             *bool             `toml:"gui"`               // default: true (nil = not set → true)
+	Timezone        string            `toml:"timezone"`          // IANA tz (e.g. "Europe/Prague"); default: host $TZ
+	Locale          string            `toml:"locale"`            // POSIX locale (e.g. "en_US.UTF-8"); default: "en_US.UTF-8"
+	Stack           string            `toml:"stack"`             // nix stack name (e.g. "go", "python"); default: "base" (see ResolvedStack)
+	Modules         []string          `toml:"modules"`           // extra nix modules to compose on top of stack
+	NixhomePath     string            `toml:"nixhome"`           // deprecated: use [nix] nixhome instead
+	Engine          string            `toml:"engine"`            // execution engine: "docker" (default) or "vagrant"
+	VagrantProvider string            `toml:"vagrant_provider"`  // vagrant provider: "utm" (default) or "libvirt"
+	VagrantBox      string            `toml:"vagrant_box"`       // vagrant box name override (default: "utm/bookworm")
+	KVM             *bool             `toml:"kvm"`               // pass the daemon host's /dev/kvm into the container so QEMU gets hardware accel instead of TCG; default: false; env: DEVCELL_KVM
+	PerCellImage    *bool             `toml:"per_cell_image"`    // tag user image per cell instead of per stack; default: false
+	Hostname        string            `toml:"hostname"`          // override container hostname; default: computed "cell-<basename>-<bunk>"; env: DEVCELL_HOSTNAME
+	MacAddress      string            `toml:"mac_address"`       // MAC for the container's NIC (XX:XX:XX:XX:XX:XX); pinned across restarts for infra-side identity persistence. Honored on user-defined bridge networks (devcell uses --network devcell-network). Empty → docker auto-assigns a random MAC per launch.
+	Thin            *bool             `toml:"thin"`              // thin image mode; default: true; disable with thin=false or DEVCELL_THIN=0
+	StaleWarning    *bool             `toml:"stale_warning"`     // CELL-391 "cell is behind — parallel reality" nudge at start; default: true; env: DEVCELL_STALE_WARN
+	Background      *bool             `toml:"background"`        // keep VM/container running after shell exit; default: false; env: DEVCELL_BACKGROUND
+	TartSSHPort     int               `toml:"tart_ssh_port"`     // SSH port for tart engine; default: 22; env: DEVCELL_TART_SSH_PORT
+	TartSSHHost     string            `toml:"tart_ssh_host"`     // SSH host for tart engine; default: "localhost"; env: DEVCELL_TART_SSH_HOST
+	TartSSHUser     string            `toml:"tart_ssh_user"`     // SSH user for tart engine; default: "admin"; env: DEVCELL_TART_SSH_USER
+	TartSSHKey      string            `toml:"tart_ssh_key"`      // path to SSH private key for tart; env: DEVCELL_TART_SSH_KEY
+	TartOCIImage    string            `toml:"tart_oci_image"`    // OCI base image for tart VMs; default: DefaultTartOCIImage; env: DEVCELL_TART_OCI_IMAGE
+	QemuSSHPort     int               `toml:"qemu_ssh_port"`     // SSH port for QEMU engine; default: 2222; env: DEVCELL_QEMU_SSH_PORT
+	QemuSSHHost     string            `toml:"qemu_ssh_host"`     // SSH host for QEMU engine; default: "127.0.0.1"; env: DEVCELL_QEMU_SSH_HOST
+	QemuWindowsISO  string            `toml:"qemu_windows_iso"`  // path to Windows ARM64 ISO; env: DEVCELL_QEMU_WINDOWS_ISO
+	QemuCPUs        int               `toml:"qemu_cpus"`         // QEMU vCPUs; default: 4; env: DEVCELL_QEMU_CPUS
+	QemuMemoryGB    int               `toml:"qemu_memory_gb"`    // QEMU RAM in GB; default: 4; env: DEVCELL_QEMU_MEMORY_GB
+	QemuDiskSizeGB  int               `toml:"qemu_disk_size_gb"` // QEMU disk size in GB; default: 64; env: DEVCELL_QEMU_DISK_SIZE_GB
+	QemuDisplay     string            `toml:"qemu_display"`      // QEMU display: "none", "cocoa", "sdl"; default: "none"; env: DEVCELL_QEMU_DISPLAY
+	LibvirtURI      string            `toml:"libvirt_uri"`       // libvirtd connection URI for the libvirt engine; default: DefaultLibvirtURI; env: DEVCELL_LIBVIRT_URI
+	LibvirtPathMap  map[string]string `toml:"libvirt_path_map"`  // container prefix -> host prefix rewrites for domain XML paths (CELL-375); empty = CLI runs on the host
+	QemuProjectSync string            `toml:"qemu_project_sync"` // project sync for qemu/libvirt engines: "push" (default), "two-way", "off"; env: DEVCELL_QEMU_PROJECT_SYNC (CELL-383)
+	DefaultCommand  string            `toml:"default_command"`   // subcommand to run when `cell` is invoked with no args; env: DEVCELL_DEFAULT_COMMAND
+}
+
+// ResolvedQemuProjectSync returns the effective project sync mode:
+// env > toml > "push". Anything but off/push/two-way resolves to "push" —
+// the safe default (guest gets files, nothing overwritten on the host).
+// StaleWarningEnabled reports whether the CELL-391 stale-cell nudge should
+// fire at cell start. Default (unset) is enabled — it's a read-only nudge
+// with a proceed-by-default prompt, so opting out is the explicit act.
+func (c CellSection) StaleWarningEnabled() bool {
+	return c.StaleWarning == nil || *c.StaleWarning
+}
+
+func (c CellSection) ResolvedQemuProjectSync() string {
+	v := os.Getenv("DEVCELL_QEMU_PROJECT_SYNC")
+	if v == "" {
+		v = c.QemuProjectSync
+	}
+	switch v {
+	case "off", "push", "two-way":
+		return v
+	}
+	return "push"
+}
+
+var knownDefaultCommands = []string{
+	"claude", "codex", "opencode", "gemini", "shell",
+	"build", "init", "vnc", "rdp", "models", "modules",
+	"serve", "auth", "telemetry",
+}
+
+// KnownDefaultCommands returns the list of valid default_command values.
+func KnownDefaultCommands() []string {
+	out := make([]string, len(knownDefaultCommands))
+	copy(out, knownDefaultCommands)
+	return out
+}
+
+// ResolvedDefaultCommand returns the effective default command: env > toml > "".
+func (c CellSection) ResolvedDefaultCommand() string {
+	if v := os.Getenv("DEVCELL_DEFAULT_COMMAND"); v != "" {
+		return v
+	}
+	return c.DefaultCommand
+}
+
+// ValidateDefaultCommand checks that default_command is a known subcommand name.
+// Empty is valid (no default, shows help).
+func ValidateDefaultCommand(cmd string) error {
+	if cmd == "" {
+		return nil
+	}
+	for _, c := range knownDefaultCommands {
+		if c == cmd {
+			return nil
+		}
+	}
+	sorted := make([]string, len(knownDefaultCommands))
+	copy(sorted, knownDefaultCommands)
+	sort.Strings(sorted)
+	return fmt.Errorf("unknown default_command %q; available commands: %s", cmd, strings.Join(sorted, ", "))
+}
+
+// ResolvedLibvirtURI returns the effective libvirtd URI: env > toml > default.
+func (c CellSection) ResolvedLibvirtURI() string {
+	if v := os.Getenv("DEVCELL_LIBVIRT_URI"); v != "" {
+		return v
+	}
+	if c.LibvirtURI != "" {
+		return c.LibvirtURI
+	}
+	return DefaultLibvirtURI
 }
 
 // ResolvedBackground returns the effective background setting: default OFF, enabled by env/toml.
@@ -119,6 +207,88 @@ func (c CellSection) ResolvedTartOCIImage() string {
 	return DefaultTartOCIImage
 }
 
+// ResolvedQemuSSHPort returns the effective QEMU SSH port: env > toml > default 2222.
+func (c CellSection) ResolvedQemuSSHPort() int {
+	if v := os.Getenv("DEVCELL_QEMU_SSH_PORT"); v != "" {
+		if p := atoiOr(v, 0); p > 0 {
+			return p
+		}
+	}
+	if c.QemuSSHPort > 0 {
+		return c.QemuSSHPort
+	}
+	return 2222
+}
+
+// ResolvedQemuSSHHost returns the effective QEMU SSH host: env > toml > default "127.0.0.1".
+func (c CellSection) ResolvedQemuSSHHost() string {
+	if v := os.Getenv("DEVCELL_QEMU_SSH_HOST"); v != "" {
+		return v
+	}
+	if c.QemuSSHHost != "" {
+		return c.QemuSSHHost
+	}
+	return "127.0.0.1"
+}
+
+// ResolvedQemuWindowsISO returns the Windows ISO path: env > toml > "".
+func (c CellSection) ResolvedQemuWindowsISO() string {
+	if v := os.Getenv("DEVCELL_QEMU_WINDOWS_ISO"); v != "" {
+		return v
+	}
+	return c.QemuWindowsISO
+}
+
+// ResolvedQemuCPUs returns the effective QEMU vCPU count: env > toml > default 4.
+func (c CellSection) ResolvedQemuCPUs() int {
+	if v := os.Getenv("DEVCELL_QEMU_CPUS"); v != "" {
+		if n := atoiOr(v, 0); n > 0 {
+			return n
+		}
+	}
+	if c.QemuCPUs > 0 {
+		return c.QemuCPUs
+	}
+	return 4
+}
+
+// ResolvedQemuMemoryGB returns the effective QEMU memory: env > toml > default 4.
+func (c CellSection) ResolvedQemuMemoryGB() int {
+	if v := os.Getenv("DEVCELL_QEMU_MEMORY_GB"); v != "" {
+		if n := atoiOr(v, 0); n > 0 {
+			return n
+		}
+	}
+	if c.QemuMemoryGB > 0 {
+		return c.QemuMemoryGB
+	}
+	return 4
+}
+
+// ResolvedQemuDiskSizeGB returns the effective QEMU disk size: env > toml > default 64.
+func (c CellSection) ResolvedQemuDiskSizeGB() int {
+	if v := os.Getenv("DEVCELL_QEMU_DISK_SIZE_GB"); v != "" {
+		if n := atoiOr(v, 0); n > 0 {
+			return n
+		}
+	}
+	if c.QemuDiskSizeGB > 0 {
+		return c.QemuDiskSizeGB
+	}
+	return 64
+}
+
+// ResolvedQemuDisplay returns the effective QEMU display: env > toml > default "none".
+func (c CellSection) ResolvedQemuDisplay() string {
+	if v := os.Getenv("DEVCELL_QEMU_DISPLAY"); v != "" {
+		return v
+	}
+	if c.QemuDisplay != "" {
+		return c.QemuDisplay
+	}
+	return "none"
+}
+
 // ResolvedThin returns the effective thin setting: default ON, disabled by env/toml.
 func (c CellSection) ResolvedThin() bool {
 	if v := os.Getenv("DEVCELL_THIN"); v == "0" {
@@ -149,6 +319,22 @@ func (c CellSection) ResolvedGUI() bool {
 		return true
 	}
 	return *c.GUI
+}
+
+// ResolvedKVM returns the effective KVM passthrough setting: env > toml >
+// default OFF. It is opt-in because the device lives on the docker daemon
+// host (e.g. the Colima VM), which the CLI cannot stat — a wrong guess either
+// breaks `docker run` outright or silently drops the guest back to TCG.
+func (c CellSection) ResolvedKVM() bool {
+	if v := os.Getenv("DEVCELL_KVM"); v == "1" {
+		return true
+	} else if v == "0" {
+		return false
+	}
+	if c.KVM != nil {
+		return *c.KVM
+	}
+	return false
 }
 
 // ResolvedPerCellImage returns true only when explicitly enabled.
@@ -233,10 +419,34 @@ func (v VolumeMount) Resolved() string {
 	return v.Mount
 }
 
-// PackagesSection holds [packages] config for npm and python tools.
+// ContainerPath returns the container-side mount point with trailing slashes
+// stripped so path comparisons work regardless of how the user wrote the path.
+// For "host:container" or "host:container:mode" it returns "container".
+// For shorthand (no colon) it returns the path itself (identity mount).
+func (v VolumeMount) ContainerPath() string {
+	if v.Mount == "" {
+		return ""
+	}
+	parts := strings.SplitN(v.Mount, ":", 3)
+	if len(parts) >= 2 {
+		return strings.TrimRight(parts[1], "/")
+	}
+	return strings.TrimRight(v.Mount, "/")
+}
+
+// NixPackages holds [packages.nix] config: arbitrary nixpkgs packages
+// from three channels matching the flake inputs in nixhome/flake.nix.
+type NixPackages struct {
+	Stable   []string `toml:"stable"`
+	Unstable []string `toml:"unstable"`
+	Edge     []string `toml:"edge"`
+}
+
+// PackagesSection holds [packages] config for npm, python, and nix tools.
 type PackagesSection struct {
 	Npm    map[string]string `toml:"npm"`
 	Python map[string]string `toml:"python"`
+	Nix    NixPackages       `toml:"nix"`
 }
 
 // LLMProvider holds a single provider entry under [llm.models.providers.<name>].
@@ -253,16 +463,28 @@ type LLMModelsSection struct {
 
 // LLMSection holds [llm] config — all AI agent settings in one place.
 //
-// SystemPrompt and SystemPromptFile are mutually exclusive — set one or
-// neither. The resolver in internal/runner.ResolveSystemPrompt validates
+// Two independent layers, each with an inline and a file form:
+//
+//   - SystemPrompt / SystemPromptFile REPLACE Claude Code's built-in prompt
+//     (claude --system-prompt-file). Setting this discards the stock tool
+//     guidance and safety instructions — you own the whole prompt.
+//   - AppendSystemPrompt / AppendSystemPromptFile layer on top of whichever
+//     base is in effect (claude --append-system-prompt-file), alongside the
+//     container context devcell always contributes.
+//
+// Within a layer the inline and file forms are mutually exclusive — set one
+// or neither. The resolver in internal/runner.ResolveSystemPrompt validates
 // this and returns an error when both are set, so we don't fail config
 // load for projects where the conflict is harmless (e.g. callers that
 // don't read system prompts).
 type LLMSection struct {
-	SystemPrompt     string           `toml:"system_prompt"`
-	SystemPromptFile string           `toml:"system_prompt_file"`
-	UseOllama        bool             `toml:"use_ollama"`
-	Models           LLMModelsSection `toml:"models"`
+	SystemPrompt           string           `toml:"system_prompt"`
+	SystemPromptFile       string           `toml:"system_prompt_file"`
+	AppendSystemPrompt     string           `toml:"append_system_prompt"`
+	AppendSystemPromptFile string           `toml:"append_system_prompt_file"`
+	UseOllama              bool             `toml:"use_ollama"`
+	UseOpenRouter          bool             `toml:"use_openrouter"`
+	Models                 LLMModelsSection `toml:"models"`
 }
 
 // GitSection holds [git] config for git identity inside the container.
@@ -389,6 +611,59 @@ func (s StealthSection) ResolvedUserAgent() string {
 	return "Mozilla/5.0 (" + platformUA + ") AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36"
 }
 
+// DockerSection holds [docker] config for runtime container resource limits.
+// Values follow the same env > toml > default resolution chain as other sections.
+type DockerSection struct {
+	Privileged bool     `toml:"privileged"` // run container with --privileged; default: false
+	CapAdd     []string `toml:"cap_add"`    // extra Linux capabilities (e.g. ["SYS_ADMIN"]); default: none
+	MemLimit   string   `toml:"mem_limit"`  // docker --memory ceiling (e.g. "4g"); "0" = uncapped; env: DEVCELL_DOCKER_MEM_LIMIT
+	CPULimit   string   `toml:"cpu_limit"`  // docker --cpus quota (e.g. "2"); "0" = no quota; env: DEVCELL_DOCKER_CPU_LIMIT
+	ShmSize    string   `toml:"shm_size"`   // docker --shm-size (e.g. "1g"); env: DEVCELL_DOCKER_SHM_SIZE
+}
+
+// ResolvedMemLimit returns the effective memory limit: env > toml > default "4g".
+func (d DockerSection) ResolvedMemLimit() string {
+	if v := os.Getenv("DEVCELL_DOCKER_MEM_LIMIT"); v != "" {
+		return v
+	}
+	if d.MemLimit != "" {
+		return d.MemLimit
+	}
+	return "4g"
+}
+
+// ResolvedCPULimit returns the effective CPU limit: env > toml > default "2".
+func (d DockerSection) ResolvedCPULimit() string {
+	if v := os.Getenv("DEVCELL_DOCKER_CPU_LIMIT"); v != "" {
+		return v
+	}
+	if d.CPULimit != "" {
+		return d.CPULimit
+	}
+	return "2"
+}
+
+// ResolvedShmSize returns the effective shm size: env > toml > default "1g".
+func (d DockerSection) ResolvedShmSize() string {
+	if v := os.Getenv("DEVCELL_DOCKER_SHM_SIZE"); v != "" {
+		return v
+	}
+	if d.ShmSize != "" {
+		return d.ShmSize
+	}
+	return "1g"
+}
+
+// BuildSection holds [build] config for thin-build resource ceilings.
+// Values feed the same resolution chain as the env vars; an explicit env var
+// always wins over TOML (env > toml > derived default).
+type BuildSection struct {
+	Memory  string `toml:"memory"`   // docker --memory ceiling (e.g. "16g"); "0" = uncapped; env: DEVCELL_BUILD_MEMORY
+	CPUs    string `toml:"cpus"`     // docker --cpus quota (e.g. "8"); "0" = no quota; env: DEVCELL_BUILD_CPUS
+	MaxJobs int    `toml:"max_jobs"` // nix max-jobs; 0 = derived from ceiling; env: DEVCELL_NIX_MAX_JOBS
+	Cores   int    `toml:"cores"`    // nix cores (make -j per job); 0 = derived; env: DEVCELL_NIX_CORES
+}
+
 // NixSection holds [nix] config for nix image and nixhome settings.
 type NixSection struct {
 	Image       string `toml:"image"`   // nix core image for thin builds; default: DefaultNixImage; env: DEVCELL_NIX_IMAGE
@@ -419,20 +694,103 @@ func (a AwsSection) ResolvedReadOnly() bool {
 	return *a.ReadOnly
 }
 
+// GUISection holds [gui] config for desktop/window-manager settings.
+type GUISection struct {
+	Enabled    *bool  `toml:"enabled"`    // default: true (nil = not set → true)
+	WM         string `toml:"wm"`         // "icewm" (default) or "fluxbox"
+	Resolution string `toml:"resolution"` // logical resolution; default: "1920x1080x24"
+	Scale      int    `toml:"scale"`      // display scale factor (1=96dpi, 2=192dpi HiDPI); default: 1
+}
+
+// ResolvedEnabled returns the effective GUI setting: true unless explicitly set to false.
+func (g GUISection) ResolvedEnabled() bool {
+	if g.Enabled == nil {
+		return true
+	}
+	return *g.Enabled
+}
+
+// ResolvedWM returns the effective window manager: "icewm" unless explicitly set.
+func (g GUISection) ResolvedWM() string {
+	if g.WM == "" {
+		return "icewm"
+	}
+	return g.WM
+}
+
+// ResolvedResolution returns the logical resolution: "1920x1080x24" unless explicitly set.
+func (g GUISection) ResolvedResolution() string {
+	if g.Resolution == "" {
+		return "1920x1080x24"
+	}
+	return g.Resolution
+}
+
+// ResolvedScale returns the display scale factor: 1 unless explicitly set.
+func (g GUISection) ResolvedScale() int {
+	if g.Scale <= 0 {
+		return 1
+	}
+	return g.Scale
+}
+
+// ResolvedDPI returns the X server DPI: 96 * scale.
+func (g GUISection) ResolvedDPI() int {
+	return 96 * g.ResolvedScale()
+}
+
+// ResolvedFramebufferResolution returns the physical Xvfb framebuffer size:
+// logical resolution multiplied by scale factor.
+func (g GUISection) ResolvedFramebufferResolution() string {
+	res := g.ResolvedResolution()
+	scale := g.ResolvedScale()
+	if scale == 1 {
+		return res
+	}
+	parts := strings.SplitN(res, "x", 3)
+	if len(parts) < 2 {
+		return res
+	}
+	w, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return res
+	}
+	h, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return res
+	}
+	depth := "24"
+	if len(parts) == 3 {
+		depth = parts[2]
+	}
+	return fmt.Sprintf("%dx%dx%s", w*scale, h*scale, depth)
+}
+
+// WireguardEntry holds one [[wireguard]] table-array entry.
+type WireguardEntry struct {
+	Name    string `toml:"name"`
+	Enabled bool   `toml:"enabled"`
+	Config  string `toml:"config"`
+}
+
 // CellConfig is the merged configuration from all TOML layers.
 type CellConfig struct {
-	Cell     CellSection
-	Nix      NixSection     `toml:"nix"`
-	LLM      LLMSection     `toml:"llm"`
-	Git      GitSection     `toml:"git"`
-	Ports    PortsSection   `toml:"ports"`
-	Op       OpSection      `toml:"op"`
-	Aws      AwsSection     `toml:"aws"`
-	Stealth  StealthSection `toml:"stealth"`
-	Env      map[string]string
-	Mise     map[string]string `toml:"mise"` // [mise] — keys map to MISE_<UPPER_KEY> env vars
-	Volumes  []VolumeMount
-	Packages PackagesSection
+	Cell      CellSection
+	Docker    DockerSection  `toml:"docker"`
+	Build     BuildSection   `toml:"build"`
+	Nix       NixSection     `toml:"nix"`
+	LLM       LLMSection     `toml:"llm"`
+	Git       GitSection     `toml:"git"`
+	Ports     PortsSection   `toml:"ports"`
+	Op        OpSection      `toml:"op"`
+	Aws       AwsSection     `toml:"aws"`
+	Stealth   StealthSection `toml:"stealth"`
+	GUI       GUISection     `toml:"gui"`
+	Env       map[string]string
+	Mise      map[string]string `toml:"mise"` // [mise] — keys map to MISE_<UPPER_KEY> env vars
+	Volumes   []VolumeMount
+	Packages  PackagesSection
+	Wireguard []WireguardEntry `toml:"wireguard"`
 }
 
 // LoadFile parses a TOML file into CellConfig.
@@ -449,7 +807,18 @@ func LoadFile(path string) (CellConfig, error) {
 	if _, err := toml.Decode(string(data), &c); err != nil {
 		return CellConfig{}, err
 	}
+	migrateGUIField(&c)
+	sort.Strings(c.Cell.Modules)
 	return c, nil
+}
+
+// migrateGUIField copies legacy [cell] gui into [gui] enabled when the new
+// section is not explicitly set. This preserves backward compatibility with
+// configs that use [cell] gui = false instead of [gui] enabled = false.
+func migrateGUIField(c *CellConfig) {
+	if c.Cell.GUI != nil && c.GUI.Enabled == nil {
+		c.GUI.Enabled = c.Cell.GUI
+	}
 }
 
 // unionDedupStrings returns a + b with duplicates removed, preserving the
@@ -473,6 +842,17 @@ func unionDedupStrings(a, b []string) []string {
 		}
 	}
 	return out
+}
+
+// mergeNixPkgTier merges one [packages.nix] tier with the same semantics as
+// [cell].modules: union-dedup, sorted; explicit empty slice clears global.
+func mergeNixPkgTier(global, project []string) []string {
+	if project != nil && len(project) == 0 {
+		return []string{}
+	}
+	merged := unionDedupStrings(global, project)
+	sort.Strings(merged)
+	return merged
 }
 
 // Merge returns a new CellConfig with project overriding global for scalars;
@@ -527,11 +907,8 @@ func Merge(global, project CellConfig) CellConfig {
 	} else {
 		out.Cell.Modules = unionDedupStrings(global.Cell.Modules, project.Cell.Modules)
 	}
-	if project.Cell.DockerPrivileged {
-		out.Cell.DockerPrivileged = true
-	}
-	if len(project.Cell.DockerCapAdd) > 0 {
-		out.Cell.DockerCapAdd = unionDedupStrings(global.Cell.DockerCapAdd, project.Cell.DockerCapAdd)
+	if project.Cell.KVM != nil {
+		out.Cell.KVM = project.Cell.KVM
 	}
 	if project.Cell.PerCellImage != nil {
 		out.Cell.PerCellImage = project.Cell.PerCellImage
@@ -560,6 +937,51 @@ func Merge(global, project CellConfig) CellConfig {
 	if project.Cell.TartOCIImage != "" {
 		out.Cell.TartOCIImage = project.Cell.TartOCIImage
 	}
+	if project.Cell.QemuSSHPort > 0 {
+		out.Cell.QemuSSHPort = project.Cell.QemuSSHPort
+	}
+	if project.Cell.QemuSSHHost != "" {
+		out.Cell.QemuSSHHost = project.Cell.QemuSSHHost
+	}
+	if project.Cell.QemuWindowsISO != "" {
+		out.Cell.QemuWindowsISO = project.Cell.QemuWindowsISO
+	}
+	if project.Cell.QemuCPUs > 0 {
+		out.Cell.QemuCPUs = project.Cell.QemuCPUs
+	}
+	if project.Cell.QemuMemoryGB > 0 {
+		out.Cell.QemuMemoryGB = project.Cell.QemuMemoryGB
+	}
+	if project.Cell.QemuDiskSizeGB > 0 {
+		out.Cell.QemuDiskSizeGB = project.Cell.QemuDiskSizeGB
+	}
+	if project.Cell.QemuDisplay != "" {
+		out.Cell.QemuDisplay = project.Cell.QemuDisplay
+	}
+	if project.Cell.LibvirtURI != "" {
+		out.Cell.LibvirtURI = project.Cell.LibvirtURI
+	}
+	if project.Cell.QemuProjectSync != "" {
+		out.Cell.QemuProjectSync = project.Cell.QemuProjectSync
+	}
+	if project.Cell.DefaultCommand != "" {
+		out.Cell.DefaultCommand = project.Cell.DefaultCommand
+	}
+	// Path map accumulates like Env: global entries plus project entries,
+	// project winning on the same key.
+	if len(global.Cell.LibvirtPathMap) > 0 || len(project.Cell.LibvirtPathMap) > 0 {
+		merged := make(map[string]string, len(global.Cell.LibvirtPathMap)+len(project.Cell.LibvirtPathMap))
+		for k, v := range global.Cell.LibvirtPathMap {
+			merged[k] = v
+		}
+		for k, v := range project.Cell.LibvirtPathMap {
+			merged[k] = v
+		}
+		out.Cell.LibvirtPathMap = merged
+	}
+	if project.Cell.Engine != "" {
+		out.Cell.Engine = project.Cell.Engine
+	}
 
 	// LLM: project wins for scalars, providers accumulate
 	out.LLM = global.LLM
@@ -569,8 +991,17 @@ func Merge(global, project CellConfig) CellConfig {
 	if project.LLM.SystemPromptFile != "" {
 		out.LLM.SystemPromptFile = project.LLM.SystemPromptFile
 	}
+	if project.LLM.AppendSystemPrompt != "" {
+		out.LLM.AppendSystemPrompt = project.LLM.AppendSystemPrompt
+	}
+	if project.LLM.AppendSystemPromptFile != "" {
+		out.LLM.AppendSystemPromptFile = project.LLM.AppendSystemPromptFile
+	}
 	if project.LLM.UseOllama {
 		out.LLM.UseOllama = true
+	}
+	if project.LLM.UseOpenRouter {
+		out.LLM.UseOpenRouter = true
 	}
 
 	// Git: project wins when non-zero
@@ -603,6 +1034,39 @@ func Merge(global, project CellConfig) CellConfig {
 		out.Stealth.Platform = project.Stealth.Platform
 	}
 
+	// Build: project wins when non-zero
+	out.Build = global.Build
+	if project.Build.Memory != "" {
+		out.Build.Memory = project.Build.Memory
+	}
+	if project.Build.CPUs != "" {
+		out.Build.CPUs = project.Build.CPUs
+	}
+	if project.Build.MaxJobs != 0 {
+		out.Build.MaxJobs = project.Build.MaxJobs
+	}
+	if project.Build.Cores != 0 {
+		out.Build.Cores = project.Build.Cores
+	}
+
+	// Docker: project wins when non-empty / true
+	out.Docker = global.Docker
+	if project.Docker.Privileged {
+		out.Docker.Privileged = true
+	}
+	if len(project.Docker.CapAdd) > 0 {
+		out.Docker.CapAdd = unionDedupStrings(global.Docker.CapAdd, project.Docker.CapAdd)
+	}
+	if project.Docker.MemLimit != "" {
+		out.Docker.MemLimit = project.Docker.MemLimit
+	}
+	if project.Docker.CPULimit != "" {
+		out.Docker.CPULimit = project.Docker.CPULimit
+	}
+	if project.Docker.ShmSize != "" {
+		out.Docker.ShmSize = project.Docker.ShmSize
+	}
+
 	// Nix: project wins when non-empty
 	out.Nix = global.Nix
 	if project.Nix.Image != "" {
@@ -610,6 +1074,21 @@ func Merge(global, project CellConfig) CellConfig {
 	}
 	if project.Nix.NixhomePath != "" {
 		out.Nix.NixhomePath = project.Nix.NixhomePath
+	}
+
+	// GUI: project wins when non-zero
+	out.GUI = global.GUI
+	if project.GUI.Enabled != nil {
+		out.GUI.Enabled = project.GUI.Enabled
+	}
+	if project.GUI.WM != "" {
+		out.GUI.WM = project.GUI.WM
+	}
+	if project.GUI.Resolution != "" {
+		out.GUI.Resolution = project.GUI.Resolution
+	}
+	if project.GUI.Scale != 0 {
+		out.GUI.Scale = project.GUI.Scale
 	}
 
 	// Op documents: accumulate from both Documents and legacy Items, deduped.
@@ -645,8 +1124,26 @@ func Merge(global, project CellConfig) CellConfig {
 		out.Ports.PublishIP = project.Ports.PublishIP
 	}
 
-	// Slices accumulate: global first, then project
-	out.Volumes = append(global.Volumes, project.Volumes...)
+	// Volumes accumulate; project wins when both layers mount at the same
+	// container path. Dedup by ContainerPath prevents Docker's
+	// "Duplicate mount point" error.
+	{
+		seen := make(map[string]int, len(global.Volumes)+len(project.Volumes))
+		for _, v := range global.Volumes {
+			cp := v.ContainerPath()
+			seen[cp] = len(out.Volumes)
+			out.Volumes = append(out.Volumes, v)
+		}
+		for _, v := range project.Volumes {
+			cp := v.ContainerPath()
+			if idx, ok := seen[cp]; ok {
+				out.Volumes[idx] = v
+			} else {
+				seen[cp] = len(out.Volumes)
+				out.Volumes = append(out.Volumes, v)
+			}
+		}
+	}
 
 	// LLM models: project default wins, providers accumulate (project wins on key conflict)
 	if project.LLM.Models.Default != "" {
@@ -662,6 +1159,50 @@ func Merge(global, project CellConfig) CellConfig {
 		}
 	}
 
+	// Packages.Nix: union-dedup per tier, same semantics as [cell].modules.
+	// Explicit empty slice in project clears global (escape hatch).
+	out.Packages.Nix.Stable = mergeNixPkgTier(global.Packages.Nix.Stable, project.Packages.Nix.Stable)
+	out.Packages.Nix.Unstable = mergeNixPkgTier(global.Packages.Nix.Unstable, project.Packages.Nix.Unstable)
+	out.Packages.Nix.Edge = mergeNixPkgTier(global.Packages.Nix.Edge, project.Packages.Nix.Edge)
+
+	// Packages.Npm/Python: maps accumulate (same semantics as Env — project wins on key conflict).
+	if len(global.Packages.Npm) > 0 || len(project.Packages.Npm) > 0 {
+		out.Packages.Npm = make(map[string]string, len(global.Packages.Npm)+len(project.Packages.Npm))
+		for k, v := range global.Packages.Npm {
+			out.Packages.Npm[k] = v
+		}
+		for k, v := range project.Packages.Npm {
+			out.Packages.Npm[k] = v
+		}
+	}
+	if len(global.Packages.Python) > 0 || len(project.Packages.Python) > 0 {
+		out.Packages.Python = make(map[string]string, len(global.Packages.Python)+len(project.Packages.Python))
+		for k, v := range global.Packages.Python {
+			out.Packages.Python[k] = v
+		}
+		for k, v := range project.Packages.Python {
+			out.Packages.Python[k] = v
+		}
+	}
+
+	// Wireguard: accumulate, project wins on name conflict.
+	if len(global.Wireguard) > 0 || len(project.Wireguard) > 0 {
+		seen := make(map[string]int, len(global.Wireguard))
+		for _, wg := range global.Wireguard {
+			seen[wg.Name] = len(out.Wireguard)
+			out.Wireguard = append(out.Wireguard, wg)
+		}
+		for _, wg := range project.Wireguard {
+			if idx, ok := seen[wg.Name]; ok {
+				out.Wireguard[idx] = wg
+			} else {
+				seen[wg.Name] = len(out.Wireguard)
+				out.Wireguard = append(out.Wireguard, wg)
+			}
+		}
+	}
+
+	migrateGUIField(&out)
 	return out
 }
 
@@ -680,6 +1221,9 @@ func ApplyEnv(c *CellConfig, getenv func(string) string) {
 		b := true
 		c.Cell.PerCellImage = &b
 	}
+	if v := getenv("DEVCELL_DEFAULT_COMMAND"); v != "" {
+		c.Cell.DefaultCommand = v
+	}
 }
 
 // LoadLayered loads global + project files, merges them, then applies env overrides.
@@ -695,6 +1239,9 @@ func LoadLayered(globalPath, projectPath string, getenv func(string) string) (Ce
 	}
 	merged := Merge(global, project)
 	ApplyEnv(&merged, getenv)
+	// CELL-331: [a,b] and [b,a] must resolve to the same image tag and
+	// home-manager closure regardless of which layer contributed what.
+	sort.Strings(merged.Cell.Modules)
 	return merged, nil
 }
 
@@ -765,6 +1312,53 @@ func ValidateStack(stack string) error {
 	copy(sorted, knownStacks)
 	sort.Strings(sorted)
 	return fmt.Errorf("unknown stack %q; available stacks: %s", stack, strings.Join(sorted, ", "))
+}
+
+// ValidateWireguard checks that every enabled [[wireguard]] entry has a
+// non-empty name, config, valid WireGuard syntax, at least one peer with a
+// valid PublicKey, and an interface Address.
+func ValidateWireguard(c CellConfig) error {
+	for i, entry := range c.Wireguard {
+		if !entry.Enabled {
+			continue
+		}
+		if strings.TrimSpace(entry.Name) == "" {
+			return fmt.Errorf("wireguard[%d]: name is required when enabled", i)
+		}
+		if strings.TrimSpace(entry.Config) == "" {
+			return fmt.Errorf("wireguard[%d] %q: config is required when enabled", i, entry.Name)
+		}
+		parsed, err := wg.ParseConfig(strings.NewReader(entry.Config))
+		if err != nil {
+			return fmt.Errorf("wireguard[%d] %q: %w", i, entry.Name, err)
+		}
+		if len(parsed.Address) == 0 {
+			return fmt.Errorf("wireguard[%d] %q: [Interface] Address is required", i, entry.Name)
+		}
+		if len(parsed.Peers) == 0 {
+			return fmt.Errorf("wireguard[%d] %q: at least one [Peer] is required", i, entry.Name)
+		}
+		for j, peer := range parsed.Peers {
+			if peer.PublicKey == "" {
+				return fmt.Errorf("wireguard[%d] %q: peer[%d] PublicKey is required", i, entry.Name, j)
+			}
+			keyBytes, err := base64.StdEncoding.DecodeString(peer.PublicKey)
+			if err != nil || len(keyBytes) != 32 {
+				return fmt.Errorf("wireguard[%d] %q: peer[%d] PublicKey is not a valid 32-byte base64 key", i, entry.Name, j)
+			}
+		}
+	}
+	return nil
+}
+
+// WireguardEnabled reports whether any [[wireguard]] entry is enabled.
+func WireguardEnabled(c CellConfig) bool {
+	for _, wg := range c.Wireguard {
+		if wg.Enabled {
+			return true
+		}
+	}
+	return false
 }
 
 func atoiOr(s string, fallback int) int {

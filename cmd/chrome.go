@@ -13,14 +13,15 @@ import (
 	"time"
 
 	"github.com/DimmKirr/devcell/internal/config"
+	"github.com/DimmKirr/devcell/internal/telemetry"
 	"github.com/DimmKirr/devcell/internal/ux"
 	"github.com/spf13/cobra"
 )
 
 var (
-	chromeSyncOnly  bool
-	chromeNoSync    bool
-	chromeForce     bool
+	chromeSyncOnly bool
+	chromeNoSync   bool
+	chromeForce    bool
 )
 
 var chromeCmd = &cobra.Command{
@@ -31,6 +32,16 @@ sites you need, then press Enter in the terminal. Chromium closes and
 cookies are exported as a Playwright storage-state.json that the cell
 mounts read-only — so authenticated sessions carry over to browser
 automation inside the container.
+
+Cookie flow:
+
+  1. You log in via a clean host-side Chrome (no CDP, no bot detection).
+  2. Cookies are extracted via CDP into ~/.devcell/<cell>/.playwright/storage-state.json.
+  3. patchright MCP is killed in every running cell that shares this cell-home.
+  4. Claude's MCP client respawns patchright, which reads --storage-state from
+     the fresh file and injects cookies into the in-memory BrowserContext.
+     The container's Chromium profile (~/.chrome/<app>/) receives the cookies
+     at runtime via Playwright — no file copy into the profile directory.
 
 Each app-name gets its own isolated Chrome profile stored at
 ~/.devcell/<cell>/.chrome/<app-name>/. When only one cell is running
@@ -80,6 +91,8 @@ func chromeBinary() (string, error) {
 
 func runChrome(cmd *cobra.Command, args []string) error {
 	applyOutputFlagsWithLog("chrome")
+	telemetry.Track("auth_chrome", map[string]any{"sync_only": chromeSyncOnly, "no_sync": chromeNoSync, "force": chromeForce})
+
 	c, err := config.LoadFromOS()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
@@ -125,8 +138,6 @@ func runChrome(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	ux.Info("Cookies ready. Use Playwright to browse with your authenticated session.")
-
 	return nil
 }
 
@@ -153,8 +164,8 @@ type localStorageEntry struct {
 }
 
 type storageState struct {
-	Cookies []storageStateCookie  `json:"cookies"`
-	Origins []storageStateOrigin  `json:"origins"`
+	Cookies []storageStateCookie `json:"cookies"`
+	Origins []storageStateOrigin `json:"origins"`
 }
 
 // openExtractAndClose opens Chrome for the user to log in (no CDP, no special
@@ -250,6 +261,7 @@ func openExtractAndClose(profile, storageStatePath string, urls []string, noSync
 				sp.Fail(fmt.Sprintf("cookie extraction failed: %v", err))
 			} else {
 				sp.Success(fmt.Sprintf("Exported %d cookies for %s", count, sites))
+				ux.Info(fmt.Sprintf("Cookies saved to %s", storageStatePath))
 
 				// Kick patchright MCP in every running cell that shares this
 				// cell-home bind mount — they cached the pre-relog
@@ -270,7 +282,11 @@ func openExtractAndClose(profile, storageStatePath string, urls []string, noSync
 					killMcp:        dockerKillPatchrightMcp,
 				})
 				if len(kicked) > 0 {
-					ux.Debugf("kicked patchright MCP in %d cell(s): %v", len(kicked), kicked)
+					containerProfile := "/home/" + kickHostUser + "/.chrome/${APP_NAME:-cell}"
+					ux.Info(fmt.Sprintf("Restarted patchright MCP in %d cell(s) via `docker exec <id> pkill -f mcp-server-patchright`", len(kicked)))
+					ux.Info(fmt.Sprintf("MCP will inject cookies into %s on next browser tool call", containerProfile))
+				} else {
+					ux.Info("No running cells found — cookies will be loaded on next cell start")
 				}
 			}
 		}

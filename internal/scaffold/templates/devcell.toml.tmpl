@@ -9,8 +9,6 @@
 # graphics, infra, news, nixos, qa-tools, scraping, travel, go, node, python
 # modules = ["electronics", "desktop"]
 #
-# Disable GUI (Xvfb + VNC + browser). GUI is enabled by default.
-# gui = false
 # Timezone (IANA format). If omitted, inherits host $TZ.
 # timezone = "Europe/Prague"
 
@@ -46,6 +44,11 @@
 # get read-only creds. Default: false (full access).
 # [aws]
 # read_only = true
+
+# GUI desktop (Xvfb + VNC + window manager). Enabled by default.
+# [gui]
+# enabled = true
+# wm = "icewm"   # or "fluxbox"
 
 # Port forwarding from container to host. Bare port = same on both sides.
 # [ports]

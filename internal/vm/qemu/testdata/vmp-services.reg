@@ -1,0 +1,352 @@
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+Windows Registry Editor Version 5.00
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\hvcrash]
+"ImagePath"=hex(2):5c,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,\
+  74,00,5c,00,53,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,64,00,72,\
+  00,69,00,76,00,65,00,72,00,73,00,5c,00,68,00,76,00,63,00,72,00,61,00,73,00,\
+  68,00,2e,00,73,00,79,00,73,00,00,00
+"Type"=dword:00000001
+"Start"=dword:00000004
+"ErrorControl"=dword:00000001
+"Owners"=hex(7):77,00,68,00,76,00,63,00,72,00,61,00,73,00,68,00,2e,00,69,00,6e,\
+  00,66,00,00,00,00,00
+
+
+Windows Registry Editor Version 5.00
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\HvHost]
+"DependOnService"=hex(7):68,00,76,00,73,00,65,00,72,00,76,00,69,00,63,00,65,00,\
+  00,00,00,00
+"Description"="@%SystemRoot%\\system32\\hvhostsvc.dll,-101"
+"DisplayName"="@%SystemRoot%\\system32\\hvhostsvc.dll,-100"
+"ErrorControl"=dword:00000001
+"ImagePath"=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,\
+  74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,73,\
+  00,76,00,63,00,68,00,6f,00,73,00,74,00,2e,00,65,00,78,00,65,00,20,00,2d,00,\
+  6b,00,20,00,4c,00,6f,00,63,00,61,00,6c,00,53,00,79,00,73,00,74,00,65,00,6d,\
+  00,4e,00,65,00,74,00,77,00,6f,00,72,00,6b,00,52,00,65,00,73,00,74,00,72,00,\
+  69,00,63,00,74,00,65,00,64,00,20,00,2d,00,70,00,00,00
+"ObjectName"="LocalSystem"
+"ServiceSidType"=dword:00000001
+"Start"=dword:00000003
+"Type"=dword:00000020
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\HvHost\Parameters]
+"ServiceDll"=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,\
+  00,74,00,25,00,5c,00,53,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,\
+  68,00,76,00,68,00,6f,00,73,00,74,00,73,00,76,00,63,00,2e,00,64,00,6c,00,6c,\
+  00,00,00
+"ServiceDllUnloadOnStop"=dword:00000001
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\HvHost\TriggerInfo]
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\HvHost\TriggerInfo\0]
+"Action"=dword:00000001
+"Data0"=hex:75,08,bc,a3,25,18,8a,41
+"DataType0"=dword:00000001
+"GUID"=hex:16,28,7a,2d,5e,0c,fc,45,9c,e7,57,0e,5e,cd,e9,c9
+"Type"=dword:00000007
+
+
+Windows Registry Editor Version 5.00
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\hvservice]
+"ImagePath"=hex(2):5c,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,\
+  74,00,5c,00,53,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,64,00,72,\
+  00,69,00,76,00,65,00,72,00,73,00,5c,00,68,00,76,00,73,00,65,00,72,00,76,00,\
+  69,00,63,00,65,00,2e,00,73,00,79,00,73,00,00,00
+"Type"=dword:00000001
+"Start"=dword:00000003
+"ErrorControl"=dword:00000001
+"DisplayName"="@hvservice.inf,%hvservice.SvcDesc%;Microsoft Hypervisor Service Driver"
+"Owners"=hex(7):68,00,76,00,73,00,65,00,72,00,76,00,69,00,63,00,65,00,2e,00,69,\
+  00,6e,00,66,00,00,00,00,00
+
+
+Windows Registry Editor Version 5.00
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\hvsocketcontrol]
+"ErrorControl"=dword:00000001
+"ImagePath"=hex(2):5c,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,\
+  74,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,64,00,72,\
+  00,69,00,76,00,65,00,72,00,73,00,5c,00,68,00,76,00,73,00,6f,00,63,00,6b,00,\
+  65,00,74,00,63,00,6f,00,6e,00,74,00,72,00,6f,00,6c,00,2e,00,73,00,79,00,73,\
+  00,00,00
+"Start"=dword:00000001
+"Type"=dword:00000001
+
+
+Windows Registry Editor Version 5.00
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\vmbus]
+"ImagePath"=hex(2):53,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,64,00,\
+  72,00,69,00,76,00,65,00,72,00,73,00,5c,00,76,00,6d,00,62,00,75,00,73,00,2e,\
+  00,73,00,79,00,73,00,00,00
+"Type"=dword:00000001
+"Start"=dword:00000000
+"ErrorControl"=dword:00000001
+"Group"="System Bus Extender"
+"Tag"=dword:00000006
+"DisplayName"="@wvmbus.inf,%vmbus.SVCDESC%;Virtual Machine Bus"
+"Owners"=hex(7):77,00,76,00,6d,00,62,00,75,00,73,00,2e,00,69,00,6e,00,66,00,00,\
+  00,00,00
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\vmbus\Parameters]
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\vmbus\Parameters\Wdf]
+"WdfMajorVersion"=dword:00000001
+"WdfMinorVersion"=dword:00000021
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\vmbus\Parameters\Winsock]
+"MaxSockAddrLength"=dword:00000024
+"MinSockAddrLength"=dword:00000024
+"HelperDllName"=hex(2):25,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,\
+  6f,00,74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,\
+  00,77,00,73,00,68,00,68,00,79,00,70,00,65,00,72,00,76,00,2e,00,64,00,6c,00,\
+  6c,00,00,00
+"ProviderGUID"=hex:1b,19,34,12,f7,4b,a7,4c,86,e0,df,d7,c3,2b,54,45
+"OfflineCapable"=dword:00000001
+"Mapping"=hex:03,00,00,00,03,00,00,00,22,00,00,00,01,00,00,00,01,00,00,00,22,\
+  00,00,00,01,00,00,00,00,00,00,00,22,00,00,00,00,00,00,00,01,00,00,00
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\vmbus\Parameters\Winsock\0]
+"Version"=dword:00000002
+"AddressFamily"=dword:00000022
+"MaxSockAddrLength"=dword:00000024
+"MinSockAddrLength"=dword:00000024
+"SocketType"=dword:00000001
+"Protocol"=dword:00000001
+"ProtocolMaxOffset"=dword:00000000
+"ByteOrder"=dword:00000000
+"MessageSize"=dword:00000000
+"szProtocol"=hex(2):48,00,79,00,70,00,65,00,72,00,2d,00,56,00,20,00,52,00,41,\
+  00,57,00
+"ProviderFlags"=dword:00000008
+"ServiceFlags"=dword:00020026
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\vmbus\StartOverride]
+"2"=dword:00000003
+"0"=dword:00000003
+
+
+Windows Registry Editor Version 5.00
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\vmbusproxy]
+"ErrorControl"=dword:00000001
+"ImagePath"=hex(2):5c,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,\
+  74,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,64,00,72,\
+  00,69,00,76,00,65,00,72,00,73,00,5c,00,76,00,6d,00,62,00,75,00,73,00,70,00,\
+  72,00,6f,00,78,00,79,00,2e,00,73,00,79,00,73,00,00,00
+"Start"=dword:00000003
+"Type"=dword:00000001
+
+
+Windows Registry Editor Version 5.00
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\vmbusr]
+"ImagePath"=hex(2):5c,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,\
+  74,00,5c,00,53,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,64,00,72,\
+  00,69,00,76,00,65,00,72,00,73,00,5c,00,76,00,6d,00,62,00,75,00,73,00,72,00,\
+  2e,00,73,00,79,00,73,00,00,00
+"Type"=dword:00000001
+"Start"=dword:00000003
+"ErrorControl"=dword:00000001
+"Group"="Extended Base"
+"Tag"=dword:0000000b
+"DisplayName"="@%SystemRoot%\\system32\\drivers\\vmbusr.sys,-1001"
+"Owners"=hex(7):77,00,76,00,6d,00,62,00,75,00,73,00,72,00,2e,00,69,00,6e,00,66,\
+  00,00,00,00,00
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\vmbusr\Parameters]
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\vmbusr\Parameters\Wdf]
+"WdfMajorVersion"=dword:00000001
+"WdfMinorVersion"=dword:00000021
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\vmbusr\State]
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\vmbusr\State\Wdf]
+"TimeOfLastTelemetryLog"=hex(b):18,5d,29,f7,9d,32,dd,01
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\vmbusr\Enum]
+"0"="ROOT\\VMBus\\0000"
+"Count"=dword:00000001
+"NextInstance"=dword:00000001
+
+
+Windows Registry Editor Version 5.00
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\vmcompute]
+"DependOnService"=hex(7):72,00,70,00,63,00,73,00,73,00,00,00,77,00,63,00,69,00,\
+  66,00,73,00,00,00,68,00,76,00,73,00,6f,00,63,00,6b,00,65,00,74,00,63,00,6f,\
+  00,6e,00,74,00,72,00,6f,00,6c,00,00,00,63,00,6f,00,6e,00,64,00,72,00,76,00,\
+  00,00,00,00
+"Description"="@%systemroot%\\system32\\vmcompute.exe,-101"
+"DisplayName"="@%systemroot%\\system32\\vmcompute.exe,-100"
+"ErrorControl"=dword:00000001
+"ImagePath"=hex(2):25,00,73,00,79,00,73,00,74,00,65,00,6d,00,72,00,6f,00,6f,00,\
+  74,00,25,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,76,\
+  00,6d,00,63,00,6f,00,6d,00,70,00,75,00,74,00,65,00,2e,00,65,00,78,00,65,00,\
+  00,00
+"ObjectName"="LocalSystem"
+"ServiceSidType"=dword:00000001
+"Start"=dword:00000003
+"Type"=dword:00000010
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\vmcompute\Security]
+"Security"=hex:01,00,14,80,78,00,00,00,84,00,00,00,14,00,00,00,30,00,00,00,02,\
+  00,1c,00,01,00,00,00,02,80,14,00,ff,01,0f,00,01,01,00,00,00,00,00,01,00,00,\
+  00,00,02,00,48,00,03,00,00,00,00,00,14,00,fd,01,02,00,01,01,00,00,00,00,00,\
+  05,12,00,00,00,00,00,18,00,ff,01,0f,00,01,02,00,00,00,00,00,05,20,00,00,00,\
+  20,02,00,00,00,00,14,00,8d,00,02,00,01,01,00,00,00,00,00,05,0b,00,00,00,01,\
+  01,00,00,00,00,00,05,12,00,00,00,01,01,00,00,00,00,00,05,12,00,00,00
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\vmcompute\TriggerInfo]
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\vmcompute\TriggerInfo\0]
+"Action"=dword:00000001
+"Data0"=hex:45,00,37,00,41,00,32,00,31,00,36,00,41,00,46,00,2d,00,31,00,45,00,\
+  43,00,31,00,2d,00,34,00,34,00,37,00,46,00,2d,00,38,00,44,00,33,00,46,00,2d,\
+  00,41,00,38,00,37,00,32,00,37,00,38,00,44,00,42,00,35,00,36,00,34,00,44,00,\
+  00,00
+"DataType0"=dword:00000002
+"GUID"=hex:67,d1,90,bc,70,94,39,41,a9,ba,be,0b,bb,f5,b7,4d
+"Type"=dword:00000006
+
+
+Windows Registry Editor Version 5.00
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\vmgid]
+"ImagePath"=hex(2):5c,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,\
+  74,00,5c,00,53,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,64,00,72,\
+  00,69,00,76,00,65,00,72,00,73,00,5c,00,76,00,6d,00,67,00,69,00,64,00,2e,00,\
+  73,00,79,00,73,00,00,00
+"Type"=dword:00000001
+"Start"=dword:00000003
+"ErrorControl"=dword:00000001
+"DisplayName"="@wvmgid.inf,%VmGid.SVCDESC%;Microsoft Hyper-V Guest Infrastructure Driver"
+"Owners"=hex(7):77,00,76,00,6d,00,67,00,69,00,64,00,2e,00,69,00,6e,00,66,00,00,\
+  00,00,00
+
+
+Windows Registry Editor Version 5.00
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\VMSNPXY]
+"DisplayName"="VmSwitch NIC Proxy Driver"
+"ErrorControl"=dword:00000001
+"Group"="Extended Base"
+"ImagePath"=hex(2):73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,64,00,\
+  72,00,69,00,76,00,65,00,72,00,73,00,5c,00,56,00,6d,00,73,00,50,00,72,00,6f,\
+  00,78,00,79,00,48,00,4e,00,69,00,63,00,2e,00,73,00,79,00,73,00,00,00
+"Start"=dword:00000000
+"Type"=dword:00000001
+"NdisMajorVersion"=dword:00000006
+"NdisMinorVersion"=dword:00000051
+"DriverMajorVersion"=dword:00000001
+"DriverMinorVersion"=dword:00000001
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\VMSNPXY\parameters]
+"WppRecorder_PerBufferMaxBytes"=dword:00010000
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\VMSNPXY\SharedState]
+"WppRecorder_TraceGuid"="{c0ddafb5-16eb-470b-bf17-24ed39a9e8ba}"
+
+
+Windows Registry Editor Version 5.00
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\VMSP]
+"DependOnService"=hex(7):56,00,4d,00,53,00,4e,00,50,00,58,00,59,00,00,00,00,00
+"DisplayName"="VmSwitch Protocol Driver"
+"ErrorControl"=dword:00000001
+"Group"="NDIS"
+"ImagePath"=hex(2):53,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,64,00,\
+  72,00,69,00,76,00,65,00,72,00,73,00,5c,00,76,00,6d,00,73,00,77,00,69,00,74,\
+  00,63,00,68,00,2e,00,73,00,79,00,73,00,00,00
+"Start"=dword:00000002
+"Type"=dword:00000001
+"NdisMajorVersion"=dword:00000006
+"NdisMinorVersion"=dword:00000053
+"DriverMajorVersion"=dword:00000013
+"DriverMinorVersion"=dword:00000000
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\VMSP\Linkage]
+"Export"=hex(7):5c,00,44,00,65,00,76,00,69,00,63,00,65,00,5c,00,56,00,4d,00,53,\
+  00,50,00,00,00,00,00
+"Bind"=hex(7):00,00
+"Route"=hex(7):00,00
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\VMSP\SharedState]
+"WppRecorder_TraceGuid"="{1f387cbc-6818-4530-9db6-5f1058cd7e86}"
+
+
+Windows Registry Editor Version 5.00
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\VmsProxy]
+"DisplayName"="VmSwitch Proxy Driver"
+"ErrorControl"=dword:00000001
+"Group"="Extended Base"
+"ImagePath"=hex(2):73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,64,00,\
+  72,00,69,00,76,00,65,00,72,00,73,00,5c,00,56,00,6d,00,73,00,50,00,72,00,6f,\
+  00,78,00,79,00,2e,00,73,00,79,00,73,00,00,00
+"Start"=dword:00000000
+"Tag"=dword:0000000c
+"Type"=dword:00000001
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\VmsProxy\parameters]
+"WppRecorder_PerBufferMaxBytes"=dword:00010000
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\VmsProxy\SharedState]
+"WppRecorder_TraceGuid"="{3b7922bb-c097-495d-bf47-d7003fd40a1a}"
+
+
+Windows Registry Editor Version 5.00
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\Vid]
+"ImagePath"=hex(2):5c,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,\
+  74,00,5c,00,53,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,64,00,72,\
+  00,69,00,76,00,65,00,72,00,73,00,5c,00,56,00,69,00,64,00,2e,00,73,00,79,00,\
+  73,00,00,00
+"Type"=dword:00000001
+"Start"=dword:00000001
+"ErrorControl"=dword:00000001
+"Group"="Extended Base"
+"Tag"=dword:0000001d
+"Owners"=hex(7):77,00,76,00,69,00,64,00,2e,00,69,00,6e,00,66,00,00,00,00,00
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\Vid\Parameters]
+"ExoDeviceEnabledClient"=dword:00000001
+
+
+Windows Registry Editor Version 5.00
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\wcifs]
+"DependOnService"=hex(7):46,00,6c,00,74,00,4d,00,67,00,72,00,00,00,00,00
+"Description"="@%systemroot%\\system32\\drivers\\wcifs.sys,-101"
+"DisplayName"="@%systemroot%\\system32\\drivers\\wcifs.sys,-100"
+"ErrorControl"=dword:00000001
+"Group"="FSFilter Virtualization"
+"ImagePath"=hex(2):5c,00,53,00,79,00,73,00,74,00,65,00,6d,00,52,00,6f,00,6f,00,\
+  74,00,5c,00,73,00,79,00,73,00,74,00,65,00,6d,00,33,00,32,00,5c,00,64,00,72,\
+  00,69,00,76,00,65,00,72,00,73,00,5c,00,77,00,63,00,69,00,66,00,73,00,2e,00,\
+  73,00,79,00,73,00,00,00
+"Start"=dword:00000002
+"Type"=dword:00000002
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\wcifs\Parameters]
+"DebugOptions"=dword:0000000c
+"SupportedFeatures"=dword:0000000f
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\wcifs\Parameters\Instances]
+"DefaultInstance"="wcifs Instance"
+"OuterInstance"="wcifs Outer Instance"
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\wcifs\Parameters\Instances\wcifs Instance]
+"Altitude"="189900"
+"Flags"=dword:00000000
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\wcifs\Parameters\Instances\wcifs Outer Instance]
+"Altitude"="189899"
+"Flags"=dword:00000000
+

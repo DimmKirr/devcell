@@ -93,7 +93,7 @@ func shellJoinTokens(tokens []string) string {
 }
 
 // shellQuoteToken wraps a token in single quotes, escaping any embedded
-// single quotes as '\''. Values that are already safe (no special chars)
+// single quotes as '\”. Values that are already safe (no special chars)
 // are returned as-is for readability.
 func shellQuoteToken(s string) string {
 	safe := true
@@ -427,4 +427,3 @@ func vagrantRun(ctx context.Context, vagrantDir string, args ...string) error {
 	}
 	return nil
 }
-

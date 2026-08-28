@@ -176,7 +176,7 @@ Vagrant.configure("2") do |config|
     cat > /usr/local/bin/devcell-init << 'INITSCRIPT'
 #!/bin/bash
 # DevCell init — sources entrypoint fragments at VM boot.
-# Mirrors images/entrypoint.sh with vagrant-appropriate env vars.
+# Sets up vagrant-appropriate env vars for the devcell entrypoint.
 export HOST_USER=vagrant
 export HOME=/home/vagrant
 export USER=vagrant
@@ -262,7 +262,7 @@ UNIT
     elif [ -d /opt/nixhome ]; then
       NIXHOME_FLAKE="/opt/nixhome"
     else
-      NIXHOME_FLAKE="github:DimmKirr/devcell?dir=nixhome"
+      NIXHOME_FLAKE="github:devcell-sh/community-home"
       echo "devcell: nixhome not found locally — fetching from GitHub"
     fi
 

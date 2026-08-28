@@ -21,7 +21,7 @@ type AcquireInputs struct {
 	Disks        []string          // raw disk image paths (VirtIO block devices via --disk)
 	SSHHost      string
 	SSHPort      uint16
-	ExternalVM   bool          // user explicitly configured SSH target — skip lifecycle
+	ExternalVM   bool // user explicitly configured SSH target — skip lifecycle
 	SSHTimeout   time.Duration
 	InitFunc     func() error // called to auto-init when VM doesn't exist; nil = error instead
 }

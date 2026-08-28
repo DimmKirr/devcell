@@ -18,7 +18,7 @@
         });
 
     # Tight source filter — only the Go files needed to compile cell.
-    # Excludes test/results/, web/, nixhome/, docs/, etc. so each
+    # Excludes test/results/, web/, docs/, etc. so each
     # nix-build doesn't copy the entire repo into the store.
     cellSrc = nixpkgs.lib.fileset.toSource {
       root = ./.;
@@ -31,7 +31,7 @@
     };
 
     # Version stamped into the binary via -ldflags. Consumers pinning a
-    # release (`nix profile install github:DimmKirr/devcell/v0.8.2#cell`)
+    # release (`nix profile install github:devcell-sh/devcell/v0.8.2#cell`)
     # override this by pointing `nix build` at a tagged ref and passing
     # `--override-input` or by editing this string in a release commit.
     # `self.shortRev` is populated when Nix evaluates a clean flake ref
@@ -55,7 +55,7 @@
         version = nixpkgs.lib.removePrefix "v" cellVersion;
         src = cellSrc;
 
-        vendorHash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+        vendorHash = "sha256-Jl7DQv3SXJ6H/BY97LQH1Zm47nOgaYAKyN1AczTNpro=";
 
         subPackages = ["cmd"];
 
@@ -93,13 +93,29 @@
 
         meta = with pkgs.lib; {
           description = "devcell CLI — container-native dev environments";
-          homepage = "https://github.com/DimmKirr/devcell";
+          homepage = "https://github.com/devcell-sh/devcell";
           license = licenses.mit;
           mainProgram = "cell";
         };
       };
       default = cell;
     });
+
+    # Home-manager module: configure the GLOBAL devcell config declaratively.
+    #   imports = [ devcell.homeManagerModules.default ];
+    #   devcell = { enable = true; prompt = "..."; op.documents = [ ... ]; };
+    # Renders ~/.config/devcell/devcell.toml and installs the cell CLI from
+    # this flake (override with devcell.package). Option tree is generated
+    # from internal/cfg.CellConfig by `task hm:generate` — see
+    # nix/home-manager/options.nix.
+    homeManagerModules = rec {
+      devcell = { config, lib, pkgs, ... }: {
+        imports = [ ./nix/home-manager/module.nix ];
+        config.devcell.package =
+          lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.cell;
+      };
+      default = devcell;
+    };
 
     # `nix develop` for local hacking — provides Go 1.26 + tooling.
     # nix-update rewrites `vendorHash` in this file after go.mod/go.sum
@@ -116,6 +132,11 @@
           pkgs.go-task
           pkgs.nix-update
           pkgs.pre-commit
+          pkgs.powershell
+          # TPM emulator for `task debug:windows:start` — the Windows debug
+          # VM carries its TPM state in the .utm bundle (BitLocker).
+          pkgs.swtpm
+          pkgs.cdrkit
         ];
         shellHook = ''
           if [ -d .git ] && [ -f .pre-commit-config.yaml ] && \

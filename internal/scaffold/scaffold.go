@@ -128,7 +128,8 @@ func generatePyprojectTOML(pkgs map[string]string) []byte {
 // and modules from the upstream devcell nixhome flake.
 // stack is a stack name (e.g. "go"), modules is a list of module names,
 // ver is the version tag, nixhomePath overrides the input URL to path:./nixhome.
-func GenerateFlakeNix(stack string, modules []string, ver string, withNixhome bool) string {
+// nixPkgs adds arbitrary nixpkgs packages with lib.hiPri (user override semantics).
+func GenerateFlakeNix(stack string, modules []string, ver string, withNixhome bool, nixPkgs ...cfg.NixPackages) string {
 	if stack == "" {
 		stack = "base"
 	}
@@ -156,11 +157,30 @@ func GenerateFlakeNix(stack string, modules []string, ver string, withNixhome bo
 		moduleExpr += fmt.Sprintf(" ++ [ { %s } ]", strings.Join(enableLines, " "))
 	}
 
+	// CELL-445: [packages.nix] — arbitrary user packages with lib.hiPri override.
+	var np cfg.NixPackages
+	if len(nixPkgs) > 0 {
+		np = nixPkgs[0]
+	}
+	if len(np.Stable) > 0 || len(np.Unstable) > 0 || len(np.Edge) > 0 {
+		var parts []string
+		if len(np.Stable) > 0 {
+			parts = append(parts, fmt.Sprintf("(map lib.hiPri (with pkgs; [ %s ]))", strings.Join(np.Stable, " ")))
+		}
+		if len(np.Unstable) > 0 {
+			parts = append(parts, fmt.Sprintf("(map lib.hiPri (with pkgsUnstable; [ %s ]))", strings.Join(np.Unstable, " ")))
+		}
+		if len(np.Edge) > 0 {
+			parts = append(parts, fmt.Sprintf("(map lib.hiPri (with pkgsEdge; [ %s ]))", strings.Join(np.Edge, " ")))
+		}
+		moduleExpr += fmt.Sprintf(" ++ [ { home.packages = %s; } ]", strings.Join(parts, " ++ "))
+	}
+
 	return fmt.Sprintf(`{
   description = "DevCell user stack — customise and run 'cell build'";
 
   # Follows main branch by default. To pin a specific release:
-  #   inputs.devcell.url = "github:DimmKirr/devcell/v1.0.0?dir=nixhome";
+  #   inputs.devcell.url = "github:devcell-sh/community-home/v1.0.0";
   # To use your own nixhome fork:
   #   inputs.devcell.url = "github:yourusername/nixhome";
   inputs.devcell.url = %s;
@@ -255,7 +275,7 @@ ENV PATH="/opt/python-tools/.venv/bin:${PATH}"
 // modelsSnippet is an optional commented-out [models] section for devcell.toml;
 // pass "" to use the default generic example.
 
-const defaultNixhomeRepo = "https://github.com/DimmKirr/devcell.git"
+const defaultNixhomeRepo = "https://github.com/devcell-sh/community-home.git"
 
 // IsGitURL returns true if source looks like a git URL or GitHub shorthand.
 func IsGitURL(source string) bool {
@@ -282,8 +302,8 @@ func ResolveNixhome(source, buildDir, ver string, force bool) error {
 	// Git source — always fetch latest.
 	gs := parseGitSource(source)
 	if gs.RepoURL == "" {
-		// No source provided — use upstream default with nixhome subdir.
-		gs = gitSource{RepoURL: defaultNixhomeRepo, Subdir: "nixhome"}
+		// No source provided — use upstream default (flake at repo root).
+		gs = gitSource{RepoURL: defaultNixhomeRepo}
 	}
 
 	ref := gs.Ref
@@ -358,7 +378,7 @@ func ResolveNixhome(source, buildDir, ver string, force bool) error {
 
 // gitSource holds the parsed components of a git nixhome source.
 type gitSource struct {
-	RepoURL string // e.g. https://github.com/DimmKirr/devcell.git
+	RepoURL string // e.g. https://github.com/devcell-sh/community-home.git
 	Ref     string // branch/tag override (empty = use version default)
 	Subdir  string // subdirectory within repo (empty = repo root)
 }
@@ -637,7 +657,7 @@ func RegenerateBuildContext(configDir string, cellCfg cfg.CellConfig) error {
 	stack := cellCfg.Cell.ResolvedStack()
 
 	// Regenerate flake.nix from stack + modules.
-	flake := GenerateFlakeNix(stack, cellCfg.Cell.Modules, version.Version, withNixhome)
+	flake := GenerateFlakeNix(stack, cellCfg.Cell.Modules, version.Version, withNixhome, cellCfg.Packages.Nix)
 	if err := os.WriteFile(filepath.Join(configDir, "flake.nix"), []byte(flake), 0644); err != nil {
 		return fmt.Errorf("write flake.nix: %w", err)
 	}

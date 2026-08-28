@@ -43,8 +43,11 @@ func claudeArgs(opts ExecOpts, format string) []string {
 	if opts.Effort != "" {
 		args = append(args, "--effort", opts.Effort)
 	}
-	if opts.SystemPrompt != "" {
-		args = append(args, "--append-system-prompt", opts.SystemPrompt)
+	if opts.BasePromptFile != "" {
+		args = append(args, "--system-prompt-file", opts.BasePromptFile)
+	}
+	if opts.SystemPromptFile != "" {
+		args = append(args, "--append-system-prompt-file", opts.SystemPromptFile)
 	}
 	return args
 }

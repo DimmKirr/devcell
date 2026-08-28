@@ -6,11 +6,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/DimmKirr/devcell/internal/testutil"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 	"golang.org/x/mod/semver"
@@ -320,13 +323,8 @@ func TestEnv_BasePermissions(t *testing.T) {
 }
 
 // TestEnv_ImageVersionStamps -- build metadata must be discoverable from
-// /etc/devcell/metadata.json (the canonical source per CELL-139). Legacy
-// /etc/devcell/{base,user}-image-version files are no longer the contract:
-// base-image-version is impure-only (written by images/Dockerfile but absent
-// on pure images), and user-image-version was never written by any build path
-// (entrypoint.sh:49 reads it with `|| echo unknown` fallback). metadata.json
-// is staged by both variants (nixhome/packages/image.nix:258 for pure;
-// internal/scaffold writes it for impure user builds).
+// /etc/devcell/metadata.json (the canonical source per CELL-139).
+// metadata.json is staged by the thin build (internal/scaffold).
 func TestEnv_ImageVersionStamps(t *testing.T) {
 	c := startEnvContainer(t)
 
@@ -1037,27 +1035,89 @@ func TestPersistentHome_StarshipConfig(t *testing.T) {
 
 // --- Toolchain ---
 
-// TestClaude_CodeVersion -- claude CLI must be >= 2.1.74 (from nixpkgs-unstable).
+// TestClaude_CodeVersion verifies claude CLI is present and >= minVersion.
+// Each subtest builds a thin image for the target stack, starts a container
+// via testcontainers, and execs `claude --version`. Artifacts persist under
+// test/results/<datetime>-<sha>/TestClaude_CodeVersion/<stack>/.
 func TestClaude_CodeVersion(t *testing.T) {
-	c := startEnvContainer(t)
+	if testing.Short() {
+		t.Skip("long: builds thin image per stack")
+	}
 
 	const minVersion = "v2.1.70"
 
-	out, code := asUser(t, c, "claude --version")
-	if code != 0 {
-		t.Fatalf("FAIL: claude not available (exit %d): %s", code, out)
-	}
+	stacks := []string{"base"}
 
-	// claude --version outputs e.g. "2.1.25 (Claude Code)"
-	ver := strings.Fields(out)[0] // "2.1.25"
-	semVer := "v" + ver           // semver requires "v" prefix
+	for _, stack := range stacks {
+		t.Run(stack, func(t *testing.T) {
+			// Persist artifacts for post-run inspection.
+			outDir := testutil.TestResultsDir(t, hostBaseDirFn)
+			projectDir := filepath.Join(outDir, "project")
+			homeDir := filepath.Join(outDir, "home")
+			for _, d := range []string{projectDir, homeDir, filepath.Join(homeDir, ".config", "devcell")} {
+				if err := os.MkdirAll(d, 0o755); err != nil {
+					t.Fatalf("mkdir %s: %v", d, err)
+				}
+			}
 
-	if !semver.IsValid(semVer) {
-		t.Fatalf("FAIL: could not parse claude version %q as semver", ver)
-	}
-	if semver.Compare(semVer, minVersion) < 0 {
-		t.Errorf("FAIL: claude version %s < minimum %s", ver, minVersion)
-	} else {
-		t.Logf("PASS: claude version %s >= %s", ver, minVersion)
+			toml := fmt.Sprintf("[cell]\nstack = %q\n", stack)
+			if err := os.WriteFile(filepath.Join(projectDir, ".devcell.toml"), []byte(toml), 0o644); err != nil {
+				t.Fatalf("write .devcell.toml: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(homeDir, ".config", "devcell", "devcell.toml"), []byte("[cell]\n"), 0o644); err != nil {
+				t.Fatalf("write global config: %v", err)
+			}
+
+			// Build thin image for this stack.
+			img, err := buildThinImage(stack)
+			if err != nil {
+				t.Fatalf("build %s thin image: %v", stack, err)
+			}
+
+			ctx := context.Background()
+			req := testcontainers.ContainerRequest{
+				Image: img,
+				Env: map[string]string{
+					"HOST_USER": hostUser,
+					"APP_NAME":  "test",
+				},
+				User: "0",
+				Cmd:  []string{"tail", "-f", "/dev/null"},
+				Mounts: testcontainers.Mounts(
+					testcontainers.VolumeMount(thinVolumeName(), "/nix"),
+				),
+				WaitingFor: wait.ForExec([]string{"pgrep", "tail"}).
+					WithStartupTimeout(30 * time.Second),
+			}
+			c, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+				ContainerRequest: req,
+				Started:          true,
+			})
+			if err != nil {
+				t.Fatalf("start container: %v", err)
+			}
+			t.Cleanup(func() { _ = c.Terminate(ctx) })
+
+			out, code := asUser(t, c, "claude --version")
+			if code != 0 {
+				t.Fatalf("claude not available (exit %d): %s", code, out)
+			}
+
+			// Persist output for inspection.
+			_ = os.WriteFile(filepath.Join(outDir, "claude-version.txt"), []byte(out), 0o644)
+
+			// claude --version outputs e.g. "2.1.25 (Claude Code)"
+			ver := strings.Fields(out)[0]
+			semVer := "v" + ver
+
+			if !semver.IsValid(semVer) {
+				t.Fatalf("could not parse claude version %q as semver", ver)
+			}
+			if semver.Compare(semVer, minVersion) < 0 {
+				t.Errorf("claude version %s < minimum %s", ver, minVersion)
+			} else {
+				t.Logf("claude version %s >= %s", ver, minVersion)
+			}
+		})
 	}
 }

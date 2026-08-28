@@ -7,9 +7,8 @@ import (
 
 // DefaultNixhomeGitRef is the github branch/tag used when no local nixhome is
 // available and the cell binary doesn't carry a release version (v0.0.0 / dev
-// builds). Set to feature/wip while CELL-195 lives off main; flip back to
-// "main" when the pure path lands.
-const DefaultNixhomeGitRef = "feature/wip"
+// builds). Points at community-home's default branch.
+const DefaultNixhomeGitRef = "main"
 
 // PureNixhomeInputs is the input to ResolvePureNixhomeRef. Mirrors the data
 // flow already present for the docker path (scaffold.go:130-140), but emits a
@@ -57,7 +56,7 @@ type PureNixhomeRef struct {
 // Precedence:
 //  1. inputs.TomlNixhome (explicit user setting via .devcell.toml / env)
 //  2. inputs.BaseDir + "/nixhome" on disk
-//  3. github:DimmKirr/devcell/<Version>?dir=nixhome (Version coerced to
+//  3. github:devcell-sh/community-home/<Version> (Version coerced to
 //     DefaultNixhomeGitRef when empty or "v0.0.0")
 //
 // Pure function — fs lookups go through inputs.StatFunc so tests don't

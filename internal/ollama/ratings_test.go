@@ -11,13 +11,13 @@ func TestEstimateCloudSpeedTPM(t *testing.T) {
 		pricePerToken float64
 		expected      float64
 	}{
-		{0.0000005, 18000},  // < $1/1M → very fast
-		{0.000001, 9000},    // boundary: exactly $1/1M, falls to next bucket
-		{0.0000009, 18000},  // just under $1/1M
-		{0.000002, 9000},    // $1-5/1M
-		{0.000008, 5400},    // $5-15/1M
-		{0.000030, 2400},    // $15-50/1M
-		{0.000100, 1200},    // > $50/1M → premium/slow
+		{0.0000005, 18000}, // < $1/1M → very fast
+		{0.000001, 9000},   // boundary: exactly $1/1M, falls to next bucket
+		{0.0000009, 18000}, // just under $1/1M
+		{0.000002, 9000},   // $1-5/1M
+		{0.000008, 5400},   // $5-15/1M
+		{0.000030, 2400},   // $15-50/1M
+		{0.000100, 1200},   // > $50/1M → premium/slow
 	}
 	for _, tt := range tests {
 		got := ollama.EstimateCloudSpeedTPM(tt.pricePerToken)

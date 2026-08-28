@@ -8,7 +8,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/DimmKirr/devcell/internal/cfg"
 	"github.com/DimmKirr/devcell/internal/ollama"
 	"github.com/DimmKirr/devcell/internal/scaffold"
 	"github.com/DimmKirr/devcell/internal/ux"
@@ -203,40 +202,6 @@ func validateNixhomeStructure(nixhomePath string) error {
 			nixhomePath, strings.Join(missing, ", "))
 	}
 	return nil
-}
-
-// scanStacksFromNixhome scans .devcell/nixhome/ for stacks.
-// Falls back to KnownStacks if nixhome isn't available.
-// Returns SelectOption with Label (display) and Value (stack name).
-func scanStacksFromNixhome(nixhomePath string) ([]ux.SelectOption, string) {
-	if stacks, err := scanLocalStacks(nixhomePath); err == nil && len(stacks) > 0 {
-		opts := make([]ux.SelectOption, 0, len(stacks))
-		for _, s := range stacks {
-			mods := stackModulesFromNixhome(nixhomePath, s)
-			modStr := strings.Join(mods, ", ")
-			if len(mods) > 6 {
-				modStr = strings.Join(mods[:6], ", ") + fmt.Sprintf(", +%d more", len(mods)-6)
-			}
-			sz := ""
-			if szVal, ok := cfg.StackSize(s); ok {
-				sz = szVal
-			}
-			label := fmt.Sprintf("%-14s %-52s %s", s, modStr, sz)
-			opts = append(opts, ux.SelectOption{Label: label, Value: s})
-		}
-		return opts, nixhomePath + "/stacks/*.nix"
-	}
-	// No nixhome on disk — fall back to known stack names with sizes.
-	known := cfg.KnownStacks()
-	opts := make([]ux.SelectOption, len(known))
-	for i, s := range known {
-		label := s
-		if sz, ok := cfg.StackSize(s); ok {
-			label = fmt.Sprintf("%s (%s)", s, sz)
-		}
-		opts[i] = ux.SelectOption{Label: label, Value: s}
-	}
-	return opts, "built-in (nixhome not available)"
 }
 
 // scanModulesFromNixhome scans .devcell/nixhome/modules/ for available modules.

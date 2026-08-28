@@ -135,22 +135,27 @@ func TestShellExecutor_OpenCodeIgnoresEffort(t *testing.T) {
 	}
 }
 
-func TestShellExecutor_ClaudeAppendsSystemPromptFlag(t *testing.T) {
+func TestShellExecutor_ClaudeAppendsSystemPromptFileFlag(t *testing.T) {
 	dir := makeStubAgent(t, "claude", "ok")
 	withPath(t, dir)
 
 	e := &ShellExecutor{}
 	res := e.Run(ExecOpts{
-		Agent:        "claude",
-		Prompt:       "hi",
-		SystemPrompt: "you are concise",
+		Agent:            "claude",
+		Prompt:           "hi",
+		SystemPromptFile: "/devcell-85/.devcell/prompts/main/additional-systemprompt.md",
 	})
 	if res.ExitCode != 0 {
 		t.Fatalf("exit = %d, stderr=%q", res.ExitCode, res.Stderr)
 	}
 	args := readArgs(t, dir, "claude")
-	if !strings.Contains(args, "--append-system-prompt you are concise") {
-		t.Errorf("expected --append-system-prompt flag in argv, got %q", args)
+	if !strings.Contains(args, "--append-system-prompt-file /devcell-85/.devcell/prompts/main/additional-systemprompt.md") {
+		t.Errorf("expected --append-system-prompt-file flag in argv, got %q", args)
+	}
+	// The inline form is mutually exclusive with the file form — claude
+	// rejects both together, so it must not appear.
+	if strings.Contains(args, "--append-system-prompt ") {
+		t.Errorf("inline --append-system-prompt must not be emitted alongside the file form, got %q", args)
 	}
 }
 
@@ -165,7 +170,7 @@ func TestShellExecutor_ClaudeNoSystemPromptNoFlag(t *testing.T) {
 	}
 	args := readArgs(t, dir, "claude")
 	if strings.Contains(args, "--append-system-prompt") {
-		t.Errorf("expected no --append-system-prompt flag when SystemPrompt empty, got %q", args)
+		t.Errorf("expected no --append-system-prompt-file flag when SystemPromptFile empty, got %q", args)
 	}
 }
 
@@ -174,7 +179,7 @@ func TestShellExecutor_OpenCodeIgnoresSystemPrompt(t *testing.T) {
 	withPath(t, dir)
 
 	e := &ShellExecutor{}
-	res := e.Run(ExecOpts{Agent: "opencode", Prompt: "hi", SystemPrompt: "you are concise"})
+	res := e.Run(ExecOpts{Agent: "opencode", Prompt: "hi", SystemPromptFile: "/tmp/x.md"})
 	if res.ExitCode != 0 {
 		t.Fatalf("exit = %d", res.ExitCode)
 	}
@@ -278,5 +283,60 @@ func TestShellExecutor_NonZeroExitPropagated(t *testing.T) {
 	}
 	if !strings.Contains(res.Stderr, "oops") {
 		t.Errorf("stderr = %q, want contains oops", res.Stderr)
+	}
+}
+
+// A configured base replaces Claude Code's built-in prompt; it travels as a
+// file alongside the overlay, and both flags may appear together.
+func TestShellExecutor_ClaudeEmitsBaseAndOverlayFlags(t *testing.T) {
+	dir := makeStubAgent(t, "claude", "ok")
+	withPath(t, dir)
+
+	e := &ShellExecutor{}
+	res := e.Run(ExecOpts{
+		Agent:            "claude",
+		Prompt:           "hi",
+		BasePromptFile:   "/devcell-85/.devcell/prompts/main/system-prompt.md",
+		SystemPromptFile: "/devcell-85/.devcell/prompts/main/additional-systemprompt.md",
+	})
+	if res.ExitCode != 0 {
+		t.Fatalf("exit = %d, stderr=%q", res.ExitCode, res.Stderr)
+	}
+	args := readArgs(t, dir, "claude")
+	if !strings.Contains(args, "--system-prompt-file /devcell-85/.devcell/prompts/main/system-prompt.md") {
+		t.Errorf("expected --system-prompt-file in argv, got %q", args)
+	}
+	if !strings.Contains(args, "--append-system-prompt-file /devcell-85/.devcell/prompts/main/additional-systemprompt.md") {
+		t.Errorf("expected --append-system-prompt-file in argv, got %q", args)
+	}
+}
+
+func TestShellExecutor_ClaudeNoBasePromptNoFlag(t *testing.T) {
+	dir := makeStubAgent(t, "claude", "ok")
+	withPath(t, dir)
+
+	e := &ShellExecutor{}
+	res := e.Run(ExecOpts{Agent: "claude", Prompt: "hi"})
+	if res.ExitCode != 0 {
+		t.Fatalf("exit = %d", res.ExitCode)
+	}
+	args := readArgs(t, dir, "claude")
+	if strings.Contains(args, "--system-prompt-file") {
+		t.Errorf("base flag must not appear when unconfigured — stock prompt must survive, got %q", args)
+	}
+}
+
+func TestShellExecutor_OpenCodeIgnoresBasePrompt(t *testing.T) {
+	dir := makeStubAgent(t, "opencode", "ok")
+	withPath(t, dir)
+
+	e := &ShellExecutor{}
+	res := e.Run(ExecOpts{Agent: "opencode", Prompt: "hi", BasePromptFile: "/tmp/base.md"})
+	if res.ExitCode != 0 {
+		t.Fatalf("exit = %d", res.ExitCode)
+	}
+	args := readArgs(t, dir, "opencode")
+	if strings.Contains(args, "--system-prompt-file") {
+		t.Errorf("opencode should not receive --system-prompt-file, got %q", args)
 	}
 }

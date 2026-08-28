@@ -2,7 +2,7 @@
   description = "DevCell user stack — customise and run 'cell build'";
 
   # Follows main branch by default. To pin a specific release:
-  #   inputs.devcell.url = "github:DimmKirr/devcell/v1.0.0?dir=nixhome";
+  #   inputs.devcell.url = "github:devcell-sh/community-home/v1.0.0";
   # To use your own nixhome fork:
   #   inputs.devcell.url = "github:yourusername/nixhome";
   inputs.devcell.url = "path:./nixhome";

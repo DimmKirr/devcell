@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/DimmKirr/devcell/internal/version"
-	"github.com/swaggo/swag"
 	httpSwagger "github.com/swaggo/http-swagger/v2"
+	"github.com/swaggo/swag"
 )
 
 // DefaultPort is the default listen port for devcell serve.
@@ -23,14 +23,15 @@ const DefaultPort = 8484
 
 // Server is the devcell HTTP API server.
 type Server struct {
-	exec       Executor
-	port       int
-	lookPath   LookPathFunc
-	anthropic  AnthropicClient
-	apiKey       string // empty = no auth
-	logPrompts   bool   // when true, handlers log full prompt + response bodies
-	systemPrompt string // when non-empty, passed as --append-system-prompt to claude
-	jobStore     *JobStore
+	exec             Executor
+	port             int
+	lookPath         LookPathFunc
+	anthropic        AnthropicClient
+	apiKey           string // empty = no auth
+	logPrompts       bool   // when true, handlers log full prompt + response bodies
+	systemPromptFile string // when non-empty, passed as --append-system-prompt-file to claude
+	basePromptFile   string // when non-empty, passed as --system-prompt-file (replaces the stock prompt)
+	jobStore         *JobStore
 
 	workspaceEnabled bool
 	workspaceMock    bool
@@ -84,12 +85,20 @@ func (s *Server) SetLogPrompts(v bool) {
 	s.logPrompts = v
 }
 
-// SetSystemPrompt sets the operator-level system prompt passed to claude
-// as --append-system-prompt on every /v1/chat/completions and /v1/responses
-// request. Empty disables the flag (default). Composes with — does not
-// override — any per-request `instructions` / `system` role from the body.
-func (s *Server) SetSystemPrompt(p string) {
-	s.systemPrompt = p
+// SetSystemPromptFile sets the path to the operator-level overlay prompt,
+// passed to claude as --append-system-prompt-file on every
+// /v1/chat/completions and /v1/responses request. Empty disables the flag
+// (default). Composes with — does not override — any per-request
+// `instructions` / `system` role from the body.
+func (s *Server) SetSystemPromptFile(p string) {
+	s.systemPromptFile = p
+}
+
+// SetBasePromptFile sets the path to the base prompt, passed to claude as
+// --system-prompt-file. Empty (the default) leaves Claude Code's built-in
+// prompt in effect.
+func (s *Server) SetBasePromptFile(p string) {
+	s.basePromptFile = p
 }
 
 func (s *Server) SetWorkspace(enabled, mock bool, host string) {
@@ -118,8 +127,8 @@ func execLookPath(name string) (string, error) {
 // The server shuts down when ctx is cancelled.
 func (s *Server) Start(ctx context.Context) (addr string, errCh chan error) {
 	mux := http.NewServeMux()
-	mux.Handle("/v1/chat/completions", AuthMiddleware(s.apiKey, NewChatHandler(s.exec, s.logPrompts, s.systemPrompt)))
-	mux.Handle("/v1/responses", AuthMiddleware(s.apiKey, NewResponsesHandler(s.exec, s.jobStore, s.logPrompts, s.systemPrompt)))
+	mux.Handle("/v1/chat/completions", AuthMiddleware(s.apiKey, NewChatHandler(s.exec, s.logPrompts, s.systemPromptFile, s.basePromptFile)))
+	mux.Handle("/v1/responses", AuthMiddleware(s.apiKey, NewResponsesHandler(s.exec, s.jobStore, s.logPrompts, s.systemPromptFile, s.basePromptFile)))
 	mux.Handle("GET /v1/responses/{id}", AuthMiddleware(s.apiKey, NewResponseGetHandler(s.jobStore)))
 	mux.Handle("POST /v1/responses/{id}/cancel", AuthMiddleware(s.apiKey, NewResponseCancelHandler(s.jobStore)))
 	mux.Handle("/v1/models", AuthMiddleware(s.apiKey, NewModelsHandler(s.lookPath, s.anthropic)))

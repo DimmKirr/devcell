@@ -118,6 +118,54 @@ func TestMerge_VolumesAccumulate(t *testing.T) {
 	}
 }
 
+func TestMerge_VolumesDedupByContainerPath(t *testing.T) {
+	global := cfg.CellConfig{Volumes: []cfg.VolumeMount{
+		{Mount: "/host/a:/container/shared"},
+	}}
+	project := cfg.CellConfig{Volumes: []cfg.VolumeMount{
+		{Mount: "/host/b:/container/shared"},
+	}}
+	merged := cfg.Merge(global, project)
+	if len(merged.Volumes) != 1 {
+		t.Fatalf("want 1 volume (deduped), got %d: %+v", len(merged.Volumes), merged.Volumes)
+	}
+	if merged.Volumes[0].Mount != "/host/b:/container/shared" {
+		t.Errorf("project should win on conflict, got %q", merged.Volumes[0].Mount)
+	}
+}
+
+func TestMerge_VolumesDedupShorthand(t *testing.T) {
+	global := cfg.CellConfig{Volumes: []cfg.VolumeMount{
+		{Mount: "/Users/dmitry/dev/skills"},
+	}}
+	project := cfg.CellConfig{Volumes: []cfg.VolumeMount{
+		{Mount: "/Users/dmitry/dev/skills"},
+	}}
+	merged := cfg.Merge(global, project)
+	if len(merged.Volumes) != 1 {
+		t.Errorf("want 1 volume (deduped shorthand), got %d: %+v", len(merged.Volumes), merged.Volumes)
+	}
+}
+
+func TestVolumeMount_ContainerPath(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"/host:/container", "/container"},
+		{"/host:/container:ro", "/container"},
+		{"/Users/dmitry/dev/skills", "/Users/dmitry/dev/skills"},
+		{"/Users/dmitry/dev/skills/", "/Users/dmitry/dev/skills"},
+		{"/host/:/container/", "/container"},
+		{"", ""},
+	}
+	for _, tc := range cases {
+		got := cfg.VolumeMount{Mount: tc.in}.ContainerPath()
+		if got != tc.want {
+			t.Errorf("ContainerPath(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestApplyEnv_ImageTagOverride(t *testing.T) {
 	c := cfg.CellConfig{Cell: cfg.CellSection{ImageTag: "v0.0.0-ultimate"}}
 	cfg.ApplyEnv(&c, func(k string) string {
@@ -335,6 +383,249 @@ func TestMerge_GUIBothUnsetDefaultsTrue(t *testing.T) {
 	}
 }
 
+// --- [gui] section ---
+
+func TestLoadFile_GUISectionEnabled(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[gui]
+enabled = true
+wm = "fluxbox"
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.GUI.ResolvedEnabled() {
+		t.Error("expected GUI.ResolvedEnabled()=true")
+	}
+	if c.GUI.ResolvedWM() != "fluxbox" {
+		t.Errorf("expected WM=fluxbox, got %q", c.GUI.ResolvedWM())
+	}
+}
+
+func TestLoadFile_GUISectionDisabled(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[gui]
+enabled = false
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.GUI.ResolvedEnabled() {
+		t.Error("expected GUI.ResolvedEnabled()=false")
+	}
+}
+
+func TestLoadFile_GUISectionDefaultWM(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[gui]
+enabled = true
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.GUI.ResolvedWM() != "icewm" {
+		t.Errorf("expected default WM=icewm, got %q", c.GUI.ResolvedWM())
+	}
+}
+
+func TestLoadFile_GUILegacyCellGUIMigratesToSection(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[cell]
+gui = false
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.GUI.ResolvedEnabled() {
+		t.Error("expected legacy [cell] gui=false to migrate to GUI.Enabled=false")
+	}
+}
+
+func TestLoadFile_GUISectionWinsOverLegacy(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[cell]
+gui = false
+
+[gui]
+enabled = true
+wm = "fluxbox"
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.GUI.ResolvedEnabled() {
+		t.Error("expected [gui] enabled=true to win over [cell] gui=false")
+	}
+}
+
+func TestMerge_GUISectionProjectWMOverridesGlobal(t *testing.T) {
+	global := cfg.CellConfig{GUI: cfg.GUISection{WM: "icewm"}}
+	project := cfg.CellConfig{GUI: cfg.GUISection{WM: "fluxbox"}}
+	merged := cfg.Merge(global, project)
+	if merged.GUI.ResolvedWM() != "fluxbox" {
+		t.Errorf("expected project wm=fluxbox to win, got %q", merged.GUI.ResolvedWM())
+	}
+}
+
+func TestMerge_GUISectionGlobalWMKeptWhenProjectUnset(t *testing.T) {
+	global := cfg.CellConfig{GUI: cfg.GUISection{WM: "fluxbox"}}
+	project := cfg.CellConfig{}
+	merged := cfg.Merge(global, project)
+	if merged.GUI.ResolvedWM() != "fluxbox" {
+		t.Errorf("expected global wm=fluxbox preserved, got %q", merged.GUI.ResolvedWM())
+	}
+}
+
+func TestLoadFile_GUISectionResolution(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[gui]
+resolution = "2560x1440x24"
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.GUI.ResolvedResolution() != "2560x1440x24" {
+		t.Errorf("expected resolution=2560x1440x24, got %q", c.GUI.ResolvedResolution())
+	}
+}
+
+func TestLoadFile_GUISectionDefaultResolution(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[gui]
+enabled = true
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.GUI.ResolvedResolution() != "1920x1080x24" {
+		t.Errorf("expected default resolution=1920x1080x24, got %q", c.GUI.ResolvedResolution())
+	}
+}
+
+func TestMerge_GUISectionProjectResolutionOverridesGlobal(t *testing.T) {
+	global := cfg.CellConfig{GUI: cfg.GUISection{Resolution: "1920x1080x24"}}
+	project := cfg.CellConfig{GUI: cfg.GUISection{Resolution: "2560x1440x24"}}
+	merged := cfg.Merge(global, project)
+	if merged.GUI.ResolvedResolution() != "2560x1440x24" {
+		t.Errorf("expected project resolution to win, got %q", merged.GUI.ResolvedResolution())
+	}
+}
+
+func TestMerge_GUISectionGlobalResolutionKeptWhenProjectUnset(t *testing.T) {
+	global := cfg.CellConfig{GUI: cfg.GUISection{Resolution: "2560x1440x24"}}
+	project := cfg.CellConfig{}
+	merged := cfg.Merge(global, project)
+	if merged.GUI.ResolvedResolution() != "2560x1440x24" {
+		t.Errorf("expected global resolution preserved, got %q", merged.GUI.ResolvedResolution())
+	}
+}
+
+func TestLoadFile_GUISectionScale(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[gui]
+resolution = "1800x1169x24"
+scale = 2
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.GUI.ResolvedScale() != 2 {
+		t.Errorf("expected scale=2, got %d", c.GUI.ResolvedScale())
+	}
+	if c.GUI.ResolvedDPI() != 192 {
+		t.Errorf("expected DPI=192, got %d", c.GUI.ResolvedDPI())
+	}
+	if c.GUI.ResolvedFramebufferResolution() != "3600x2338x24" {
+		t.Errorf("expected framebuffer=3600x2338x24, got %q", c.GUI.ResolvedFramebufferResolution())
+	}
+}
+
+func TestLoadFile_GUISectionDefaultScale(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[gui]
+enabled = true
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.GUI.ResolvedScale() != 1 {
+		t.Errorf("expected default scale=1, got %d", c.GUI.ResolvedScale())
+	}
+	if c.GUI.ResolvedDPI() != 96 {
+		t.Errorf("expected default DPI=96, got %d", c.GUI.ResolvedDPI())
+	}
+	if c.GUI.ResolvedFramebufferResolution() != "1920x1080x24" {
+		t.Errorf("expected default framebuffer=1920x1080x24, got %q", c.GUI.ResolvedFramebufferResolution())
+	}
+}
+
+func TestLoadFile_GUISectionScale1(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[gui]
+resolution = "1800x1169x24"
+scale = 1
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.GUI.ResolvedScale() != 1 {
+		t.Errorf("expected scale=1, got %d", c.GUI.ResolvedScale())
+	}
+	if c.GUI.ResolvedDPI() != 96 {
+		t.Errorf("expected DPI=96, got %d", c.GUI.ResolvedDPI())
+	}
+	if c.GUI.ResolvedFramebufferResolution() != "1800x1169x24" {
+		t.Errorf("expected framebuffer=1800x1169x24, got %q", c.GUI.ResolvedFramebufferResolution())
+	}
+}
+
+func TestMerge_GUISectionProjectScaleOverridesGlobal(t *testing.T) {
+	global := cfg.CellConfig{GUI: cfg.GUISection{Scale: 1}}
+	project := cfg.CellConfig{GUI: cfg.GUISection{Scale: 2}}
+	merged := cfg.Merge(global, project)
+	if merged.GUI.ResolvedScale() != 2 {
+		t.Errorf("expected project scale to win, got %d", merged.GUI.ResolvedScale())
+	}
+}
+
+func TestMerge_GUISectionGlobalScaleKeptWhenProjectUnset(t *testing.T) {
+	global := cfg.CellConfig{GUI: cfg.GUISection{Scale: 3}}
+	project := cfg.CellConfig{}
+	merged := cfg.Merge(global, project)
+	if merged.GUI.ResolvedScale() != 3 {
+		t.Errorf("expected global scale preserved, got %d", merged.GUI.ResolvedScale())
+	}
+}
+
+func TestMerge_GUISectionLegacyCellGUIMigrates(t *testing.T) {
+	global := cfg.CellConfig{Cell: cfg.CellSection{GUI: boolPtr(false)}}
+	project := cfg.CellConfig{}
+	merged := cfg.Merge(global, project)
+	if merged.GUI.ResolvedEnabled() {
+		t.Error("expected legacy [cell] gui=false to migrate to GUI.Enabled=false in merge")
+	}
+}
+
 func TestVolumeMount_PassThrough(t *testing.T) {
 	dir := t.TempDir()
 	writeTOML(t, dir, "devcell.toml", `
@@ -520,6 +811,161 @@ func contains(s, sub string) bool {
 	return len(s) >= len(sub) && len(sub) > 0 && strings.Contains(s, sub)
 }
 
+// --- [docker] section ---
+
+func TestLoadFile_DockerSection(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[docker]
+privileged = true
+cap_add = ["SYS_ADMIN", "NET_ADMIN"]
+mem_limit = "8g"
+cpu_limit = "4"
+shm_size = "2g"
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.Docker.Privileged {
+		t.Error("privileged: want true")
+	}
+	if len(c.Docker.CapAdd) != 2 || c.Docker.CapAdd[0] != "SYS_ADMIN" || c.Docker.CapAdd[1] != "NET_ADMIN" {
+		t.Errorf("cap_add: want [SYS_ADMIN NET_ADMIN], got %v", c.Docker.CapAdd)
+	}
+	if c.Docker.MemLimit != "8g" {
+		t.Errorf("mem_limit: want 8g, got %q", c.Docker.MemLimit)
+	}
+	if c.Docker.CPULimit != "4" {
+		t.Errorf("cpu_limit: want 4, got %q", c.Docker.CPULimit)
+	}
+	if c.Docker.ShmSize != "2g" {
+		t.Errorf("shm_size: want 2g, got %q", c.Docker.ShmSize)
+	}
+}
+
+func TestDockerSection_ResolvedMemLimit_Default(t *testing.T) {
+	t.Setenv("DEVCELL_DOCKER_MEM_LIMIT", "")
+	got := cfg.DockerSection{}.ResolvedMemLimit()
+	if got != "4g" {
+		t.Errorf("want default 4g, got %q", got)
+	}
+}
+
+func TestDockerSection_ResolvedMemLimit_TOML(t *testing.T) {
+	t.Setenv("DEVCELL_DOCKER_MEM_LIMIT", "")
+	got := cfg.DockerSection{MemLimit: "16g"}.ResolvedMemLimit()
+	if got != "16g" {
+		t.Errorf("want 16g from toml, got %q", got)
+	}
+}
+
+func TestDockerSection_ResolvedMemLimit_EnvWins(t *testing.T) {
+	t.Setenv("DEVCELL_DOCKER_MEM_LIMIT", "32g")
+	got := cfg.DockerSection{MemLimit: "16g"}.ResolvedMemLimit()
+	if got != "32g" {
+		t.Errorf("env should win over toml, got %q", got)
+	}
+}
+
+func TestDockerSection_ResolvedMemLimit_ZeroUncaps(t *testing.T) {
+	t.Setenv("DEVCELL_DOCKER_MEM_LIMIT", "")
+	got := cfg.DockerSection{MemLimit: "0"}.ResolvedMemLimit()
+	if got != "0" {
+		t.Errorf("want 0 (uncapped), got %q", got)
+	}
+}
+
+func TestDockerSection_ResolvedCPULimit_Default(t *testing.T) {
+	t.Setenv("DEVCELL_DOCKER_CPU_LIMIT", "")
+	got := cfg.DockerSection{}.ResolvedCPULimit()
+	if got != "2" {
+		t.Errorf("want default 2, got %q", got)
+	}
+}
+
+func TestDockerSection_ResolvedCPULimit_TOML(t *testing.T) {
+	t.Setenv("DEVCELL_DOCKER_CPU_LIMIT", "")
+	got := cfg.DockerSection{CPULimit: "8"}.ResolvedCPULimit()
+	if got != "8" {
+		t.Errorf("want 8 from toml, got %q", got)
+	}
+}
+
+func TestDockerSection_ResolvedCPULimit_EnvWins(t *testing.T) {
+	t.Setenv("DEVCELL_DOCKER_CPU_LIMIT", "16")
+	got := cfg.DockerSection{CPULimit: "8"}.ResolvedCPULimit()
+	if got != "16" {
+		t.Errorf("env should win over toml, got %q", got)
+	}
+}
+
+func TestDockerSection_ResolvedShmSize_Default(t *testing.T) {
+	t.Setenv("DEVCELL_DOCKER_SHM_SIZE", "")
+	got := cfg.DockerSection{}.ResolvedShmSize()
+	if got != "1g" {
+		t.Errorf("want default 1g, got %q", got)
+	}
+}
+
+func TestDockerSection_ResolvedShmSize_TOML(t *testing.T) {
+	t.Setenv("DEVCELL_DOCKER_SHM_SIZE", "")
+	got := cfg.DockerSection{ShmSize: "4g"}.ResolvedShmSize()
+	if got != "4g" {
+		t.Errorf("want 4g from toml, got %q", got)
+	}
+}
+
+func TestDockerSection_ResolvedShmSize_EnvWins(t *testing.T) {
+	t.Setenv("DEVCELL_DOCKER_SHM_SIZE", "8g")
+	got := cfg.DockerSection{ShmSize: "4g"}.ResolvedShmSize()
+	if got != "8g" {
+		t.Errorf("env should win over toml, got %q", got)
+	}
+}
+
+func TestMerge_DockerProjectWins(t *testing.T) {
+	global := cfg.CellConfig{Docker: cfg.DockerSection{MemLimit: "4g", CPULimit: "2", ShmSize: "1g", CapAdd: []string{"SYS_ADMIN"}}}
+	project := cfg.CellConfig{Docker: cfg.DockerSection{Privileged: true, CapAdd: []string{"NET_ADMIN"}, MemLimit: "16g", CPULimit: "8"}}
+	merged := cfg.Merge(global, project)
+	if !merged.Docker.Privileged {
+		t.Error("privileged: project true should win")
+	}
+	if len(merged.Docker.CapAdd) != 2 {
+		t.Errorf("cap_add: want union [SYS_ADMIN NET_ADMIN], got %v", merged.Docker.CapAdd)
+	}
+	if merged.Docker.MemLimit != "16g" {
+		t.Errorf("mem_limit: project should win, got %q", merged.Docker.MemLimit)
+	}
+	if merged.Docker.CPULimit != "8" {
+		t.Errorf("cpu_limit: project should win, got %q", merged.Docker.CPULimit)
+	}
+	if merged.Docker.ShmSize != "1g" {
+		t.Errorf("shm_size: global should be kept when project empty, got %q", merged.Docker.ShmSize)
+	}
+}
+
+func TestMerge_DockerGlobalKeptWhenProjectEmpty(t *testing.T) {
+	global := cfg.CellConfig{Docker: cfg.DockerSection{CapAdd: []string{"SYS_ADMIN"}, MemLimit: "8g", CPULimit: "4", ShmSize: "2g"}}
+	project := cfg.CellConfig{}
+	merged := cfg.Merge(global, project)
+	if merged.Docker.Privileged {
+		t.Error("privileged: should stay false when neither sets it")
+	}
+	if len(merged.Docker.CapAdd) != 1 || merged.Docker.CapAdd[0] != "SYS_ADMIN" {
+		t.Errorf("cap_add: global should be preserved, got %v", merged.Docker.CapAdd)
+	}
+	if merged.Docker.MemLimit != "8g" {
+		t.Errorf("mem_limit: global should be preserved, got %q", merged.Docker.MemLimit)
+	}
+	if merged.Docker.CPULimit != "4" {
+		t.Errorf("cpu_limit: global should be preserved, got %q", merged.Docker.CPULimit)
+	}
+	if merged.Docker.ShmSize != "2g" {
+		t.Errorf("shm_size: global should be preserved, got %q", merged.Docker.ShmSize)
+	}
+}
+
 // --- Git section ---
 
 func TestLoadFile_GitSection(t *testing.T) {
@@ -644,8 +1090,91 @@ modules = ["electronics", "desktop"]
 	if len(c.Cell.Modules) != 2 {
 		t.Fatalf("want 2 modules, got %d", len(c.Cell.Modules))
 	}
-	if c.Cell.Modules[0] != "electronics" || c.Cell.Modules[1] != "desktop" {
-		t.Errorf("modules: want [electronics desktop], got %v", c.Cell.Modules)
+	// Sorted at load (CELL-331), not TOML order.
+	if c.Cell.Modules[0] != "desktop" || c.Cell.Modules[1] != "electronics" {
+		t.Errorf("modules: want [desktop electronics], got %v", c.Cell.Modules)
+	}
+}
+
+// CELL-331: [a,b] and [b,a] must not produce different image tags or
+// home-manager closures. Modules are sorted at load so every consumer
+// (tag derivation, modules CSV, flake args) sees one canonical order.
+func TestLoadFile_ModulesSorted(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[cell]
+modules = ["node", "electronics", "desktop"]
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"desktop", "electronics", "node"}
+	if len(c.Cell.Modules) != len(want) {
+		t.Fatalf("want %d modules, got %d", len(want), len(c.Cell.Modules))
+	}
+	for i, m := range want {
+		if c.Cell.Modules[i] != m {
+			t.Fatalf("modules must be sorted: want %v, got %v", want, c.Cell.Modules)
+		}
+	}
+}
+
+func TestLoadLayered_ModulesSortedAfterMerge(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[cell]
+modules = ["scraping"]
+`)
+	writeTOML(t, dir, ".devcell.toml", `
+[cell]
+modules = ["desktop"]
+`)
+	c, err := cfg.LoadLayered(
+		filepath.Join(dir, "devcell.toml"),
+		filepath.Join(dir, ".devcell.toml"),
+		func(string) string { return "" },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"desktop", "scraping"}
+	if len(c.Cell.Modules) != len(want) {
+		t.Fatalf("want %v, got %v", want, c.Cell.Modules)
+	}
+	for i, m := range want {
+		if c.Cell.Modules[i] != m {
+			t.Fatalf("merged modules must be sorted: want %v, got %v", want, c.Cell.Modules)
+		}
+	}
+}
+
+// CELL-391: [cell] stale_warning = false silences the "cell is behind —
+// parallel reality" nudge at start. Default (absent) is enabled.
+func TestCellSection_StaleWarningDefaultsEnabled(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `[cell]`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.Cell.StaleWarningEnabled() {
+		t.Error("stale warning must default to enabled")
+	}
+}
+
+func TestCellSection_StaleWarningFalseDisables(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[cell]
+stale_warning = false
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Cell.StaleWarningEnabled() {
+		t.Error("stale_warning = false must disable the nudge")
 	}
 }
 
@@ -1239,6 +1768,102 @@ func TestMerge_HostnameInheritsGlobal(t *testing.T) {
 	got := cfg.Merge(global, project)
 	if got.Cell.Hostname != "from-global" {
 		t.Errorf("global hostname must survive when project leaves it empty; got %q", got.Cell.Hostname)
+	}
+}
+
+// --- DefaultCommand ---
+
+func TestLoadFile_DefaultCommand(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[cell]
+default_command = "claude"
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Cell.DefaultCommand != "claude" {
+		t.Errorf("want claude, got %q", c.Cell.DefaultCommand)
+	}
+}
+
+func TestResolvedDefaultCommand_Empty(t *testing.T) {
+	t.Setenv("DEVCELL_DEFAULT_COMMAND", "")
+	got := cfg.CellSection{}.ResolvedDefaultCommand()
+	if got != "" {
+		t.Errorf("want empty, got %q", got)
+	}
+}
+
+func TestResolvedDefaultCommand_TOML(t *testing.T) {
+	t.Setenv("DEVCELL_DEFAULT_COMMAND", "")
+	got := cfg.CellSection{DefaultCommand: "shell"}.ResolvedDefaultCommand()
+	if got != "shell" {
+		t.Errorf("want shell, got %q", got)
+	}
+}
+
+func TestResolvedDefaultCommand_EnvOverridesTOML(t *testing.T) {
+	t.Setenv("DEVCELL_DEFAULT_COMMAND", "codex")
+	got := cfg.CellSection{DefaultCommand: "shell"}.ResolvedDefaultCommand()
+	if got != "codex" {
+		t.Errorf("env should win over toml, got %q", got)
+	}
+}
+
+func TestMerge_DefaultCommandProjectWins(t *testing.T) {
+	global := cfg.CellConfig{Cell: cfg.CellSection{DefaultCommand: "shell"}}
+	project := cfg.CellConfig{Cell: cfg.CellSection{DefaultCommand: "claude"}}
+	got := cfg.Merge(global, project)
+	if got.Cell.DefaultCommand != "claude" {
+		t.Errorf("project default_command must override global; got %q", got.Cell.DefaultCommand)
+	}
+}
+
+func TestMerge_DefaultCommandInheritsGlobal(t *testing.T) {
+	global := cfg.CellConfig{Cell: cfg.CellSection{DefaultCommand: "shell"}}
+	project := cfg.CellConfig{}
+	got := cfg.Merge(global, project)
+	if got.Cell.DefaultCommand != "shell" {
+		t.Errorf("global default_command must survive when project leaves it empty; got %q", got.Cell.DefaultCommand)
+	}
+}
+
+func TestApplyEnv_DefaultCommand(t *testing.T) {
+	c := cfg.CellConfig{Cell: cfg.CellSection{DefaultCommand: "shell"}}
+	cfg.ApplyEnv(&c, func(k string) string {
+		if k == "DEVCELL_DEFAULT_COMMAND" {
+			return "claude"
+		}
+		return ""
+	})
+	if c.Cell.DefaultCommand != "claude" {
+		t.Errorf("ApplyEnv should override default_command; got %q", c.Cell.DefaultCommand)
+	}
+}
+
+func TestValidateDefaultCommand_Valid(t *testing.T) {
+	for _, cmd := range cfg.KnownDefaultCommands() {
+		if err := cfg.ValidateDefaultCommand(cmd); err != nil {
+			t.Errorf("valid command %q should not error: %v", cmd, err)
+		}
+	}
+}
+
+func TestValidateDefaultCommand_Empty(t *testing.T) {
+	if err := cfg.ValidateDefaultCommand(""); err != nil {
+		t.Errorf("empty should be valid: %v", err)
+	}
+}
+
+func TestValidateDefaultCommand_Invalid(t *testing.T) {
+	err := cfg.ValidateDefaultCommand("notacommand")
+	if err == nil {
+		t.Fatal("expected error for invalid command")
+	}
+	if !strings.Contains(err.Error(), "notacommand") {
+		t.Errorf("error should mention the invalid command: %v", err)
 	}
 }
 
@@ -1938,5 +2563,486 @@ mount = "/path/with\~invalid/escape:/bar"
 	_, err := cfg.LoadFromOSWithDirs(globalDir, dir)
 	if err == nil {
 		t.Fatal("LoadFromOSWithDirs must return an error when project TOML has a parse error")
+	}
+}
+
+// The append surface is separate from system_prompt: after CELL-408,
+// system_prompt replaces Claude Code's built-in prompt, so a distinct key is
+// needed for text that layers on top of whichever base is in effect.
+func TestLoadFile_LLMAppendSystemPrompt(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "devcell.toml")
+	if err := os.WriteFile(path, []byte(`
+[llm]
+append_system_prompt = "always run gofmt"
+append_system_prompt_file = "prompts/extra.md"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := cfg.LoadFile(path)
+	if err != nil {
+		t.Fatalf("LoadFile: %v", err)
+	}
+	if c.LLM.AppendSystemPrompt != "always run gofmt" {
+		t.Errorf("append_system_prompt = %q", c.LLM.AppendSystemPrompt)
+	}
+	if c.LLM.AppendSystemPromptFile != "prompts/extra.md" {
+		t.Errorf("append_system_prompt_file = %q", c.LLM.AppendSystemPromptFile)
+	}
+}
+
+// Merge is hand-written per LLM field, so a new key silently ignores the
+// project value unless an explicit override line is added.
+func TestMerge_LLMAppendSystemPromptProjectOverridesGlobal(t *testing.T) {
+	global := cfg.CellConfig{LLM: cfg.LLMSection{
+		AppendSystemPrompt:     "global append",
+		AppendSystemPromptFile: "global.md",
+	}}
+	project := cfg.CellConfig{LLM: cfg.LLMSection{
+		AppendSystemPrompt:     "project append",
+		AppendSystemPromptFile: "project.md",
+	}}
+
+	out := cfg.Merge(global, project)
+
+	if out.LLM.AppendSystemPrompt != "project append" {
+		t.Errorf("append_system_prompt = %q, want project value", out.LLM.AppendSystemPrompt)
+	}
+	if out.LLM.AppendSystemPromptFile != "project.md" {
+		t.Errorf("append_system_prompt_file = %q, want project value", out.LLM.AppendSystemPromptFile)
+	}
+}
+
+// An unset project value must not blank out the global one.
+func TestMerge_LLMAppendSystemPromptGlobalSurvivesEmptyProject(t *testing.T) {
+	global := cfg.CellConfig{LLM: cfg.LLMSection{AppendSystemPrompt: "global append"}}
+
+	out := cfg.Merge(global, cfg.CellConfig{})
+
+	if out.LLM.AppendSystemPrompt != "global append" {
+		t.Errorf("append_system_prompt = %q, want global value preserved", out.LLM.AppendSystemPrompt)
+	}
+}
+
+// ── CELL-446: Packages merge ────────────────────────────────────────────────
+
+func TestMerge_PackagesNpmAccumulates(t *testing.T) {
+	global := cfg.CellConfig{Packages: cfg.PackagesSection{
+		Npm: map[string]string{"prettier": "*", "eslint": "8"},
+	}}
+	project := cfg.CellConfig{Packages: cfg.PackagesSection{
+		Npm: map[string]string{"eslint": "9", "typescript": "*"},
+	}}
+	merged := cfg.Merge(global, project)
+	if merged.Packages.Npm["prettier"] != "*" {
+		t.Errorf("prettier should be *, got %q", merged.Packages.Npm["prettier"])
+	}
+	if merged.Packages.Npm["eslint"] != "9" {
+		t.Errorf("eslint: project should win, got %q", merged.Packages.Npm["eslint"])
+	}
+	if merged.Packages.Npm["typescript"] != "*" {
+		t.Errorf("typescript should be *, got %q", merged.Packages.Npm["typescript"])
+	}
+}
+
+func TestMerge_PackagesPythonAccumulates(t *testing.T) {
+	global := cfg.CellConfig{Packages: cfg.PackagesSection{
+		Python: map[string]string{"pre-commit": "*"},
+	}}
+	project := cfg.CellConfig{Packages: cfg.PackagesSection{
+		Python: map[string]string{"black": "*"},
+	}}
+	merged := cfg.Merge(global, project)
+	if merged.Packages.Python["pre-commit"] != "*" {
+		t.Errorf("pre-commit should be *, got %q", merged.Packages.Python["pre-commit"])
+	}
+	if merged.Packages.Python["black"] != "*" {
+		t.Errorf("black should be *, got %q", merged.Packages.Python["black"])
+	}
+}
+
+func TestMerge_PackagesGlobalSurvivesEmptyProject(t *testing.T) {
+	global := cfg.CellConfig{Packages: cfg.PackagesSection{
+		Npm: map[string]string{"prettier": "*"},
+	}}
+	merged := cfg.Merge(global, cfg.CellConfig{})
+	if merged.Packages.Npm["prettier"] != "*" {
+		t.Errorf("global npm packages should survive empty project, got %q", merged.Packages.Npm["prettier"])
+	}
+}
+
+// ── CELL-445: NixPackages parsing and merge ─────────────────────────────────
+
+func TestLoadFile_NixPackages(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[packages.nix]
+stable = ["tmux", "htop"]
+unstable = ["some-tool"]
+edge = ["bleeding-edge"]
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantStable := []string{"tmux", "htop"}
+	if len(c.Packages.Nix.Stable) != 2 || c.Packages.Nix.Stable[0] != wantStable[0] || c.Packages.Nix.Stable[1] != wantStable[1] {
+		t.Errorf("stable = %v, want %v", c.Packages.Nix.Stable, wantStable)
+	}
+	if len(c.Packages.Nix.Unstable) != 1 || c.Packages.Nix.Unstable[0] != "some-tool" {
+		t.Errorf("unstable = %v, want [some-tool]", c.Packages.Nix.Unstable)
+	}
+	if len(c.Packages.Nix.Edge) != 1 || c.Packages.Nix.Edge[0] != "bleeding-edge" {
+		t.Errorf("edge = %v, want [bleeding-edge]", c.Packages.Nix.Edge)
+	}
+}
+
+func TestLoadFile_NixPackagesEmpty(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[packages.nix]
+stable = []
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Packages.Nix.Stable == nil || len(c.Packages.Nix.Stable) != 0 {
+		t.Errorf("stable should be empty non-nil slice, got %v (nil=%v)", c.Packages.Nix.Stable, c.Packages.Nix.Stable == nil)
+	}
+}
+
+func TestMerge_NixPackagesUnionDedup(t *testing.T) {
+	global := cfg.CellConfig{Packages: cfg.PackagesSection{
+		Nix: cfg.NixPackages{
+			Stable:   []string{"tmux", "htop"},
+			Unstable: []string{"tool-a"},
+		},
+	}}
+	project := cfg.CellConfig{Packages: cfg.PackagesSection{
+		Nix: cfg.NixPackages{
+			Stable:   []string{"htop", "cowsay"},
+			Unstable: []string{"tool-b"},
+			Edge:     []string{"edge-pkg"},
+		},
+	}}
+	merged := cfg.Merge(global, project)
+	wantStable := []string{"cowsay", "htop", "tmux"}
+	if strings.Join(merged.Packages.Nix.Stable, ",") != strings.Join(wantStable, ",") {
+		t.Errorf("stable = %v, want %v (union, deduped, sorted)", merged.Packages.Nix.Stable, wantStable)
+	}
+	wantUnstable := []string{"tool-a", "tool-b"}
+	if strings.Join(merged.Packages.Nix.Unstable, ",") != strings.Join(wantUnstable, ",") {
+		t.Errorf("unstable = %v, want %v", merged.Packages.Nix.Unstable, wantUnstable)
+	}
+	wantEdge := []string{"edge-pkg"}
+	if strings.Join(merged.Packages.Nix.Edge, ",") != strings.Join(wantEdge, ",") {
+		t.Errorf("edge = %v, want %v", merged.Packages.Nix.Edge, wantEdge)
+	}
+}
+
+func TestMerge_NixPackagesEscapeHatch(t *testing.T) {
+	global := cfg.CellConfig{Packages: cfg.PackagesSection{
+		Nix: cfg.NixPackages{Stable: []string{"tmux", "htop"}},
+	}}
+	project := cfg.CellConfig{Packages: cfg.PackagesSection{
+		Nix: cfg.NixPackages{Stable: []string{}},
+	}}
+	merged := cfg.Merge(global, project)
+	if len(merged.Packages.Nix.Stable) != 0 {
+		t.Errorf("explicit empty stable in project should clear global, got %v", merged.Packages.Nix.Stable)
+	}
+}
+
+func TestMerge_NixPackagesGlobalSurvivesNilProject(t *testing.T) {
+	global := cfg.CellConfig{Packages: cfg.PackagesSection{
+		Nix: cfg.NixPackages{Stable: []string{"tmux"}},
+	}}
+	merged := cfg.Merge(global, cfg.CellConfig{})
+	if len(merged.Packages.Nix.Stable) != 1 || merged.Packages.Nix.Stable[0] != "tmux" {
+		t.Errorf("global nix stable should survive nil project, got %v", merged.Packages.Nix.Stable)
+	}
+}
+
+// --- Wireguard ---
+
+func TestLoadFile_WireguardSection(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[[wireguard]]
+name = "proton-pt"
+enabled = true
+config = """
+[Interface]
+Address = 10.2.0.2/32
+"""
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Wireguard) != 1 {
+		t.Fatalf("expected 1 wireguard entry, got %d", len(c.Wireguard))
+	}
+	wg := c.Wireguard[0]
+	if wg.Name != "proton-pt" {
+		t.Errorf("name: want proton-pt, got %q", wg.Name)
+	}
+	if !wg.Enabled {
+		t.Error("expected enabled=true")
+	}
+	if !strings.Contains(wg.Config, "10.2.0.2/32") {
+		t.Errorf("config should contain address, got %q", wg.Config)
+	}
+}
+
+func TestLoadFile_WireguardMultiple(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[[wireguard]]
+name = "tunnel-a"
+enabled = true
+config = "config-a"
+
+[[wireguard]]
+name = "tunnel-b"
+enabled = false
+config = "config-b"
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Wireguard) != 2 {
+		t.Fatalf("expected 2 wireguard entries, got %d", len(c.Wireguard))
+	}
+	if c.Wireguard[0].Name != "tunnel-a" || c.Wireguard[1].Name != "tunnel-b" {
+		t.Errorf("unexpected names: %q, %q", c.Wireguard[0].Name, c.Wireguard[1].Name)
+	}
+	if !c.Wireguard[0].Enabled || c.Wireguard[1].Enabled {
+		t.Error("expected first enabled, second disabled")
+	}
+}
+
+func TestValidateWireguard_EnabledRequiresConfig(t *testing.T) {
+	c := cfg.CellConfig{
+		Wireguard: []cfg.WireguardEntry{{Name: "test", Enabled: true, Config: ""}},
+	}
+	err := cfg.ValidateWireguard(c)
+	if err == nil {
+		t.Fatal("expected error when enabled=true but config is empty")
+	}
+	if !strings.Contains(err.Error(), "config") {
+		t.Errorf("error should mention config, got: %v", err)
+	}
+}
+
+func TestValidateWireguard_EnabledRequiresName(t *testing.T) {
+	c := cfg.CellConfig{
+		Wireguard: []cfg.WireguardEntry{{Name: "", Enabled: true, Config: "some config"}},
+	}
+	err := cfg.ValidateWireguard(c)
+	if err == nil {
+		t.Fatal("expected error when enabled=true but name is empty")
+	}
+	if !strings.Contains(err.Error(), "name") {
+		t.Errorf("error should mention name, got: %v", err)
+	}
+}
+
+func TestValidateWireguard_DisabledSkipsValidation(t *testing.T) {
+	c := cfg.CellConfig{
+		Wireguard: []cfg.WireguardEntry{{Name: "", Enabled: false, Config: ""}},
+	}
+	if err := cfg.ValidateWireguard(c); err != nil {
+		t.Errorf("disabled entry should not be validated, got: %v", err)
+	}
+}
+
+func TestValidateWireguard_NoEntries(t *testing.T) {
+	c := cfg.CellConfig{}
+	if err := cfg.ValidateWireguard(c); err != nil {
+		t.Errorf("no wireguard entries should pass validation, got: %v", err)
+	}
+}
+
+func TestMerge_WireguardAccumulates(t *testing.T) {
+	global := cfg.CellConfig{
+		Wireguard: []cfg.WireguardEntry{{Name: "global-tun", Enabled: true, Config: "g"}},
+	}
+	project := cfg.CellConfig{
+		Wireguard: []cfg.WireguardEntry{{Name: "project-tun", Enabled: true, Config: "p"}},
+	}
+	merged := cfg.Merge(global, project)
+	if len(merged.Wireguard) != 2 {
+		t.Fatalf("expected 2 wireguard entries after merge, got %d", len(merged.Wireguard))
+	}
+	if merged.Wireguard[0].Name != "global-tun" || merged.Wireguard[1].Name != "project-tun" {
+		t.Errorf("unexpected order: %q, %q", merged.Wireguard[0].Name, merged.Wireguard[1].Name)
+	}
+}
+
+func TestMerge_WireguardDedupByName(t *testing.T) {
+	global := cfg.CellConfig{
+		Wireguard: []cfg.WireguardEntry{{Name: "tun", Enabled: false, Config: "old"}},
+	}
+	project := cfg.CellConfig{
+		Wireguard: []cfg.WireguardEntry{{Name: "tun", Enabled: true, Config: "new"}},
+	}
+	merged := cfg.Merge(global, project)
+	if len(merged.Wireguard) != 1 {
+		t.Fatalf("expected dedup to 1 entry, got %d", len(merged.Wireguard))
+	}
+	if !merged.Wireguard[0].Enabled || merged.Wireguard[0].Config != "new" {
+		t.Error("project entry should win on name conflict")
+	}
+}
+
+func TestWireguardEnabled_NoneEnabled(t *testing.T) {
+	c := cfg.CellConfig{
+		Wireguard: []cfg.WireguardEntry{{Name: "tun", Enabled: false, Config: "c"}},
+	}
+	if cfg.WireguardEnabled(c) {
+		t.Error("expected WireguardEnabled=false when no entry is enabled")
+	}
+}
+
+func TestWireguardEnabled_OneEnabled(t *testing.T) {
+	c := cfg.CellConfig{
+		Wireguard: []cfg.WireguardEntry{{Name: "tun", Enabled: true, Config: "c"}},
+	}
+	if !cfg.WireguardEnabled(c) {
+		t.Error("expected WireguardEnabled=true when an entry is enabled")
+	}
+}
+
+func TestWireguardEnabled_Empty(t *testing.T) {
+	c := cfg.CellConfig{}
+	if cfg.WireguardEnabled(c) {
+		t.Error("expected WireguardEnabled=false when no wireguard entries")
+	}
+}
+
+func TestValidateWireguard_ValidProtonVPNConfig(t *testing.T) {
+	c := cfg.CellConfig{
+		Wireguard: []cfg.WireguardEntry{{
+			Name:    "proton-pt",
+			Enabled: true,
+			Config: `[Interface]
+Address = 10.2.0.2/32, 2a07:b944::2:2/128
+DNS = 10.2.0.1, 2a07:b944::2:1
+PostUp = wg set %i private-key /run/secrets/wg-private-key
+
+[Peer]
+PublicKey = fkBdrgo6NaOI9ICRd+i2mDbieKUzEXkj4vX3ItZ+5lM=
+AllowedIPs = 0.0.0.0/0, ::/0
+Endpoint = 79.127.131.222:51820
+PersistentKeepalive = 25`,
+		}},
+	}
+	if err := cfg.ValidateWireguard(c); err != nil {
+		t.Fatalf("valid ProtonVPN config should pass, got: %v", err)
+	}
+}
+
+func TestValidateWireguard_MissingPeer(t *testing.T) {
+	c := cfg.CellConfig{
+		Wireguard: []cfg.WireguardEntry{{
+			Name:    "no-peer",
+			Enabled: true,
+			Config: `[Interface]
+Address = 10.2.0.2/32
+DNS = 10.2.0.1`,
+		}},
+	}
+	err := cfg.ValidateWireguard(c)
+	if err == nil {
+		t.Fatal("expected error when config has no [Peer] section")
+	}
+	if !strings.Contains(err.Error(), "peer") && !strings.Contains(err.Error(), "Peer") {
+		t.Errorf("error should mention peer, got: %v", err)
+	}
+}
+
+func TestValidateWireguard_MissingPublicKey(t *testing.T) {
+	c := cfg.CellConfig{
+		Wireguard: []cfg.WireguardEntry{{
+			Name:    "no-pubkey",
+			Enabled: true,
+			Config: `[Interface]
+Address = 10.2.0.2/32
+
+[Peer]
+Endpoint = 1.2.3.4:51820
+AllowedIPs = 0.0.0.0/0`,
+		}},
+	}
+	err := cfg.ValidateWireguard(c)
+	if err == nil {
+		t.Fatal("expected error when peer has no PublicKey")
+	}
+	if !strings.Contains(err.Error(), "PublicKey") {
+		t.Errorf("error should mention PublicKey, got: %v", err)
+	}
+}
+
+func TestValidateWireguard_InvalidPublicKey(t *testing.T) {
+	c := cfg.CellConfig{
+		Wireguard: []cfg.WireguardEntry{{
+			Name:    "bad-key",
+			Enabled: true,
+			Config: `[Interface]
+Address = 10.2.0.2/32
+
+[Peer]
+PublicKey = not-valid-base64!!!
+AllowedIPs = 0.0.0.0/0`,
+		}},
+	}
+	err := cfg.ValidateWireguard(c)
+	if err == nil {
+		t.Fatal("expected error for invalid base64 PublicKey")
+	}
+}
+
+func TestValidateWireguard_MissingAddress(t *testing.T) {
+	c := cfg.CellConfig{
+		Wireguard: []cfg.WireguardEntry{{
+			Name:    "no-addr",
+			Enabled: true,
+			Config: `[Interface]
+DNS = 10.2.0.1
+
+[Peer]
+PublicKey = fkBdrgo6NaOI9ICRd+i2mDbieKUzEXkj4vX3ItZ+5lM=
+AllowedIPs = 0.0.0.0/0`,
+		}},
+	}
+	err := cfg.ValidateWireguard(c)
+	if err == nil {
+		t.Fatal("expected error when config has no Address")
+	}
+	if !strings.Contains(err.Error(), "Address") {
+		t.Errorf("error should mention Address, got: %v", err)
+	}
+}
+
+func TestValidateWireguard_PrivateKeyNotRequired(t *testing.T) {
+	c := cfg.CellConfig{
+		Wireguard: []cfg.WireguardEntry{{
+			Name:    "no-privkey",
+			Enabled: true,
+			Config: `[Interface]
+Address = 10.2.0.2/32
+PostUp = wg set %i private-key /run/secrets/wg-private-key
+
+[Peer]
+PublicKey = fkBdrgo6NaOI9ICRd+i2mDbieKUzEXkj4vX3ItZ+5lM=
+AllowedIPs = 0.0.0.0/0`,
+		}},
+	}
+	if err := cfg.ValidateWireguard(c); err != nil {
+		t.Fatalf("PrivateKey should not be required (loaded via PostUp), got: %v", err)
 	}
 }

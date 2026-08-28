@@ -9,7 +9,7 @@ import (
 // Thin path mirrors pure path's 3-tier nixhome resolution (CELL-38):
 //   1. TOML/env explicit
 //   2. <BaseDir>/nixhome on disk
-//   3. github:DimmKirr/devcell/<ver>?dir=nixhome fallback
+//   3. github:devcell-sh/community-home/<ver> fallback
 //
 // These tests pin the contract from the THIN caller's perspective —
 // pure_nixhome_resolver_test.go covers the resolver itself, this file
@@ -24,7 +24,7 @@ func TestResolveThinNixhome_NoLocalFallsBackToGithub(t *testing.T) {
 	if !got.Remote {
 		t.Errorf("clean machine: want remote github fallback, got local: %+v", got)
 	}
-	want := "github:DimmKirr/devcell/v1.2.3?dir=nixhome"
+	want := "github:devcell-sh/community-home/v1.2.3"
 	if got.FlakeRef != want {
 		t.Errorf("FlakeRef: want %q, got %q", want, got.FlakeRef)
 	}
@@ -52,7 +52,7 @@ func TestResolveThinNixhome_DevBuildCoercesToDefaultRef(t *testing.T) {
 	if !got.Remote {
 		t.Errorf("dev build clean machine: want remote, got local: %+v", got)
 	}
-	want := "github:DimmKirr/devcell/" + runner.DefaultNixhomeGitRef + "?dir=nixhome"
+	want := "github:devcell-sh/community-home/" + runner.DefaultNixhomeGitRef
 	if got.FlakeRef != want {
 		t.Errorf("FlakeRef (v0.0.0 coerced): want %q, got %q", want, got.FlakeRef)
 	}

@@ -87,19 +87,6 @@ func TestNixLd_ImageNixSetsEnv(t *testing.T) {
 // That stable path lets docker exec sessions and shell-rc-free invocations
 // (e.g., `docker exec mise install`) find the nix glibc loader without
 // reaching for a hardcoded /nix/store hash that would change every rebuild.
-//
-// NIX_LD_LIBRARY_PATH is INTENTIONALLY not in Dockerfile ENV — the closure
-// list runs tens of kilobytes and is computed by the home-manager activation,
-// which the Dockerfile parser can't do at write time. Instead the
-// `06-nix-ldpath.sh` fragment exports it at shell init (covered by
-// `TestNixLd_FragmentExportsLdLibraryPath`).
-func TestNixLd_DockerfileSetsNixLd(t *testing.T) {
-	df := readImagesDockerfile(t)
-	if !strings.Contains(df, "ENV NIX_LD=") {
-		t.Fatal("images/Dockerfile doesn't set NIX_LD via ENV — docker exec sessions and bare-exec processes won't find the nix glibc loader; non-nix binaries will trip on missing dynamic linker")
-	}
-}
-
 // TestNixLd_FragmentExportsLdLibraryPath asserts that the
 // `06-nix-ldpath.sh` entrypoint fragment has been MIGRATED from the
 // legacy `export LD_LIBRARY_PATH=...` (consumed by all binaries, breaks

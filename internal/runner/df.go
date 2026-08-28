@@ -130,8 +130,8 @@ func boolToInt(b bool) int {
 
 // FormatOpts controls FormatTable / FormatJSON output.
 type FormatOpts struct {
-	TopN     int        // 0 means "all"
-	Kinds    []EntryKind // empty means all kinds
+	TopN  int         // 0 means "all"
+	Kinds []EntryKind // empty means all kinds
 }
 
 // FormatTable renders the ranked entries as a human-readable table with a
@@ -223,10 +223,10 @@ func FormatTableWithVM(snap DFSnapshot, opts FormatOpts, vm VMDiskInfo, containe
 }
 
 // selectEntries is the canonical pipeline used by both formatters:
-//   1. rank everything by reclaimable bytes
-//   2. filter by kind (so --kind cache returns the top cache rows,
-//      not the top-of-everything filtered down to cache)
-//   3. cap to TopN
+//  1. rank everything by reclaimable bytes
+//  2. filter by kind (so --kind cache returns the top cache rows,
+//     not the top-of-everything filtered down to cache)
+//  3. cap to TopN
 //
 // Doing #3 before #2 (the previous order) silently dropped all rows when
 // the top-N globally happened to be entirely the unwanted kind.
@@ -505,11 +505,11 @@ type rawImage struct {
 }
 
 type rawContainer struct {
-	ID     string `json:"ID"`
-	Names  string `json:"Names"`
-	Image  string `json:"Image"`
-	State  string `json:"State"`
-	Size   string `json:"Size"`
+	ID    string `json:"ID"`
+	Names string `json:"Names"`
+	Image string `json:"Image"`
+	State string `json:"State"`
+	Size  string `json:"Size"`
 }
 
 type rawVolume struct {

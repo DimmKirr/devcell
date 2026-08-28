@@ -36,6 +36,36 @@ vars:
         git describe --tags --always --dirty 2>/dev/null || echo "v0.0.0"
       fi
   CELL_LDFLAGS: -s -w -X github.com/DimmKirr/devcell/internal/version.Version={{.CELL_VERSION}} -X github.com/DimmKirr/devcell/internal/version.GitCommit={{.GIT_COMMIT_HASH}} -X github.com/DimmKirr/devcell/internal/version.BuildDate={{.BUILD_DATE}}
+  CELL_BUILD_TAGS:
+    sh: |
+      tags=""
+      if pkg-config --exists wimlib 2>/dev/null; then tags="wimlib"; fi
+      echo "$tags"
+
+  # Docker daemon the Docker-dependent test tasks talk to.
+  #
+  # Pinned to the Docker Desktop socket while the Colima migration is in
+  # flight, so a half-provisioned Colima VM cannot silently become the build
+  # daemon mid-suite (a 2 GiB stock VM makes the thin build's ceilings drop
+  # out entirely — see clampBuildLimits and `task debug:colima`).
+  #
+  # Resolution order:
+  #   1. explicit DOCKER_SOCK= override
+  #   2. ~/.docker/run/docker.sock — Docker Desktop, present on the host Mac
+  #   3. ambient DOCKER_HOST, else /var/run/docker.sock — this is the path
+  #      inside a devcell container, where the host forwards its daemon socket
+  #      and the Docker Desktop user socket does NOT exist. Hardcoding (2)
+  #      would break every container-side run.
+  #
+  # Target a different daemon explicitly:
+  #   task test:integration DOCKER_SOCK=unix://$HOME/.colima/default/docker.sock
+  DOCKER_SOCK:
+    sh: |
+      if [ -S "$HOME/.docker/run/docker.sock" ]; then
+        echo "unix://$HOME/.docker/run/docker.sock"
+      else
+        echo "${DOCKER_HOST:-unix:///var/run/docker.sock}"
+      fi
 
 env:
   BUILDKIT_PROGRESS: plain
@@ -59,74 +89,122 @@ tasks:
     cmds:
       - go run $(ls cmd/*.go | grep -Ev '(_test|main)\.go') web/src/content/cell
 
-  # ── Validation (CI-cheap, no build) ────────────────────────────────────
-  nix:validate:
-    desc: Validate all nixhome stacks — syntax check then attr check (no build, no activation)
+  hm:generate:
+    desc: Regenerate nix/home-manager/options.nix from the Go config schema (internal/cfg.CellConfig)
     dir: "{{.TASKFILE_DIR}}"
+    silent: true
     cmds:
+      - mkdir -p nix/home-manager
+      - go run cmd/hmoptgen.go -out nix/home-manager/options.nix
+      # Parse-check the module pair when nix is available (CI Go jobs may not have it).
       - |
-        set -e
-        NIX_BIN=/opt/devcell/.local/state/nix/profiles/profile/bin
-        FLAKE="{{.TASKFILE_DIR}}/nixhome"
+        if command -v nix-instantiate >/dev/null 2>&1; then
+          for f in nix/home-manager/options.nix nix/home-manager/module.nix; do
+            nix-instantiate --parse "$f" >/dev/null || exit 1
+          done
+        fi
 
-        echo "=== 1/2 Syntax check (nix-instantiate --parse) ==="
-        FAIL=0
-        for f in $(find nixhome -name '*.nix'); do
-          if sudo "$NIX_BIN/nix-instantiate" --parse "$f" >/dev/null 2>&1; then
-            echo "  OK   $f"
-          else
-            echo "  FAIL $f"
-            sudo "$NIX_BIN/nix-instantiate" --parse "$f" 2>&1 | grep 'error:' >&2
-            FAIL=1
-          fi
-        done
-        [ "$FAIL" -eq 0 ] || exit 1
-
-        echo ""
-        echo "=== 2/2 Attr check (nix eval, no build) ==="
-        ARCH=$(uname -m)
-        [ "$ARCH" = "aarch64" ] && SUFFIX="-aarch64" || SUFFIX=""
-        for stack in base go node python fullstack electronics ultimate; do
-          CFG="devcell-${stack}${SUFFIX}"
-          printf "  %-40s" "$CFG"
-          COUNT=$(sudo "$NIX_BIN/nix" eval \
-            "${FLAKE}#homeConfigurations.${CFG}.config.home.packages" \
-            --apply 'builtins.length' --json 2>/dev/null) \
-            && echo "OK ($COUNT packages)" \
-            || { echo "FAIL"; sudo "$NIX_BIN/nix" eval \
-              "${FLAKE}#homeConfigurations.${CFG}.config.home.packages" \
-              --apply 'builtins.length' --json 2>&1 | grep 'error:' >&2; exit 1; }
-        done
-        echo ""
-        echo "All stacks valid."
-
-  nix:update-vendor-hash:
-    desc: Refresh flake.nix vendorHash after go.mod/go.sum change (writes flake.nix in place)
+  nix:sync:
+    desc: Sync flake.nix vendorHash with go.mod/go.sum and stage it — the one command to run after changing dependencies
     dir: "{{.TASKFILE_DIR}}"
     silent: true
     cmds:
       - |
+        # vendorHash covers the THIRD-PARTY module set (go.sum), not devcell's
+        # own source — nix hashes `src` itself. So this only ever needs running
+        # when go.mod/go.sum change; editing devcell code never invalidates it.
+        #
+        # Resolution is the fixed-output dance: build goModules with the current
+        # hash and read the `got:` value from the mismatch error. Deliberately
+        # NOT nix-update: its eval imports the flake via `getFlake <path>`,
+        # which copies the ENTIRE repo directory into the store — including
+        # gitignored VM images (test/ alone is >100 GB) — and fills the disk.
+        # `nix build` on a flake ref uses the git fetcher: tracked files only.
         FLAKE="{{.TASKFILE_DIR}}/flake.nix"
-        replace_hash() { local tmp=$(mktemp); sed "s|vendorHash = \"sha256-[^\"]*\"|vendorHash = \"$1\"|" "$FLAKE" > "$tmp" && cat "$tmp" > "$FLAKE" && rm -f "$tmp"; }
-        OLD_HASH=$(grep 'vendorHash = "sha256-' "$FLAKE" | sed 's/.*"\(sha256-[^"]*\)".*/\1/')
-        BACKUP=$(mktemp)
-        cp "$FLAKE" "$BACKUP"
-        replace_hash "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
-        echo "Building .#cell to compute vendorHash (this may take a minute)..."
-        NEW_HASH=$(nix build .#cell 2>&1 | grep 'got:' | awk '{print $2}')
-        if [ -z "$NEW_HASH" ]; then
-          cp "$BACKUP" "$FLAKE"
-          rm -f "$BACKUP"
-          echo "nix build succeeded — vendorHash is already correct"
+        OLD=$(grep 'vendorHash = "sha256-' "$FLAKE" | sed 's/.*"\(sha256-[^"]*\)".*/\1/')
+        echo "Verifying vendorHash against go.sum ($(awk '{print $1}' go.sum | sort -u | wc -l | tr -d ' ') modules — downloads on first run)..."
+        if OUT=$(nix build "{{.TASKFILE_DIR}}#cell.goModules" --no-link 2>&1); then
+          echo "vendorHash already correct ($OLD)"
           exit 0
         fi
-        rm -f "$BACKUP"
-        replace_hash "$NEW_HASH"
-        if [ "$OLD_HASH" != "$NEW_HASH" ]; then
-          echo "vendorHash updated: $OLD_HASH → $NEW_HASH"
-          echo "flake.nix was modified — re-stage and re-commit"
+        NEW=$(printf '%s\n' "$OUT" | sed -n 's/.*got: *\(sha256-[^ ]*\).*/\1/p' | head -1)
+        if [ -z "$NEW" ]; then
+          echo "ERROR: goModules build failed for a reason other than a hash mismatch:" >&2
+          printf '%s\n' "$OUT" | tail -15 >&2
           exit 1
         fi
+        sed "s|$OLD|$NEW|" "$FLAKE" > "$FLAKE.tmp" && mv "$FLAKE.tmp" "$FLAKE"
+        if ! nix build "{{.TASKFILE_DIR}}#cell.goModules" --no-link; then
+          echo "ERROR: resolved hash did not verify — flake.nix restored." >&2
+          git checkout -- "$FLAKE"
+          exit 1
+        fi
+        git add "$FLAKE"
+        echo "vendorHash updated and staged: $OLD → $NEW"
+
+  nix:check-vendor-hash:
+    desc: Warn if go.mod/go.sum changed without a vendorHash update (non-blocking, instant)
+    dir: "{{.TASKFILE_DIR}}"
+    silent: true
+    cmds:
+      - |
+        # Instant check: if go.mod or go.sum are staged, the vendorHash
+        # line in flake.nix must be part of the same staged diff. Merely
+        # touching flake.nix for an unrelated reason (e.g. an unrelated
+        # nix module edit riding in the same commit) is not enough — it
+        # previously produced a false "all good" on commit 96bee90. No
+        # nix build needed for this check.
+        if git diff --cached --name-only | grep -qE '^(go\.mod|go\.sum)$'; then
+          if ! git diff --cached -- flake.nix | grep -q '^[+-].*vendorHash'; then
+            echo "⚠ go.mod/go.sum changed but the vendorHash line in flake.nix was not updated — run: task nix:sync" >&2
+          fi
+        fi
+        exit 0
+
+  nix:build:
+    desc: Build the cell package via nix and verify it runs — the real check that vendorHash/flake.nix are correct
+    dir: "{{.TASKFILE_DIR}}"
+    deps: [hm:generate]
+    cmds:
+      - |
+        set -e
+        OUT=$(nix build .#cell --no-link --print-out-paths)
+        "$OUT/bin/cell" --version
+
+  test:powershell:lint:
+    desc: Lint the guest PowerShell scripts (.ps1, .psm1) with PSScriptAnalyzer — template lint lives in go-winkit (task test:powershell:lint there)
+    dir: "{{.TASKFILE_DIR}}"
+    silent: true
+    cmds:
+      - |
+        set -e
+        if ! command -v pwsh >/dev/null 2>&1; then
+          echo "pwsh not found — install: nix profile install nixpkgs#powershell" >&2
+          exit 1
+        fi
+        pwsh -NoProfile -NonInteractive -Command '
+          if (-not (Get-Module -ListAvailable PSScriptAnalyzer)) {
+            Write-Output "Installing PSScriptAnalyzer..."
+            Install-Module PSScriptAnalyzer -Force -Scope CurrentUser -Repository PSGallery
+          }
+          $files = @(
+            Get-ChildItem -Recurse -Path "internal/vm/qemu/guest" -Include "*.ps1","*.psm1"
+          )
+          if ($files.Count -eq 0) { Write-Output "No .ps1/.psm1 files found"; exit 0 }
+          $fail = $false
+          foreach ($f in $files) {
+            $results = Invoke-ScriptAnalyzer -Path $f.FullName -Severity Error,Warning
+            if ($results) {
+              $fail = $true
+              foreach ($r in $results) {
+                Write-Output ("  {0}:{1} [{2}] {3}" -f $r.ScriptName, $r.Line, $r.Severity, $r.Message)
+              }
+            } else {
+              Write-Output ("  OK   {0}" -f $f.FullName)
+            }
+          }
+          if ($fail) { exit 1 } else { Write-Output "All scripts clean." }
+        '
 
   bake:validate:
     desc: Print resolved docker-bake config (HCL parse check, no build)
@@ -136,6 +214,29 @@ tasks:
       - GIT_COMMIT={{.GIT_COMMIT_HASH}} docker buildx bake --file {{.TASKFILE_DIR}}/docker-bake.hcl --print ci
 
   # ── cell CLI binary ────────────────────────────────────────────────────
+
+  cell:deps:
+    desc: Verify build-time library dependencies
+    dir: "{{.TASKFILE_DIR}}"
+    silent: true
+    cmds:
+      - |
+        ok=1
+        if [ "$(uname -s)" = "Darwin" ]; then
+          if ! command -v pkg-config >/dev/null 2>&1; then
+            echo "⚠  pkg-config not found (brew install pkg-config)"
+            ok=0
+          fi
+          if ! pkg-config --exists wimlib 2>/dev/null; then
+            echo "⚠  wimlib not found — QEMU Windows VM builds will be disabled"
+            echo "   Install: brew install wimlib"
+          fi
+        fi
+        if ! command -v go >/dev/null 2>&1; then
+          echo "✗  go not found"; ok=0
+        fi
+        [ "$ok" -eq 1 ] || { echo ""; echo "Fix the above and re-run."; exit 1; }
+
   # macOS Sequoia (15.x) launch-constraint guard: after `go build`, the OS-
   # recorded provenance for the freshly written file doesn't match the new
   # binary's content → kernel SIGKILLs the process at exec time, before
@@ -146,11 +247,11 @@ tasks:
   cell:build:
     desc: Build cell CLI binary → ./bin/cell
     dir: "{{.TASKFILE_DIR}}"
-    deps: [swagger:generate]
+    deps: [swagger:generate, hm:generate, cell:deps]
     silent: true
     cmds:
       - mkdir -p bin
-      - CGO_ENABLED={{if eq OS "darwin"}}1{{else}}0{{end}} go build -ldflags "{{.CELL_LDFLAGS}}" -o ./bin/cell ./cmd/
+      - CGO_ENABLED={{if eq OS "darwin"}}1{{else}}0{{end}} go build {{if .CELL_BUILD_TAGS}}-tags "{{.CELL_BUILD_TAGS}}" {{end}}-ldflags "{{.CELL_LDFLAGS}}" -o ./bin/cell ./cmd/
       - '[ "$(uname -s)" != "Darwin" ] || xattr -c ./bin/cell'
       - '[ "$(uname -s)" != "Darwin" ] || codesign --force --sign - --entitlements entitlements.plist ./bin/cell'
 
@@ -235,108 +336,6 @@ tasks:
         --set '*.output=type=image,push=true,oci-mediatypes=true,compression=zstd,compression-level=3,force-compression=true'
         ci {{.CLI_ARGS}}
 
-  # ── image:pure (nix2container — default) ───────────────────────────────
-  image:pure:build:
-    desc: Build all pure local images (base + ultimate, load into Docker daemon)
-    cmds:
-      - task: image:pure:build:base
-      - task: image:pure:build:ultimate
-
-  image:pure:build:base:
-    desc: Build pure base image locally
-    cmds:
-      - task: image:pure:build:stack
-        vars: { STACK: base }
-
-  image:pure:build:ultimate:
-    desc: Build pure ultimate image locally
-    cmds:
-      - task: image:pure:build:stack
-        vars: { STACK: ultimate }
-
-  image:pure:build:stack:
-    aliases: [image:build:pure]                # back-compat (cited in internal/runner/pure_build.go:381)
-    desc: "Build a pure image (single stack), load to Docker. STACK={base|ultimate|go|node|python|fullstack|electronics}"
-    dir: "{{.TASKFILE_DIR}}"
-    silent: true
-    vars:
-      STACK: '{{.STACK | default "base"}}'
-      # SUDO: empty in CI (Determinate Systems single-user nix on PATH) and on
-      # the host (Determinate or upstream single-user). Override SUDO=sudo for
-      # devcell containers where DEVCELL_NIX_DAEMON=false (pre-CELL-72 builds).
-      SUDO: '{{.SUDO | default ""}}'
-      # NIX: defaults to "nix" on PATH. Override NIX=/full/path/to/nix when the
-      # binary isn't on PATH (uncommon — devcell, CI, and host all expose nix).
-      NIX: '{{.NIX | default "nix"}}'
-      NIX_ARCH:
-        sh: '[ "$(uname -m)" = "aarch64" ] && echo aarch64-linux || echo x86_64-linux'
-    env:
-      DEVCELL_BUILD_DATE: '{{.DEVCELL_BUILD_DATE | default "auto"}}'
-      DEVCELL_BUILD_REV:  '{{.DEVCELL_BUILD_REV  | default .GIT_COMMIT_HASH}}'
-    cmds:
-      - echo ">> Building devcell-{{.STACK}}-pure-image for {{.NIX_ARCH}}"
-      # --impure required so image.nix can read DEVCELL_BUILD_{DATE,REV} via builtins.getEnv.
-      - '{{.SUDO}} {{.NIX}} build --impure "path:{{.TASKFILE_DIR}}/nixhome#packages.{{.NIX_ARCH}}.devcell-{{.STACK}}-pure-image" --out-link "{{.TASKFILE_DIR}}/result-{{.STACK}}-pure"'
-      - echo ">> Loading into Docker daemon as devcell-user:{{.STACK}}-pure"
-      - '{{.SUDO}} {{.NIX}} run --impure "path:{{.TASKFILE_DIR}}/nixhome#packages.{{.NIX_ARCH}}.devcell-{{.STACK}}-pure-image.copyToDockerDaemon"'
-      - docker images devcell-user:{{.STACK}}-pure
-
-  image:pure:push:
-    desc: Build + push all pure images (base + ultimate)
-    cmds:
-      - task: image:pure:push:base
-      - task: image:pure:push:ultimate
-
-  image:pure:push:base:
-    desc: Build + push pure base image to registry
-    cmds:
-      - task: image:pure:push:stack
-        vars: { STACK: base }
-
-  image:pure:push:ultimate:
-    desc: Build + push pure ultimate image to registry
-    cmds:
-      - task: image:pure:push:stack
-        vars: { STACK: ultimate }
-
-  image:pure:push:stack:
-    desc: "Build + push a pure image (single stack). STACK= ARCH=auto|amd64|arm64 TAG= REGISTRY=… SUDO= NIX="
-    dir: "{{.TASKFILE_DIR}}"
-    silent: true
-    vars:
-      STACK:    '{{.STACK    | default "ultimate"}}'
-      REGISTRY: '{{.REGISTRY | default "ghcr.io/devcell-sh/devcell"}}'
-      TAG:      '{{.TAG      | default (printf "v0.0.0-%s-pure" .STACK)}}'
-      SUDO:     '{{.SUDO     | default ""}}'      # see image:pure:build:stack notes
-      NIX:      '{{.NIX      | default "nix"}}'
-      NIX_ARCH:
-        sh: |
-          case "{{.ARCH | default ""}}" in
-            amd64|x86_64) echo x86_64-linux ;;
-            arm64|aarch64) echo aarch64-linux ;;
-            *) [ "$(uname -m)" = "aarch64" ] && echo aarch64-linux || echo x86_64-linux ;;
-          esac
-    env:
-      DEVCELL_BUILD_DATE: '{{.DEVCELL_BUILD_DATE | default "auto"}}'
-      DEVCELL_BUILD_REV:  '{{.DEVCELL_BUILD_REV  | default .GIT_COMMIT_HASH}}'
-    cmds:
-      # nix2container's `.copyTo` runs skopeo from the derivation closure with
-      # OCI media types end-to-end — zstd layers are legal, no v2s2 mismatch.
-      # Auth: docker/login-action writes ~/.docker/config.json; --authfile reuses it.
-      # --retry-times 5 + --retry-delay 5: GHCR occasionally returns 504 Gateway
-      # Timeout uploading large blobs (~hundreds of MB); without retries skopeo
-      # bails after a single failure and we lose all the upload progress on the
-      # remaining blobs. 5×5s = 25s max retry budget per blob is well below the
-      # GHA job timeout and covers the typical GHCR recovery window.
-      - >-
-        {{.SUDO}} {{.NIX}} run --impure
-        "path:{{.TASKFILE_DIR}}/nixhome#packages.{{.NIX_ARCH}}.devcell-{{.STACK}}-pure-image.copyTo"
-        --
-        --authfile "${DOCKER_CONFIG:-$HOME/.docker}/config.json"
-        --retry-times 5
-        --retry-delay 5s
-        "docker://{{.REGISTRY}}:{{.TAG}}"
-
   # ── image: variant-agnostic utilities ──────────────────────────────────
   image:mirror:
     desc: "Copy a tag between registries (e.g. GHCR → ECR Public). SRC=<full-ref> DST=<full-ref>"
@@ -375,7 +374,11 @@ tasks:
     silent: true
     dir: "{{.TASKFILE_DIR}}"
     cmds:
+      - 'echo "docker daemon: {{.DOCKER_SOCK}}"'
       - go test -v -timeout 120s ./test/... {{.CLI_ARGS}}
+    # see DOCKER_SOCK in top-level vars
+    env:
+      DOCKER_HOST: '{{.DOCKER_SOCK}}'
 
   test:vagrant:
     desc: Run E2E install test in a clean Debian VM (QEMU). Requires vagrant + vagrant-qemu plugin.
@@ -406,7 +409,94 @@ tasks:
   test:cache:
     desc: Round-trip nix-cache pipeline locally (~1 min, requires docker + crane)
     cmds:
+      - 'echo "docker daemon: {{.DOCKER_SOCK}}"'
       - go test -v -count=1 -run TestCacheRoundtrip ./test/...
+    # see DOCKER_SOCK in top-level vars
+    env:
+      DOCKER_HOST: '{{.DOCKER_SOCK}}'
+
+  # ── Full Windows install via QEMU (CELL-429) ──────────────────────────
+  # Usage:
+  #   task test:windows:build              # runs tcg subtest (default)
+  #   task test:windows:build ACCEL=hvf    # runs hvf subtest
+  #   task test:windows:build ACCEL=""     # runs all subtests
+  test:windows:build:
+    desc: "Run the full unattended Windows install through `cell build --engine=qemu`"
+    platforms: [darwin]
+    silent: true
+    vars:
+      ACCEL: tcg
+      DEBUG_DIR: '{{.TASKFILE_DIR}}/.scratch/debug'
+    cmds:
+      - mkdir -p {{.DEBUG_DIR}}
+      - |
+        set -euo pipefail
+        env_log="{{.DEBUG_DIR}}/environment.log"
+
+        # ── Resolve every path the VM boot uses ──
+        qemu_bin=$(which qemu-system-aarch64 2>/dev/null || true)
+        qemu_real=""
+        qemu_prefix=""
+        fw=""
+        if [ -n "$qemu_bin" ]; then
+          qemu_real=$(realpath "$qemu_bin" 2>/dev/null || readlink -f "$qemu_bin" 2>/dev/null || echo "$qemu_bin")
+          qemu_prefix=$(dirname "$qemu_real")/..
+          fw="${qemu_prefix}/share/qemu/edk2-aarch64-code.fd"
+        fi
+
+        cache_dir="${DEVCELL_QEMU_CACHE_DIR:-$HOME/.devcell/cache/qemu}"
+        win_iso="${DEVCELL_TEST_WINDOWS_ISO:-${cache_dir}/windows-arm64-en-us.iso}"
+        virtio_iso="${DEVCELL_TEST_VIRTIO_ISO:-${cache_dir}/virtio-win.iso}"
+
+        check_file() {
+          local label="$1" path="$2"
+          if [ -f "$path" ]; then
+            printf "  %-14s %-6s %s\n" "$label" "$(du -h "$path" 2>/dev/null | cut -f1)" "$path"
+          else
+            printf "  %-14s %-6s %s\n" "$label" "MISS" "$path"
+          fi
+        }
+
+        {
+          echo "=== test:windows:build $(date -u +%Y%m%dT%H%M%SZ) ==="
+
+          echo "--- qemu binary ---"
+          echo "  PATH lookup:  ${qemu_bin:-NOT FOUND}"
+          echo "  realpath:     ${qemu_real:-N/A}"
+          [ -n "$qemu_bin" ] && qemu-system-aarch64 --version 2>&1 | head -1 | sed 's/^/  version:      /'
+          echo ""
+
+          echo "--- VM boot file preflight ---"
+          check_file "firmware" "$fw"
+          check_file "windows-iso" "$win_iso"
+          check_file "virtio-iso" "$virtio_iso"
+          echo ""
+
+          echo "--- cache directory ---"
+          echo "  resolved: $cache_dir"
+          if [ -d "$cache_dir" ]; then
+            ls -lh "$cache_dir" 2>/dev/null | sed 's/^/  /'
+          else
+            echo "  DOES NOT EXIST"
+          fi
+          echo ""
+        } 2>&1 | tee "$env_log"
+
+        # ── Run the full Windows install test ──
+        accel="{{.ACCEL}}"
+        run_filter="TestCellBuildWindows_QEMU"
+        if [ -n "$accel" ]; then
+          run_filter="TestCellBuildWindows_QEMU/${accel}"
+        fi
+        log="{{.DEBUG_DIR}}/TestCellBuildWindows_QEMU.log"
+        echo "▸ ${run_filter} → ${log}"
+        build_env="DEVCELL_TEST_INSTALL=1 DEVCELL_TEST_REBUILD=1"
+        if env $build_env go test -run "${run_filter}" -timeout 8h -v -count=1 ./internal/vm/qemu/ 2>&1 | tee "${log}"; then
+          echo "  ✓ PASS"
+        else
+          echo "  ✗ FAIL"
+          exit 1
+        fi
 
   # ── Nix-store GHCR cache pipeline ──────────────────────────────────────
   # Stream the populated /nix volume to GHCR as a multi-layer cache image.
@@ -445,6 +535,130 @@ tasks:
   debug:
     cmds:
       - task: debug:macos
+  # ── Forced QEMU Windows autobuild with full log capture (CELL-428/429) ─────
+  debug:autobuild:
+    desc: "Forced QEMU Windows template build with full log capture → .scratch/debug/autobuild.log"
+    platforms: [darwin]
+    deps: [install]
+    silent: true
+    env:
+      # CELL-429 iteration 2 instrument: ships the WinPE agent on the answer
+      # volume plus a pre-baked one-shot diagnostic (drvload vioscsi + diskpart
+      # volume list → devcell-out.txt).
+      #   H1 ($WinPEDriver$ sweep never ran): devcell-setupact.log snapshot
+      #      shows whether wpeinit processed the driver dir.
+      #   H2 (padForFAT broke the driver files): drivers now ship byte-exact,
+      #      and drvload's real output/exit code lands in devcell-out.txt.
+      #   H3 (any non-reg-add RunSynchronous aborts 0x8007000D): this run IS
+      #      the test — the agent launcher is the vetted %l pattern; if the
+      #      abort returns, H3 is confirmed and the agent design is dead.
+      DEVCELL_QEMU_WINPE_AGENT: "1"
+    vars:
+      LOG: '{{.TASKFILE_DIR}}/.scratch/debug/autobuild.log'
+      CACHE: '{{.HOME}}/.devcell/cache/qemu'
+    cmds:
+      - mkdir -p {{.TASKFILE_DIR}}/.scratch/debug
+      - |
+        {
+          echo "=== debug:autobuild $(date -u +%Y%m%dT%H%M%SZ) ==="
+          echo "--- cell version ---"
+          cell --version 2>&1 || true
+          echo "--- qemu ---"
+          command -v qemu-system-aarch64 2>&1 || true
+          qemu-system-aarch64 --version 2>&1 | head -1 || true
+          echo "--- media cache ---"
+          ls -la "{{.CACHE}}/" 2>&1 || true
+          echo "--- cached ISO volume descriptors (expect: catalog@15, BEA01@16, CD001 BRVD@17, NSR02@18, TEA01@19) ---"
+          for s in 15 16 17 18 19; do
+            printf "sector %s: " "$s"
+            dd if="{{.CACHE}}/windows-arm64-en-us.iso" bs=2048 skip=$s count=1 2>/dev/null | xxd -l 8 | head -1 || echo "unreadable"
+          done
+          echo "--- bootloader sidecar ---"
+          ls -la "{{.CACHE}}/windows-arm64-en-us.iso.bootaa64.efi" 2>&1 || echo "no sidecar (will re-master or fall back to ISO read)"
+          echo "--- template dir before ---"
+          ls -la "{{.HOME}}/.devcell/windows/ultimate/" 2>&1 || true
+          echo ""
+        } > {{.LOG}} 2>&1
+      - |
+        set -o pipefail
+        cell claude --engine=qemu --debug --force 2>&1 | tee -a {{.LOG}}
+        rc=$?
+        {
+          echo ""
+          echo "=== exit code: $rc ==="
+          echo "=== serial.log (tail 120) ==="
+          tail -120 "{{.TASKFILE_DIR}}/.scratch/debug/serial.log" 2>/dev/null || true
+          echo "=== guest-progress.log (tail 60) ==="
+          tail -60 "{{.TASKFILE_DIR}}/.scratch/debug/guest-progress.log" 2>/dev/null || true
+          echo "=== newest screenshots ==="
+          ls -t "{{.TASKFILE_DIR}}/.scratch/debug/screenshots/" 2>/dev/null | head -12 || true
+          echo "=== template dir after ==="
+          ls -la "{{.HOME}}/.devcell/windows/ultimate/" 2>/dev/null || true
+        } >> {{.LOG}} 2>&1
+        echo ""
+        echo "full log: {{.LOG}}"
+        exit $rc
+
+  # ── Windows ISO debugging (UUP dump download + wimlib assembly) ─────
+  debug:windows:
+    desc: "Quick Windows QEMU smoke test: build → exec echo hello world"
+    platforms: [darwin]
+    deps: [install]
+    silent: true
+    vars:
+      MARKER: '{{.HOME}}/.devcell/windows/ultimate/.provisioned'
+      LOG: '{{.TASKFILE_DIR}}/.scratch/debug/windows.log'
+    cmds:
+      - |
+        set -euo pipefail
+        mkdir -p "$(dirname "{{.LOG}}")"
+
+        _run() {
+        echo "=== [0/3] Pre-flight diagnostics ==="
+        echo "  date:     $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        echo "  cell:     $(cell --version 2>&1 || echo 'not found')"
+        echo "  qemu:     $(qemu-system-aarch64 --version 2>/dev/null | head -1 || echo 'not found')"
+        echo "  bunk env: DEVCELL_BUNK=${DEVCELL_BUNK:-<unset>}  SESSION_PORT_PREFIX=${SESSION_PORT_PREFIX:-<unset>}"
+        echo "  marker:   {{.MARKER}} — $(test -f '{{.MARKER}}' && echo 'EXISTS' || echo 'MISSING')"
+        echo ""
+        echo "  template disk:"
+        ls -lh {{.HOME}}/.devcell/windows/ultimate/disk-ultimate.qcow2 2>/dev/null || echo "    not found"
+        echo ""
+        echo "  instance disk:"
+        ls -lh {{.HOME}}/.devcell/DIMM/windows/disk.qcow2 2>/dev/null || echo "    not found"
+        echo ""
+        echo "  ports.json:"
+        cat {{.HOME}}/.devcell/DIMM/windows/ports.json 2>/dev/null || echo "    not found"
+        echo ""
+        echo "  qemu processes:"
+        pgrep -lf qemu-system 2>/dev/null || echo "    none"
+        echo ""
+        echo "  port 2222 (legacy):"
+        lsof -i :2222 -sTCP:LISTEN 2>/dev/null || echo "    not in use"
+        echo ""
+
+        echo "=== [1/3] Build VM ==="
+        if [ -f "{{.MARKER}}" ]; then
+          echo "Template already provisioned — skipping build."
+        else
+          echo "Template not provisioned — building (--force in case stale disk exists)..."
+          cell build --engine=qemu --force --debug 2>&1
+        fi
+        echo ""
+
+        echo "=== [2/3] Post-build diagnostics ==="
+        echo "  marker:   $(test -f '{{.MARKER}}' && echo 'EXISTS' || echo 'MISSING')"
+        echo "  template disk:"
+        ls -lh {{.HOME}}/.devcell/windows/ultimate/disk-ultimate.qcow2 2>/dev/null || echo "    not found"
+        echo "  qemu processes:"
+        pgrep -lf qemu-system 2>/dev/null || echo "    none"
+        echo ""
+
+        echo "=== [3/3] Shell exec: echo hello world ==="
+        cell shell --engine=qemu --debug -- cmd /c echo hello world
+        }
+
+        _run 2>&1 | tee "{{.LOG}}"
   # ── macOS VM debugging ────────────────────────────────────────────────
   debug:macos:
     desc: Mount a stopped macOS VM disk and dump diagnostics to .devcell/debug/<datetime>-macos.log
@@ -571,13 +785,966 @@ tasks:
         echo ""
         echo "saved to: $LOG"
 
+  # ── CD bus × accelerator matrix (CELL-429) ──────────────────────────
+  debug:macos:disk:
+    desc: "Run WinPE CD visibility tests (scsi-cd × hvf × {el2,no-el2}) on macOS"
+    platforms: [darwin]
+    silent: true
+    vars:
+      DEBUG_DIR: '{{.TASKFILE_DIR}}/.scratch/debug'
+    cmds:
+      - mkdir -p {{.DEBUG_DIR}}
+      - |
+        set -euo pipefail
+        env_log="{{.DEBUG_DIR}}/environment.log"
+
+        # ── Resolve every path the VM boot uses ──
+        # These mirror the Go helpers: requireQEMUBin, FirmwarePath,
+        # requireWindowsISO, requireVirtioISO (boot_test.go / download.go).
+        qemu_bin=$(which qemu-system-aarch64 2>/dev/null || true)
+        qemu_real=""
+        qemu_prefix=""
+        fw=""
+        if [ -n "$qemu_bin" ]; then
+          qemu_real=$(realpath "$qemu_bin" 2>/dev/null || readlink -f "$qemu_bin" 2>/dev/null || echo "$qemu_bin")
+          qemu_prefix=$(dirname "$qemu_real")/..
+          fw="${qemu_prefix}/share/qemu/edk2-aarch64-code.fd"
+        fi
+
+        cache_dir="${DEVCELL_QEMU_CACHE_DIR:-$HOME/.devcell/cache/qemu}"
+        win_iso="${DEVCELL_TEST_WINDOWS_ISO:-${cache_dir}/windows-arm64-en-us.iso}"
+        virtio_iso="${DEVCELL_TEST_VIRTIO_ISO:-${cache_dir}/virtio-win.iso}"
+        fw_override="${QEMU_FIRMWARE_OVERRIDE:-}"
+
+        # Helper: print file info or MISSING
+        check_file() {
+          local label="$1" path="$2"
+          if [ -f "$path" ]; then
+            printf "  %-14s %-6s %s\n" "$label" "$(du -h "$path" 2>/dev/null | cut -f1)" "$path"
+          else
+            printf "  %-14s %-6s %s\n" "$label" "MISS" "$path"
+          fi
+        }
+
+        {
+          echo "=== debug:macos:disk $(date -u +%Y%m%dT%H%M%SZ) ==="
+
+          echo "--- qemu binary ---"
+          echo "  PATH lookup:  ${qemu_bin:-NOT FOUND}"
+          echo "  realpath:     ${qemu_real:-N/A}"
+          echo "  prefix:       ${qemu_prefix:-N/A}"
+          [ -n "$qemu_bin" ] && qemu-system-aarch64 --version 2>&1 | head -1 | sed 's/^/  version:      /'
+          echo ""
+
+          echo "--- VM boot file preflight ---"
+          echo "  (mirrors Go: FirmwarePath, requireWindowsISO, requireVirtioISO)"
+          check_file "firmware" "$fw"
+          check_file "windows-iso" "$win_iso"
+          check_file "virtio-iso" "$virtio_iso"
+          [ -n "$fw_override" ] && check_file "fw-override" "$fw_override"
+          echo ""
+
+          echo "--- firmware fingerprint ---"
+          if [ -f "$fw" ]; then
+            echo "  sha256: $(shasum -a 256 "$fw" | cut -d' ' -f1)"
+            strings "$fw" | grep -i 'edk2-stable\|build.*20[0-9][0-9]' | head -3 | sed 's/^/  build-tag: /' || true
+          fi
+          echo ""
+
+          echo "--- cache directory ---"
+          echo "  DEVCELL_QEMU_CACHE_DIR=${DEVCELL_QEMU_CACHE_DIR:-<unset>}"
+          echo "  resolved: $cache_dir"
+          if [ -d "$cache_dir" ]; then
+            ls -lh "$cache_dir" 2>/dev/null | sed 's/^/  /'
+          else
+            echo "  DOES NOT EXIST"
+          fi
+          echo ""
+
+          echo "--- env overrides ---"
+          echo "  DEVCELL_TEST_WINDOWS_ISO=${DEVCELL_TEST_WINDOWS_ISO:-<unset>}"
+          echo "  DEVCELL_TEST_VIRTIO_ISO=${DEVCELL_TEST_VIRTIO_ISO:-<unset>}"
+          echo "  QEMU_FIRMWARE_OVERRIDE=${QEMU_FIRMWARE_OVERRIDE:-<unset>}"
+          echo "  DEVCELL_QEMU_EFI_KERNEL=${DEVCELL_QEMU_EFI_KERNEL:-<unset>}"
+          echo ""
+
+          echo "--- qemu share directory ---"
+          if [ -n "$qemu_prefix" ] && [ -d "${qemu_prefix}/share/qemu" ]; then
+            echo "  ${qemu_prefix}/share/qemu:"
+            ls -1 "${qemu_prefix}/share/qemu/" | grep -iE 'edk2|efi|uefi|aarch64|arm' | sed 's/^/    /'
+          else
+            echo "  NOT FOUND"
+          fi
+          echo ""
+        } 2>&1 | tee "$env_log"
+
+        # ── Test matrix: scsi-cd × {tcg,hvf} × {el2,no-el2} ──
+        # usb-storage disabled: EDK2 can't enumerate the answer FAT
+        # volume when it falls to a USB 2.0 port (XHCI port exhaustion).
+        # All variants run in one go test binary so subtests share a single
+        # timestamped results directory.
+        log="{{.DEBUG_DIR}}/TestWinPECDVisibility.log"
+        echo "▸ TestWinPECDVisibility (all variants) → ${log}"
+        env_args=""
+        [ -n "$fw_override" ] && env_args="QEMU_FIRMWARE_OVERRIDE=$fw_override"
+        if env $env_args go test -run "TestWinPECDVisibility/scsi-cd/hvf" -timeout 60m -v ./internal/vm/qemu/ 2>&1 | tee "${log}"; then
+          echo "  ✓ PASS"
+        else
+          echo "  ✗ FAIL"
+          exit 1
+        fi
+
+  debug:macos:winpe:
+    desc: "Run WinPE Hyper-V/WSL2 injection test (tcg + hvf) on macOS"
+    platforms: [darwin]
+    silent: true
+    vars:
+      DEBUG_DIR: '{{.TASKFILE_DIR}}/.scratch/debug'
+    cmds:
+      - mkdir -p {{.DEBUG_DIR}}
+      - |
+        set -euo pipefail
+        fw_override="${QEMU_FIRMWARE_OVERRIDE:-}"
+
+        failed=0
+        for sub in "tcg" "hvf"; do
+          slug="TestWinPEHyperVInjection-${sub}"
+          log="{{.DEBUG_DIR}}/${slug}.log"
+          echo "▸ TestWinPEHyperVInjection/${sub} → ${log}"
+          env_args=""
+          [ -n "$fw_override" ] && env_args="QEMU_FIRMWARE_OVERRIDE=$fw_override"
+          if env $env_args go test -run "TestWinPEHyperVInjection/${sub}" -timeout 15m -v ./internal/vm/qemu/ 2>&1 | tee "${log}"; then
+            echo "  ✓ PASS"
+          else
+            echo "  ✗ FAIL"
+            failed=$((failed + 1))
+          fi
+          echo ""
+        done
+
+        echo "=== done — ${failed} failure(s) ==="
+        exit $failed
+
+  # ── QEMU Windows debug VM (boot an existing debug disk) ─────────────
+  debug:windows:start:
+    desc: "Boot the Windows.utm disk with qemu-system-aarch64 — same hardware as UTM (see .scratch/UTMCommand.txt), macOS-native hvf, vmnet-shared network. Vars: DISK, EFI_VARS, SMP, MEM, ACCEL (hvf|tcg)"
+    silent: true
+    vars:
+      # The UTM bundle's own disk, booted in place: Windows state stays
+      # continuous whether the VM last ran under UTM or under this task.
+      DISK: '{{.DISK | default (printf "%s/test/testdata/Windows.utm/Data/D76FB0BC-D7CC-4481-A6B6-492BEB4D834B.qcow2" .TASKFILE_DIR)}}'
+      # UEFI variable store from the same bundle — boot entries and
+      # firmware state the machine was installed with.
+      EFI_VARS: '{{.EFI_VARS | default (printf "%s/test/testdata/Windows.utm/Data/efi_vars.fd" .TASKFILE_DIR)}}'
+      # UTM profile: cpus=4,sockets=1,cores=4,threads=1 and 8 GiB.
+      SMP: '{{.SMP | default "4"}}'
+      MEM: '{{.MEM | default "8192"}}'
+      # hvf = macOS-native virtualization, near-native speed; no guest EL2
+      # on stock QEMU <= 11.0, so Hyper-V/WSL2 cannot start (QEMU 11.1+ on
+      # M3+/macOS 15+ lifts this). tcg = full emulation: slow, but the EL3
+      # secure machine where the whole WSL2 chain works.
+      ACCEL: '{{.ACCEL | default (eq OS "darwin" | ternary "hvf" "tcg")}}'
+      # NESTED=0 disables guest EL2 on hvf even when QEMU supports it —
+      # the proven plain-virt boot (with TPM), at the cost of no WSL2.
+      NESTED: '{{.NESTED | default "1"}}'
+      # SECURE=0 boots qemu's plain EDK2 instead of UTM's Secure-Boot-
+      # enforcing build. Windows runs fine without Secure Boot; use this
+      # when the firmware refuses to launch it (signature/SB errors).
+      SECURE: '{{.SECURE | default "1"}}'
+      # tcg only: kernel-loaded EL3 firmware (hvf boots EDK2 pflash).
+      FIRMWARE: '{{.FIRMWARE | default (printf "%s/.devcell/cache/qemu/QEMU_EFI.kernel.fd" .HOME)}}'
+      # VNC console on 127.0.0.1:5907 (open with Screen Sharing) — the only
+      # way to see pre-OS screens like BitLocker prompts. VNC=0 disables.
+      VNC: '{{.VNC | default "1"}}'
+      # Directory shared into the guest over SMB (drive Z:). No virtiofsd
+      # exists on macOS and Windows speaks no 9p, so the share is served
+      # by a disposable samba container on the host (needs docker).
+      SHARE_DIR: '{{.SHARE_DIR | default .USER_WORKING_DIR}}'
+    preconditions:
+      - sh: command -v qemu-system-aarch64 >/dev/null
+        msg: qemu-system-aarch64 not found on PATH
+      - sh: test -f "{{.DISK}}"
+        msg: "no disk at {{.DISK}} — copy the Windows.utm bundle into test/testdata or set DISK="
+    cmds:
+      - |
+        set -euo pipefail
+        # All runtime state (pid, logs, sockets) lives in the repo-local
+        # .tmp/ (gitignored).
+        D="{{.TASKFILE_DIR}}/.tmp"; mkdir -p "$D"
+        PIDFILE="$D/qemu-windows.pid"
+
+        # vmnet-shared needs the com.apple.vm.networking entitlement, which
+        # a plain qemu binary lacks — root is the workaround UTM does not
+        # need (its app bundle is entitled).
+        SUDO=""
+        [ "$(uname)" = "Darwin" ] && [ "$(id -u)" != "0" ] && SUDO="sudo"
+
+        # Simple pid lock. NOTE: 'kill'/'ps' must go through env/command in
+        # these tasks — task's embedded shell (mvdan/sh) has a job-control
+        # kill builtin that silently no-ops on external pids.
+        if [ -f "$PIDFILE" ] && ps -p "$(cat "$PIDFILE")" >/dev/null 2>&1; then
+          echo "already running (pid $(cat "$PIDFILE")) — task debug:windows:stop first"
+          exit 1
+        fi
+        rm -f "$PIDFILE"
+
+        # The disk's own write lock catches everything else (UTM itself,
+        # a hand-launched qemu): fail with a pointer instead of reaping.
+        if ! qemu-img info "{{.DISK}}" >/dev/null 2>&1; then
+          echo "ERROR: {{.DISK}} is write-locked — is the VM running in UTM or another qemu?"
+          echo "       close it there (or: ps aux | grep qemu-system) and retry"
+          exit 1
+        fi
+
+        # Hardware mirrors .scratch/UTMCommand.txt: -machine virt -cpu host,
+        # nvme with the bundle's serial, virtio-net with UTM's MAC on
+        # vmnet-shared (same network, so the guest keeps its 192.168.64.x
+        # DHCP lease). The SPICE/audio/usb-redir/swtpm plumbing is UTM
+        # frontend glue and intentionally dropped.
+        # QEMU 11.1+ enforces the NVMe spec's 20-char serial limit (older
+        # builds accepted the full bundle UUID). Windows identifies the
+        # boot volume by GPT, not disk serial, so truncation is safe.
+        serial=$(basename "{{.DISK}}" .qcow2 | cut -c1-20)
+        nested=0
+        if [ "{{.ACCEL}}" = "hvf" ]; then
+          machine="virt"; cpu=host; accel=hvf
+          # QEMU 11.1+ (rc builds report 11.0.9x) can expose EL2 to hvf
+          # guests on M3+/macOS 15+ — the capability Hyper-V/WSL2 needs.
+          # Older QEMU rejects virtualization=on under hvf, so gate on
+          # version and fall back to the plain machine silently.
+          qv=$(qemu-system-aarch64 --version | sed -n 's/.*version \([0-9.]*\).*/\1/p')
+          [ "{{.NESTED}}" = "0" ] && qv=disabled
+          case "$qv" in
+            11.0.9*|11.[1-9]*|1[2-9].*|[2-9][0-9].*)
+              # gic-version=3: EL2 guests need the GICv3's interrupt
+              # virtualization (the tcg WSL2 path uses it too); the virt
+              # machine's default GICv2 hangs the Windows bootloader here.
+              machine="virt,virtualization=on,gic-version=3"; nested=1
+              # fake-el2=on: our patched hvf emulates VHE in the sysreg
+              # trap handler — Apple's nested API is nVHE-only, and
+              # Windows' hypervisor refuses to launch without VHE (Event
+              # 43 'EL2 not present'). Both flags are required together:
+              # virtualization=on exposes EL2, fake-el2=on makes it VHE.
+              # Gate on the property existing (scan the binary — there is
+              # no CLI help for accel sub-options, and a live probe would
+              # boot the VM) so a stock QEMU still starts, just VHE-less.
+              if grep -aq fake-el2 "$(command -v qemu-system-aarch64)"; then
+                accel="hvf,fake-el2=on"
+                echo "fake-el2=on: VHE emulation active — Windows Hyper-V/WSL2 can launch"
+              else
+                echo "note: this qemu has no fake-el2 — Windows boots, but Hyper-V/WSL2 won't start (VHE missing)"
+              fi
+              # Known issue in the hvf nested-virt series: EDK2 hangs
+              # forever at 'Start boot option' under EL2; the documented
+              # workaround is the zero-delay boot menu (qemu-devel,
+              # 'HVF: Add support for platform vGIC and nested virt').
+              set -- "$@" -boot menu=on,splash-time=0
+              echo "QEMU $qv: nested virtualization (EL2) enabled — Hyper-V/WSL2 can start"
+              ;;
+          esac
+          # UTM's EDK2 build drives virtio-gpu (its virtio-ramfb-gl is a
+          # virtio-gpu variant), NOT stock ramfb — with ramfb the console
+          # stays "guest has not initialized the display". The UTM guest
+          # tools already installed Windows' virtio-gpu driver.
+          dispdev=virtio-gpu-pci
+          # EDK2 code image: UTM's secure-code build if cached (matches the
+          # efi_vars layout), else the one qemu ships.
+          CODE_FD="$HOME/Library/Containers/com.utmapp.UTM/Data/Library/Caches/qemu/edk2-aarch64-secure-code.fd"
+          [ "{{.SECURE}}" = "0" ] && CODE_FD=""
+          [ -f "$CODE_FD" ] || CODE_FD="$(dirname "$(command -v qemu-system-aarch64)")/../share/qemu/edk2-aarch64-code.fd"
+          if [ ! -f "$CODE_FD" ] || [ ! -f "{{.EFI_VARS}}" ]; then
+            echo "ERROR: need EDK2 code image ($CODE_FD) and vars ({{.EFI_VARS}})"
+            exit 1
+          fi
+          set -- "$@" \
+            -drive if=pflash,format=raw,unit=0,file="$CODE_FD",file.locking=off,readonly=on \
+            -drive if=pflash,unit=1,file="{{.EFI_VARS}}"
+        else
+          # EL3 secure machine, kernel-loaded firmware — the only boot
+          # environment where Windows' hypervisor (and WSL2) runs today.
+          machine="virt,virtualization=on,gic-version=3,secure=on"
+          cpu=neoverse-n1; accel=tcg,thread=multi
+          # Our kernel-loaded EL3 firmware drives stock ramfb.
+          dispdev=ramfb
+          FW="{{.FIRMWARE}}"
+          [ -f "$FW" ] || FW="${DEVCELL_QEMU_EFI_KERNEL:-}"
+          if [ -z "$FW" ] || [ ! -f "$FW" ]; then FW="{{.TASKFILE_DIR}}/test/testdata/QEMU_EFI.kernel.fd"; fi
+          if [ ! -f "$FW" ]; then
+            echo "ERROR: no kernel-bootable firmware (FIRMWARE / \$DEVCELL_QEMU_EFI_KERNEL / testdata)"
+            exit 1
+          fi
+          set -- -kernel "$FW"
+        fi
+
+        # TPM: Windows was installed with one under UTM (BitLocker seals
+        # against it). swtpm replays the bundle's own tpmdata, so the guest
+        # sees the very TPM it has always had. swtpm comes from the dev
+        # shell (flake.nix) or `nix profile install nixpkgs#swtpm`.
+        TPMDATA="$(dirname "{{.DISK}}")/tpmdata"
+        if [ "$nested" = "1" ]; then
+          # QEMU 11.1-rc rejects the TPM's MMIO mapping under EL2
+          # (HV_BAD_ARGUMENT in hvf-all.c). This guest's BitLocker has
+          # Protection Off (clear key), so it boots fine without one.
+          echo "note: skipping TPM — tpm-tis-device is incompatible with nested virt in this QEMU"
+        elif command -v swtpm >/dev/null 2>&1 && [ -f "$TPMDATA" ]; then
+          rm -f "$D/swtpm.sock"
+          # terminate: swtpm exits by itself when qemu disconnects.
+          swtpm socket --tpm2 \
+            --tpmstate backend-uri=file://"$TPMDATA" \
+            --ctrl type=unixio,path="$D/swtpm.sock",terminate \
+            --daemon --pid file="$D/swtpm.pid"
+          for _ in $(seq 1 25); do [ -S "$D/swtpm.sock" ] && break; sleep 0.2; done
+          # UTM's fork exposes the TPM as CRB; stock qemu on ARM has TIS.
+          # Windows drives both.
+          tpmdev=tpm-tis-device
+          qemu-system-aarch64 -device help 2>/dev/null | grep -q tpm-crb-device && tpmdev=tpm-crb-device
+          set -- "$@" \
+            -chardev socket,id=chrtpm0,path="$D/swtpm.sock" \
+            -tpmdev emulator,id=tpm0,chardev=chrtpm0 \
+            -device "$tpmdev",tpmdev=tpm0
+        else
+          echo "WARNING: no swtpm or no $TPMDATA — booting without TPM (BitLocker may demand a recovery key)"
+        fi
+
+        # File share: a samba container on the host serves SHARE_DIR
+        # read-write; the guest maps it with its native SMB client (the
+        # net use line is printed at the end). Recreated every start so
+        # the shared directory always matches SHARE_DIR.
+        SMB=""
+        if command -v docker >/dev/null 2>&1; then
+          docker rm -f devcell-smb >/dev/null 2>&1 || true
+          if docker run -d --name devcell-smb --restart unless-stopped \
+               -p 445:445 -e USER=dmitry -e PASS=rdp -e NAME=devcell \
+               -v "{{.SHARE_DIR}}:/storage" dockurr/samba >/dev/null 2>&1; then
+            SMB=1
+          else
+            echo "WARNING: samba container failed to start — no Z: share this boot"
+          fi
+        else
+          echo "WARNING: docker not found — no SMB share for {{.SHARE_DIR}}"
+        fi
+
+        # Logs and pidfile must be user-owned BEFORE the sudo'd qemu opens
+        # them — root only writes into the existing files, so ownership
+        # stays with the user (the sockets can't be pre-created; those get
+        # chmod'd after launch).
+        $SUDO rm -f "$D/serial.log" "$D/qemu.log" "$D/qmp.sock" "$D/qga.sock"
+        touch "$D/serial.log" "$D/qemu.log" "$PIDFILE"
+
+        # Debug breadcrumb (H1: was fake-el2 actually applied?): the exact
+        # binary, its version, and the resolved machine/accel/extra argv,
+        # readable from the devcell container via the bind-mounted .tmp/.
+        {
+          echo "date:    $(date)"
+          echo "binary:  $(command -v qemu-system-aarch64)"
+          echo "version: $(qemu-system-aarch64 --version | head -1)"
+          echo "machine: $machine"
+          echo "accel:   $accel"
+          echo "nested:  $nested"
+          echo "extra:   $*"
+        } > "$D/launch-info.txt"
+
+        [ -n "$SUDO" ] && echo "vmnet-shared networking needs root: sudo will prompt"
+        if ! $SUDO qemu-system-aarch64 "$@" \
+          -machine "$machine" -cpu "$cpu" -accel "$accel" \
+          -smp cpus={{.SMP}},sockets=1,cores={{.SMP}},threads=1 -m {{.MEM}} \
+          -drive if=none,media=disk,id=disk0,file="{{.DISK}}",discard=unmap,detect-zeroes=unmap \
+          -device nvme,drive=disk0,serial="$serial",bootindex=1 \
+          -device virtio-net-pci,mac=72:5B:B2:09:74:68,netdev=net0 \
+          -netdev vmnet-shared,id=net0 \
+          -device virtio-rng-pci \
+          -device virtio-serial \
+          -chardev socket,id=qga0,path="$D/qga.sock",server=on,wait=off \
+          -device virtserialport,chardev=qga0,name=org.qemu.guest_agent.0 \
+          -device nec-usb-xhci,id=usb-bus \
+          -device usb-kbd,bus=usb-bus.0 -device usb-tablet,bus=usb-bus.0 \
+          {{if ne .VNC "0"}}-object secret,id=vncpw,data=vnc -vnc 127.0.0.1:7,password-secret=vncpw{{else}}-display none{{end}} -device "$dispdev" \
+          -rtc base=localtime \
+          -serial file:"$D/serial.log" \
+          -D "$D/qemu.log" \
+          -qmp unix:"$D/qmp.sock",server,nowait \
+          -name devcell-debug-windows \
+          -daemonize -pidfile "$PIDFILE"; then
+          # Post-daemonize errors go to -D only; replay them here.
+          echo "ERROR: qemu failed to start — last lines of $D/qemu.log:"
+          tail -5 "$D/qemu.log" 2>/dev/null | sed 's/^/  /'
+          exit 1
+        fi
+
+        # The sudo'd qemu writes the pidfile and control sockets as root;
+        # open them up so the pid lock, IP discovery and the stop task's
+        # graceful shutdown work unprivileged.
+        [ -n "$SUDO" ] && $SUDO chmod 644 "$PIDFILE" && $SUDO chmod 666 "$D/qga.sock" "$D/qmp.sock" 2>/dev/null || true
+
+        echo "started (pid $(cat "$PIDFILE")), disk {{.DISK}}, accel {{.ACCEL}}"
+        [ "{{.ACCEL}}" = "tcg" ] && echo "TCG boot is slow — expect 10-25 min until the guest answers."
+
+        # Block until the guest is genuinely reachable, then report and
+        # exit — the VM itself stays daemonized. Order: VNC console (up in
+        # seconds — early eyes on firmware/BitLocker screens), then the
+        # DHCP lease, then SSH answering. Logs go to their files only (the
+        # serial line is a VT100 UI, not readable log output).
+        slow=1; [ "{{.ACCEL}}" = "tcg" ] && slow=20
+
+        {{if ne .VNC "0"}}
+        printf "1/4 waiting for the VNC console..."
+        for _ in $(seq 1 60); do nc -z -G 2 127.0.0.1 5907 2>/dev/null && break; sleep 1; done
+        echo " up — open vnc://127.0.0.1:5907 (password: vnc)"
+        {{end}}
+
+        # IP discovery. Authoritative source: qemu-guest-agent inside
+        # Windows (the UTM guest tools run it) answering over the
+        # virtio-serial channel. Fallback: bootpd's lease file — but it
+        # keeps STALE leases for our MAC from earlier boots on other vmnet
+        # subnets (seen: 192.168.64.43 recorded while the guest actually
+        # got 192.168.2.2), so lease candidates only count when the live
+        # ARP entry for that IP shows our MAC.
+        MAC_LEASE="72:5b:b2:9:74:68"
+        GUEST_IP=""
+        # macOS nc -U never surfaces responses from qemu's unix sockets
+        # (both QMP and qga probes came back empty on live sockets, run
+        # 20260805) — talk to them with perl instead.
+        qmsg() {
+          perl -MIO::Socket::UNIX -e '
+            my ($path, @msgs) = @ARGV;
+            my $s = IO::Socket::UNIX->new(Peer => $path) or exit 1;
+            my $out = "";
+            eval {
+              local $SIG{ALRM} = sub { die };
+              alarm 4;
+              for my $m (@msgs) {
+                print $s $m, "\n";
+                my $buf = ""; sysread($s, $buf, 65536); $out .= $buf;
+              }
+              alarm 0;
+            };
+            print $out;
+          ' "$@"
+        }
+        printf "2/4 discovering the guest IP..."
+        for _ in $(seq 1 $((90 * slow))); do
+          resp=$(qmsg "$D/qga.sock" '{"execute":"guest-network-get-interfaces"}' 2>/dev/null || true)
+          GUEST_IP=$(printf '%s' "$resp" \
+            | perl -ne 'while (/"ip-address"\s*:\s*"(\d+\.\d+\.\d+\.\d+)"/g) { print "$1\n" }' 2>/dev/null \
+            | grep -Ev '^(127\.|169\.254\.)' | head -1 || true)
+          [ -n "$GUEST_IP" ] && break
+          # The Mac IS the vmnet gateway, so its ARP table maps our MAC to
+          # the live IP as soon as the guest talks — catches the case where
+          # Windows silently reuses its old lease (no fresh dhcpd_leases
+          # entry, run 20260805).
+          # 169.254.* is APIPA — the guest's pre-DHCP self-assignment; it
+          # lands in the ARP cache but routes nowhere (seen 169.254.81.138
+          # while the real lease was still coming, run 20260805).
+          GUEST_IP=$(arp -an 2>/dev/null | sed -n "s/.*(\([0-9.]*\)) at $MAC_LEASE .*/\1/p" \
+            | grep -Ev '^(169\.254\.|127\.)' | head -1 || true)
+          [ -n "$GUEST_IP" ] && break
+          for ip in $(awk -v mac="$MAC_LEASE" '
+              /ip_address=/ { ip = $0; sub(/.*=/, "", ip) }
+              /hw_address=/ && index($0, mac) { print ip }
+            ' /var/db/dhcpd_leases 2>/dev/null | sort -u); do
+            ping -c 1 -t 1 "$ip" >/dev/null 2>&1 || continue
+            if arp -n "$ip" 2>/dev/null | grep -qi "$MAC_LEASE"; then GUEST_IP="$ip"; break; fi
+          done
+          [ -n "$GUEST_IP" ] && break
+          sleep 2
+        done
+        if [ -z "$GUEST_IP" ]; then
+          echo " not found"
+          echo "ERROR: guest IP not discovered. Diagnostics:"
+          echo "--- qga raw response (empty = agent silent / nc issue):"
+          qmsg "$D/qga.sock" '{"execute":"guest-network-get-interfaces"}' 2>&1 | head -c 300 || true
+          echo ""
+          echo "--- arp entries for $MAC_LEASE:"
+          arp -an 2>/dev/null | grep -i "$MAC_LEASE" || echo "(none)"
+          echo "--- leases for $MAC_LEASE:"
+          grep -B2 "$MAC_LEASE" /var/db/dhcpd_leases 2>/dev/null || echo "(none)"
+          exit 1
+        fi
+        echo " $GUEST_IP"
+
+        printf "3/4 waiting for SSH..."
+        up=""
+        for _ in $(seq 1 $((150 * slow))); do
+          if nc -z -G 2 "$GUEST_IP" 22 2>/dev/null; then up=1; break; fi
+          sleep 2
+        done
+        if [ -z "$up" ]; then
+          echo " not answering"
+          echo "ERROR: guest holds $GUEST_IP but SSH never came up — check the VNC console (BitLocker/recovery screen?)"
+          exit 1
+        fi
+        echo " up"
+
+        # The guest agent powers IP discovery and the stop task's graceful
+        # shutdown — verify it actually answers (guest-ping -> {"return"}).
+        # Non-fatal: without it everything still works via ssh/arp.
+        printf "4/4 checking qemu guest agent..."
+        GA=""
+        for _ in $(seq 1 15); do
+          if qmsg "$D/qga.sock" '{"execute":"guest-ping"}' 2>/dev/null | grep -q '"return"'; then GA=1; break; fi
+          sleep 2
+        done
+        if [ -n "$GA" ]; then echo " ok"; else echo " SILENT (QEMU-GA service not answering — discovery/shutdown fall back to arp/ssh)"; fi
+
+        echo "VM is up"
+        {{if ne .VNC "0"}}echo "  VNC:  open vnc://127.0.0.1:5907  (password: vnc)"{{end}}
+        echo "  RDP:  $GUEST_IP:3389  (user dmitry, password rdp)"
+        echo "  SSH:  ssh dmitry@$GUEST_IP"
+        if [ -n "$SMB" ]; then
+          GW=$(echo "$GUEST_IP" | sed 's/\.[0-9]*$/.1/')
+          echo "  Share: {{.SHARE_DIR}} — in the guest run:  net use Z: \\\\$GW\\devcell /user:dmitry rdp"
+        fi
+        echo "  logs: $D/serial.log, $D/qemu.log"
+
+  debug:windows:stop:
+    desc: "Stop the QEMU Windows debug VM started by debug:windows:start"
+    silent: true
+    vars:
+      DISK: '{{.DISK | default (printf "%s/test/testdata/Windows.utm/Data/D76FB0BC-D7CC-4481-A6B6-492BEB4D834B.qcow2" .TASKFILE_DIR)}}'
+    cmds:
+      - |
+        set -eu
+        D="{{.TASKFILE_DIR}}/.tmp"
+        PIDFILE="$D/qemu-windows.pid"
+        SUDO=""; [ "$(uname)" = "Darwin" ] && [ "$(id -u)" != "0" ] && SUDO="sudo"
+
+        # macOS nc -U never surfaces responses from qemu's unix sockets —
+        # talk to QMP/qga with perl (same helper as the start task).
+        qmsg() {
+          perl -MIO::Socket::UNIX -e '
+            my ($path, @msgs) = @ARGV;
+            my $s = IO::Socket::UNIX->new(Peer => $path) or exit 1;
+            my $out = "";
+            eval {
+              local $SIG{ALRM} = sub { die };
+              alarm 4;
+              for my $m (@msgs) {
+                print $s $m, "\n";
+                my $buf = ""; sysread($s, $buf, 65536); $out .= $buf;
+              }
+              alarm 0;
+            };
+            print $out;
+          ' "$@"
+        }
+
+        # env kill, never bare kill: task's embedded shell (mvdan/sh) has a
+        # job-control kill builtin that silently no-ops on external pids.
+        _kill() { # pid
+          $SUDO env kill "$1" 2>/dev/null || true
+          for _ in $(seq 1 20); do ps -p "$1" >/dev/null 2>&1 || return 0; sleep 0.5; done
+          $SUDO env kill -9 "$1" 2>/dev/null || true
+          sleep 1
+          ! ps -p "$1" >/dev/null 2>&1
+        }
+
+        stopped=0
+        if [ -f "$PIDFILE" ]; then
+          # A launch that died pre-chmod leaves the pidfile root-owned 0600.
+          pid=$(cat "$PIDFILE" 2>/dev/null || $SUDO cat "$PIDFILE")
+          if ps -p "$pid" >/dev/null 2>&1; then
+            # Graceful first — killing qemu is a power cut: the guest logs
+            # Event 41 and spends the next boot in crash recovery (that
+            # WAS the 'boot loop', run 20260805). ~1 min total budget.
+            # Cleanest: shutdown over SSH — the one channel proven to
+            # work. BatchMode: succeeds only when the Mac's key is
+            # authorized in the guest; falls through instantly otherwise.
+            GIP=$(arp -an 2>/dev/null | sed -n 's/.*(\([0-9.]*\)) at 72:5b:b2:9:74:68 .*/\1/p' | head -1)
+            if [ -n "$GIP" ] && ps -p "$pid" >/dev/null 2>&1; then
+              if ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
+                   "dmitry@$GIP" "shutdown /s /t 0" >/dev/null 2>&1; then
+                printf "guest shutdown via ssh — waiting..."
+                for _ in $(seq 1 15); do ps -p "$pid" >/dev/null 2>&1 || break; sleep 2; done
+                echo ""
+              fi
+            fi
+            # Then qemu-ga (no JSON response expected; watch the pid).
+            if [ -S "$D/qga.sock" ] && ps -p "$pid" >/dev/null 2>&1; then
+              qmsg "$D/qga.sock" '{"execute":"guest-shutdown"}' >/dev/null 2>&1 || true
+              printf "guest-agent shutdown requested — waiting..."
+              for _ in $(seq 1 10); do ps -p "$pid" >/dev/null 2>&1 || break; sleep 2; done
+              echo ""
+            fi
+            # Last graceful resort: ACPI power-button via QMP.
+            if [ -S "$D/qmp.sock" ] && ps -p "$pid" >/dev/null 2>&1; then
+              resp=$(qmsg "$D/qmp.sock" '{"execute":"qmp_capabilities"}' '{"execute":"system_powerdown"}' 2>/dev/null || true)
+              if printf '%s' "$resp" | grep -q '"return"'; then
+                printf "ACPI powerdown sent — waiting for guest shutdown..."
+                for _ in $(seq 1 10); do ps -p "$pid" >/dev/null 2>&1 || break; sleep 2; done
+                echo ""
+              else
+                echo "QMP powerdown failed (no response) — falling back to kill"
+              fi
+            fi
+            if ! ps -p "$pid" >/dev/null 2>&1; then echo "guest shut down cleanly (pid $pid)"; stopped=1
+            elif _kill "$pid"; then echo "stopped qemu (pid $pid) — forced; guest will crash-recover next boot"; stopped=1
+            else echo "WARNING: qemu (pid $pid) survived SIGKILL — check 'ps -p $pid'"; fi
+          fi
+          $SUDO rm -f "$PIDFILE"
+        fi
+        # Fallback: a crashed start left no usable pidfile but qemu still
+        # holds the disk.
+        for pid in $(pgrep -f "qemu-system-aarch64.*$(basename "{{.DISK}}")" 2>/dev/null || true); do
+          if _kill "$pid"; then echo "stopped stray qemu (pid $pid)"; stopped=1; fi
+        done
+        # swtpm self-terminates when qemu disconnects; sweep a leftover.
+        if [ -f "$D/swtpm.pid" ]; then
+          pid=$(cat "$D/swtpm.pid")
+          ps -p "$pid" >/dev/null 2>&1 && _kill "$pid" >/dev/null 2>&1 || true
+          rm -f "$D/swtpm.pid"
+        fi
+        # The SMB share container serves no one once the VM is down.
+        if command -v docker >/dev/null 2>&1; then
+          docker rm -f devcell-smb >/dev/null 2>&1 && echo "stopped SMB share container" || true
+        fi
+        rm -f "$D/qmp.sock" "$D/swtpm.sock" 2>/dev/null || true
+        [ "$stopped" -eq 1 ] || echo "nothing to stop"
+
+  debug:alpine:start:
+    desc: "Boot an Alpine ISO under hvf with guest EL2 — sanity test for nested virtualization (vars: ISO, SMP, MEM, NESTED=0 to disable EL2)"
+    silent: true
+    vars:
+      ISO: '{{.ISO | default (printf "%s/.tmp/alpine-virt-aarch64.iso" .TASKFILE_DIR)}}'
+      SMP: '{{.SMP | default "2"}}'
+      MEM: '{{.MEM | default "2048"}}'
+      NESTED: '{{.NESTED | default "1"}}'
+      # Serial console on tcp:<port> (all interfaces) — interactive, e.g.
+      # `nc 127.0.0.1 5910`. SERIAL_PORT= (empty) logs to a file instead
+      # and makes the task block until the login prompt appears there.
+      SERIAL_PORT: '{{.SERIAL_PORT | default "5910"}}'
+    preconditions:
+      - sh: command -v qemu-system-aarch64 >/dev/null
+        msg: qemu-system-aarch64 not found on PATH
+      - sh: test -f "{{.ISO}}"
+        msg: "no ISO at {{.ISO}}"
+    cmds:
+      - |
+        set -euo pipefail
+        D="{{.TASKFILE_DIR}}/.tmp"; mkdir -p "$D"
+        PIDFILE="$D/qemu-alpine.pid"
+
+        # Same pid-lock discipline as debug:windows:start ('kill'/'ps' must
+        # go through env — mvdan/sh has a job-control kill builtin).
+        if [ -f "$PIDFILE" ] && ps -p "$(cat "$PIDFILE")" >/dev/null 2>&1; then
+          echo "already running (pid $(cat "$PIDFILE")) — task debug:alpine:stop first"
+          exit 1
+        fi
+        rm -f "$PIDFILE"
+
+        machine="virt,gic-version=3"; bootfix=""; accel=hvf
+        if [ "{{.NESTED}}" != "0" ]; then
+          machine="virt,virtualization=on,gic-version=3"
+          # EDK2 hangs at 'Start boot option' under hvf nested virt (known
+          # upstream issue); the zero-delay boot menu skips the hung path.
+          bootfix="-boot menu=on,splash-time=0"
+          # H2 litmus: with our patched hvf (fake-el2 VHE emulation) Linux
+          # must print 'kvm-arm: ... VHE mode initialized' instead of
+          # nVHE. If dmesg still says nVHE here, the patch isn't
+          # advertising VHE (ID_AA64MMFR1_EL1.VH) to the guest at all —
+          # no point retrying Windows. Same binary-scan gate as the
+          # windows task so a stock QEMU still boots.
+          if grep -aq fake-el2 "$(command -v qemu-system-aarch64)"; then
+            accel="hvf,fake-el2=on"
+            echo "fake-el2=on: check dmesg for 'VHE mode initialized' (vs nVHE)"
+          fi
+        fi
+
+        CODE_FD="$(dirname "$(command -v qemu-system-aarch64)")/../share/qemu/edk2-aarch64-code.fd"
+        if [ ! -f "$CODE_FD" ]; then
+          echo "ERROR: no EDK2 code image at $CODE_FD"
+          exit 1
+        fi
+
+        rm -f "$D/alpine-serial.log" "$D/alpine-qemu.log"
+        touch "$D/alpine-serial.log" "$D/alpine-qemu.log" "$PIDFILE"
+
+        # Same breadcrumb as debug:windows:start (H1-style: which binary /
+        # accel actually ran) — dates the boot, so a stale VM from before a
+        # qemu rebuild can't masquerade as a fresh litmus result.
+        {
+          echo "date:    $(date)"
+          echo "binary:  $(command -v qemu-system-aarch64)"
+          echo "version: $(qemu-system-aarch64 --version | head -1)"
+          echo "machine: $machine"
+          echo "accel:   $accel"
+        } > "$D/alpine-launch-info.txt"
+        serialdev="file:$D/alpine-serial.log"
+        [ -n "{{.SERIAL_PORT}}" ] && serialdev="tcp:0.0.0.0:{{.SERIAL_PORT}},server=on,wait=off"
+
+        # No network, no sudo — this VM exists only to answer one question:
+        # does a guest boot with EL2 under hvf on this host/QEMU?
+        if ! qemu-system-aarch64 \
+          -machine "$machine" -cpu host -accel "$accel" \
+          -smp {{.SMP}} -m {{.MEM}} \
+          -drive if=pflash,format=raw,readonly=on,file="$CODE_FD" \
+          $bootfix \
+          -cdrom "{{.ISO}}" \
+          -display none \
+          -serial "$serialdev" \
+          -D "$D/alpine-qemu.log" \
+          -name devcell-debug-alpine \
+          -daemonize -pidfile "$PIDFILE"; then
+          echo "ERROR: qemu failed to start — last lines of $D/alpine-qemu.log:"
+          tail -5 "$D/alpine-qemu.log" 2>/dev/null | sed 's/^/  /'
+          exit 1
+        fi
+        echo "started (pid $(cat "$PIDFILE")), machine $machine"
+
+        # Success = the login prompt on serial. The kernel's entry
+        # exception level ("CPU: All CPU(s) started at ELx") is the
+        # nested-virt verdict when it's visible — Alpine boots with
+        # 'quiet', so its absence proves nothing.
+        if [ -n "{{.SERIAL_PORT}}" ]; then
+          echo "serial console on tcp port {{.SERIAL_PORT}} — connect with: nc 127.0.0.1 {{.SERIAL_PORT}}"
+          echo "stop with: task debug:alpine:stop"
+          exit 0
+        fi
+        printf "waiting for the boot (up to 120s)..."
+        up=""
+        for _ in $(seq 1 60); do
+          grep -q "login:" "$D/alpine-serial.log" 2>/dev/null && up=1 && break
+          sleep 2
+        done
+        echo ""
+        if [ -z "$up" ]; then
+          echo "no login prompt after 120s — guest never booted. Tail of serial:"
+          tail -5 "$D/alpine-serial.log" | sed 's/^/  /'
+          exit 1
+        fi
+        echo "  guest is up (login prompt on serial)"
+        # H2 verdict, printed inline: entry EL + which Hyp mode KVM chose.
+        # 'VHE mode initialized'  -> fake-el2 advertises VHE, Windows-worthy;
+        # 'nVHE mode initialized' -> guest still reads ID_AA64MMFR1_EL1.VH=0
+        #                            (ID regs aren't trapped at EL1) — fix
+        #                            belongs in hvf's cached ID registers.
+        grep -iE "started at EL|CPU features|kvm.*(VHE|nVHE|mode initialized)" \
+          "$D/alpine-serial.log" 2>/dev/null | sed 's/^/  /' || true
+        if grep -q "Hyp VHE mode initialized" "$D/alpine-serial.log" 2>/dev/null; then
+          echo "  VERDICT: VHE — the fake-el2 patch presents VHE to the guest"
+        elif grep -qi "nVHE mode initialized" "$D/alpine-serial.log" 2>/dev/null; then
+          echo "  VERDICT: nVHE — guest still sees ID_AA64MMFR1_EL1.VH=0; Windows will keep failing"
+        fi
+        echo "  serial log: $D/alpine-serial.log"
+        echo "  stop with: task debug:alpine:stop"
+
+  debug:alpine:stop:
+    desc: "Stop the Alpine nested-virt test VM"
+    silent: true
+    cmds:
+      - |
+        set -eu
+        D="{{.TASKFILE_DIR}}/.tmp"
+        PIDFILE="$D/qemu-alpine.pid"
+        _kill() { # pid — env kill: mvdan/sh's builtin no-ops on external pids
+          env kill "$1" 2>/dev/null || true
+          for _ in $(seq 1 10); do ps -p "$1" >/dev/null 2>&1 || return 0; sleep 0.5; done
+          env kill -9 "$1" 2>/dev/null || true
+          sleep 1
+          ! ps -p "$1" >/dev/null 2>&1
+        }
+        stopped=0
+        if [ -f "$PIDFILE" ]; then
+          pid=$(cat "$PIDFILE" 2>/dev/null || true)
+          if [ -n "$pid" ] && ps -p "$pid" >/dev/null 2>&1; then
+            # A live-CD guest holds no state worth a graceful shutdown.
+            if _kill "$pid"; then echo "stopped qemu (pid $pid)"; stopped=1; fi
+          fi
+          rm -f "$PIDFILE"
+        fi
+        for pid in $(pgrep -f "qemu-system-aarch64.*devcell-debug-alpine" 2>/dev/null || true); do
+          if _kill "$pid"; then echo "stopped stray qemu (pid $pid)"; stopped=1; fi
+        done
+        [ "$stopped" -eq 1 ] || echo "nothing to stop"
+
+  debug:qemu:
+    desc: "One-shot QEMU fake-el2/VHE diagnostic report (run on the Mac): binary provenance, patch content, litmus verdicts, guest event log. Vars: PATCH (path to hvf-vhe-emulation.patch), GUEST_IP"
+    silent: true
+    vars:
+      # The nixhome repo's patch — override when it lives elsewhere:
+      #   task debug:qemu PATCH=/path/to/hvf-vhe-emulation.patch
+      PATCH: '{{.PATCH | default ""}}'
+      GUEST_IP: '{{.GUEST_IP | default "192.168.2.2"}}'
+    cmds:
+      - |
+        set -u
+        D="{{.TASKFILE_DIR}}/.tmp"
+        # Persist the report for the /continue-debug loop: full history in
+        # .scratch/debug/, always-current copy at .tmp/debug-qemu.txt (both
+        # bind-mounted into the devcell container).
+        RPT_DIR="{{.TASKFILE_DIR}}/.scratch/debug"; mkdir -p "$RPT_DIR"
+        RPT="$RPT_DIR/qemu-$(date +%Y%m%dT%H%M%S).log"
+        sect() { printf '\n===== %s =====\n' "$1"; }
+        # GNU stat vs BSD stat: uname is NOT a reliable discriminator — a
+        # nix profile puts GNU coreutils first on PATH even on macOS (seen
+        # live: 'stat -f %Sm' dumped filesystem info). Try GNU syntax
+        # first, fall back to BSD.
+        fmtime() {
+          stat -c '%y' "$1" 2>/dev/null || stat -f '%Sm' "$1" 2>/dev/null || echo "unknown"
+        }
+
+        report() {
+        # ---- 1. Binary provenance (H1-class: WHICH qemu would run?) ----
+        sect "QEMU BINARY"
+        BIN="$(command -v qemu-system-aarch64 || true)"
+        if [ -z "$BIN" ]; then
+          echo "FAIL: qemu-system-aarch64 not on PATH"
+        else
+          echo "path:       $BIN"
+          # readlink -f resolves the nix profile indirection to the store
+          # path — this is the line that changes when a rebuild actually
+          # landed (same store hash = same binary, whatever anyone claims).
+          echo "store path: $(readlink -f "$BIN" 2>/dev/null || echo 'unresolvable')"
+          echo "version:    $("$BIN" --version | head -1)"
+          # Nix normalizes store mtimes to epoch+1 — the store HASH is the
+          # only build-identity signal. Reports are persisted; diff the
+          # 'store path' line against the previous report to prove a
+          # rebuild actually landed.
+          if grep -aq fake-el2 "$(readlink -f "$BIN")" 2>/dev/null; then
+            echo "fake-el2:   PRESENT in binary"
+          else
+            echo "fake-el2:   ABSENT — stock build, nothing to test"
+          fi
+        fi
+
+        # ---- 2. The patch itself (does it touch the ID regs?) ----
+        sect "VHE PATCH CONTENT"
+        P="{{.PATCH}}"
+        if [ -z "$P" ]; then
+          # Plain if/break — a failing `[ -f ] && ...` list would trip
+          # task's errexit on the last miss and kill the whole report.
+          for c in \
+            "$HOME/dev/dimmkirr/nixhome/home/dmitry/packages/patches/hvf-vhe-emulation.patch" \
+            "$HOME/nixhome/home/dmitry/packages/patches/hvf-vhe-emulation.patch"; do
+            if [ -f "$c" ]; then P="$c"; break; fi
+          done
+          # Known locations missed — hunt for it (bounded depth, quick).
+          if [ -z "$P" ]; then
+            P="$(find "$HOME/dev" "$HOME/src" "$HOME/nixhome" \
+                   -maxdepth 7 -name hvf-vhe-emulation.patch -print 2>/dev/null | head -1 || true)"
+            if [ -n "$P" ]; then echo "(auto-found via find: $P)"; fi
+          fi
+        fi
+        if [ -z "$P" ] || [ ! -f "$P" ]; then
+          echo "patch not found — pass PATCH=/path/to/hvf-vhe-emulation.patch"
+        else
+          echo "patch: $P ($(wc -l < "$P" | tr -d ' ') lines, mtime $(fmtime "$P"))"
+          echo "--- files touched ---"
+          grep -E '^\+\+\+ ' "$P" | sed 's/^/  /'
+          echo "--- VH / ID-reg hunks (NMD-256 blocker: must set ID_AA64MMFR1_EL1.VH=1) ---"
+          if grep -nE 'ID_AA64MMFR1|AA64MMFR1_EL1|, VH,|FIELD_DP64' "$P" | head -20 | sed 's/^/  /' | grep .; then :; else
+            echo "  NONE — patch never touches the ID registers; guest will read VH=0 (nVHE)"
+          fi
+        fi
+
+        # ---- 3. Last recorded launches (what actually ran) ----
+        sect "LAST LAUNCHES (.tmp breadcrumbs)"
+        for f in "$D/launch-info.txt" "$D/alpine-launch-info.txt"; do
+          if [ -f "$f" ]; then
+            echo "--- $(basename "$f") ---"
+            sed 's/^/  /' "$f"
+          else
+            echo "--- $(basename "$f"): none ---"
+          fi
+        done
+
+        # ---- 4. Alpine litmus verdict (H2: does the guest see VHE?) ----
+        sect "ALPINE LITMUS VERDICT"
+        if [ -s "$D/alpine-serial.log" ]; then
+          grep -aiE "started at EL|Virtualization Host|VHE|nVHE" "$D/alpine-serial.log" | head -8 | sed 's/^/  /'
+          if grep -aq "Hyp VHE mode initialized" "$D/alpine-serial.log"; then
+            echo "  VERDICT: VHE — fake-el2 presents VHE to the guest"
+          elif grep -aqi "nVHE mode initialized" "$D/alpine-serial.log"; then
+            echo "  VERDICT: nVHE — guest still reads ID_AA64MMFR1_EL1.VH=0"
+          else
+            echo "  VERDICT: inconclusive (no kvm mode line in log)"
+          fi
+        else
+          echo "no file-mode serial log. Interactive VM running?"
+          if [ -f "$D/qemu-alpine.pid" ] && ps -p "$(cat "$D/qemu-alpine.pid")" >/dev/null 2>&1; then
+            echo "  yes (pid $(cat "$D/qemu-alpine.pid")) — serial is on tcp; for a self-reporting run:"
+          fi
+          echo "  task debug:alpine:stop && task debug:alpine:start SERIAL_PORT="
+        fi
+
+        # ---- 5. Windows guest verdict (H3: did the hypervisor launch?) ----
+        sect "WINDOWS GUEST (Event 43 check)"
+        if ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
+             "dmitry@{{.GUEST_IP}}" "wevtutil qe System /q:\"*[System[Provider[@Name='Microsoft-Windows-Hyper-V-Hypervisor']]]\" /c:2 /rd:true /f:text" \
+             2>/dev/null | tr -d '\0\r' | grep -E "Date:|Event ID:|present|failed|successfully" | sed 's/^/  /' | grep .; then
+          :
+        else
+          echo "  guest not reachable at {{.GUEST_IP}} (VM down, or key not authorized) — skipped"
+        fi
+
+        sect "NEXT STEP"
+        echo "fake-el2 ABSENT           -> rebuild/install the patched qemu (store path must change)"
+        echo "no VH hunk in patch       -> fix is in the wrong layer; see NMD-256 'Field evidence'"
+        echo "VERDICT: nVHE             -> VH bit still not advertised; re-check patch + rebuild"
+        echo "VERDICT: VHE              -> task debug:windows:stop && task debug:windows:start SECURE=0"
+        echo "Event 43 gone on new boot -> hypervisor is up; proceed to WSL2/nixos-import"
+        }
+        report 2>&1 | tee "$RPT" "$D/debug-qemu.txt"
+        printf '\nreport saved: %s\n' "$RPT"
+
+  debug:windows:status:
+    desc: "Snapshot the debug VM + guest state into .scratch/debug/windows-vm-<ts>.log (run while the VM is up; one ssh password prompt: rdp)"
+    silent: true
+    vars:
+      IP: '{{.IP | default ""}}'
+    cmds:
+      - |
+        set -euo pipefail
+        D="{{.TASKFILE_DIR}}/.tmp"
+        LOG="{{.TASKFILE_DIR}}/.scratch/debug/windows-vm-$(date -u +%Y%m%dT%H%M%SZ).log"
+        mkdir -p "$(dirname "$LOG")"
+
+        { echo "===== HOST: qemu process ====="
+          pgrep -fl qemu-system-aarch64 || echo "no qemu running"
+          echo; echo "===== HOST: QMP status ====="
+          printf '{"execute":"qmp_capabilities"}\n{"execute":"query-status"}\n' \
+            | nc -U -w 2 "$D/qmp.sock" 2>&1 || echo "qmp unavailable"
+          echo; echo "===== HOST: serial tail (boot manager entries = boot count) ====="
+          tr -d '\000-\010\013-\037' < "$D/serial.log" 2>/dev/null | sed 's/\[[0-9;=]*[A-Za-z]//g' | grep -a BdsDxe || true
+        } > "$LOG" 2>&1
+
+        # Guest IP: explicit IP= var, else ask the guest agent.
+        GUEST_IP="{{.IP}}"
+        if [ -z "$GUEST_IP" ]; then
+          GUEST_IP=$(printf '{"execute":"guest-network-get-interfaces"}\n' \
+            | nc -U -w 2 "$D/qga.sock" 2>/dev/null \
+            | perl -ne 'while (/"ip-address"\s*:\s*"(\d+\.\d+\.\d+\.\d+)"/g) { print "$1\n" }' \
+            | grep -Ev '^(127\.|169\.254\.)' | head -1 || true)
+        fi
+        if [ -z "$GUEST_IP" ]; then
+          echo "guest IP unknown (agent silent) — pass IP=<addr>"; echo "partial log: $LOG"; exit 1
+        fi
+        echo "guest: $GUEST_IP — one ssh password prompt (rdp) collects everything"
+
+        # One ssh session, one prompt. Each block is tagged with the
+        # hypothesis it confirms or refutes:
+        #   H1 BitLocker/TPM blocked TPM-less boots  -> manage-bde, Get-Tpm, BitLocker events
+        #   H2 Automatic Repair after unclean kills  -> System events 41/6008
+        #   H3 benign reboot (updates/PnP installs)  -> System event 1074 + boot time
+        ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 "dmitry@$GUEST_IP" '
+          echo ===== GUEST: identity/boot ===== & ver & systeminfo | findstr /i /c:"Boot Time" &
+          echo ===== H1: BitLocker status ===== & manage-bde -status C: 2>&1 &
+          echo ===== H1: TPM state ===== & powershell -NoProfile -Command "Get-Tpm | Format-List TpmPresent,TpmReady,TpmEnabled 2>&1" &
+          echo ===== H1: BitLocker events ===== & wevtutil qe "Microsoft-Windows-BitLocker/BitLocker Management" /c:5 /rd:true /f:text 2>&1 &
+          echo ===== H2: unclean shutdowns (41/6008) ===== & wevtutil qe System "/q:*[System[(EventID=41) or (EventID=6008)]]" /c:5 /rd:true /f:text 2>&1 &
+          echo ===== H3: orderly restarts (1074, who asked) ===== & wevtutil qe System "/q:*[System[(EventID=1074)]]" /c:5 /rd:true /f:text 2>&1 &
+          echo ===== WSL: engine + distros + virt capability ===== & set WSL_UTF8=1 & wsl.exe --version 2>&1 & wsl.exe --list --verbose 2>&1 &
+          powershell -NoProfile -Command "(Get-CimInstance Win32_ComputerSystem).HypervisorPresent; (Get-CimInstance Win32_Processor).VirtualizationFirmwareEnabled"
+        ' >> "$LOG" 2>&1 || echo "guest collection incomplete (see log)"
+
+        echo "saved: $LOG"
+
   # ── Host Nix installation debugging ──────────────────────────────────
   debug:nix:
     desc: Collect comprehensive info about the host Nix/Lix installation (run on macOS)
     platforms: [darwin]
     silent: true
     vars:
-      LOG: '{{.TASKFILE_DIR}}/.context/debug/nix.log'
+      LOG: '{{.TASKFILE_DIR}}/.scratch/debug/nix.log'
     cmds:
       - |
         set -euo pipefail
@@ -747,7 +1914,7 @@ tasks:
         readlink -f "$(which darwin-rebuild 2>/dev/null)" 2>/dev/null || true
 
         section "NIXHOME REPO"
-        for d in "{{.ROOT_DIR}}/.context/examples/nixhome" ~/dev/dimmkirr/nixhome ~/dev/n0mad/nixhome ~/nixhome ~/.config/nixhome; do
+        for d in "{{.ROOT_DIR}}/.scratch/examples/nixhome" ~/dev/dimmkirr/nixhome ~/dev/n0mad/nixhome ~/nixhome ~/.config/nixhome; do
           if [ -d "$d" ]; then
             echo "  found: $d"
             ls -la "$d/" | head -15
@@ -766,7 +1933,7 @@ tasks:
             break
           fi
         done
-        echo "  (searched .context/examples/nixhome, ~/dev/dimmkirr/nixhome, ~/dev/n0mad/nixhome, ~/nixhome, ~/.config/nixhome)"
+        echo "  (searched .scratch/examples/nixhome, ~/dev/dimmkirr/nixhome, ~/dev/n0mad/nixhome, ~/nixhome, ~/.config/nixhome)"
 
         section "/etc/ MODIFICATION ARCHAEOLOGY"
         echo "Goal: determine if Nix installer used mv (rename) or append (tee/echo >>)"
@@ -870,7 +2037,7 @@ tasks:
         echo "Cross-referencing nixhome config with actual /etc/ state"
         echo ""
         NIXHOME=""
-        for d in "{{.ROOT_DIR}}/.context/examples/nixhome" ~/dev/dimmkirr/nixhome ~/dev/n0mad/nixhome ~/nixhome ~/.config/nixhome; do
+        for d in "{{.ROOT_DIR}}/.scratch/examples/nixhome" ~/dev/dimmkirr/nixhome ~/dev/n0mad/nixhome ~/nixhome ~/.config/nixhome; do
           [ -d "$d/hosts" ] && NIXHOME="$d" && break
         done
         if [ -n "$NIXHOME" ]; then
@@ -892,7 +2059,7 @@ tasks:
           fi
         else
           echo "  nixhome repo not found"
-          echo "  (searched .context/examples/nixhome, ~/dev/dimmkirr/nixhome, ~/dev/n0mad/nixhome, ~/nixhome, ~/.config/nixhome)"
+          echo "  (searched .scratch/examples/nixhome, ~/dev/dimmkirr/nixhome, ~/dev/n0mad/nixhome, ~/nixhome, ~/.config/nixhome)"
         fi
 
         section "TCC / FDA CONTEXT"
@@ -940,6 +2107,194 @@ tasks:
 
         section "DONE"
         echo "Paste this output to help diagnose Nix installation state."
+        }
+
+        _dump 2>&1 | tee "{{.LOG}}"
+        echo ""
+        echo "saved to: {{.LOG}}"
+
+  # ── Colima / thin-build resource debugging ────────────────────────────
+  # Targets the CELL-359 builder-ceiling work. The npm ci "Killed" (exit 137,
+  # cgroup OOM) root cause is already settled: --memory 8g + `max-jobs = auto`
+  # (= nproc, which --cpus does NOT lower) gave 8 concurrent derivations ~1 GiB
+  # each. What is NOT settled is the three hypotheses below, each of which can
+  # still break a build on Colima after that fix.
+  debug:colima:
+    desc: Dump Colima/Docker daemon capacity, context wiring, and the resource ceilings the thin build will actually emit
+    platforms: [darwin]
+    silent: true
+    vars:
+      LOG: '{{.TASKFILE_DIR}}/.scratch/debug/colima.log'
+      # Pin the Colima daemon explicitly so this task probes Colima while the
+      # ambient docker CLI keeps pointing at whatever else is in use (Docker
+      # Desktop). Override for a non-"default" instance:
+      #   task debug:colima COLIMA_HOST=unix://$HOME/.colima/<name>/docker.sock
+      COLIMA_HOST: 'unix://{{.HOME}}/.colima/default/docker.sock'
+    cmds:
+      - |
+        set -uo pipefail
+        mkdir -p "$(dirname "{{.LOG}}")"
+
+        _dump() {
+        section() { echo ""; echo "===== $1 ====="; }
+        item()    { echo "--- $1 ---"; }
+
+        COLIMA_HOST='{{.COLIMA_HOST}}'
+        COLIMA_SOCK="${COLIMA_HOST#unix://}"
+        # Ambient wiring, captured BEFORE anything is pinned — this is what
+        # `cell` actually inherits, and half of H1's evidence.
+        AMBIENT_DOCKER_HOST="${DOCKER_HOST:-<unset>}"
+
+        section "PROVENANCE"
+        echo "  date:        $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        echo "  cell:        $(cell --version 2>&1 | head -1 || echo 'not found')"
+        echo "  commit:      $(git -C '{{.TASKFILE_DIR}}' describe --always --dirty 2>/dev/null || echo unknown)"
+        echo "  colima host: $COLIMA_HOST"
+        echo "  socket:      $(test -S "$COLIMA_SOCK" && echo 'EXISTS (socket)' || echo 'MISSING — is colima running?')"
+        if ! test -S "$COLIMA_SOCK"; then
+          echo ""
+          echo "  !! $COLIMA_SOCK is not a socket. Colima probes below will fail."
+          echo "  !! Start it with 'colima start', or pass COLIMA_HOST=... for another instance."
+        fi
+
+        # ── H1: docker context mismatch ───────────────────────────────────
+        # Hypothesis: probeDockerCapacity() shells out to a bare `docker info`,
+        # so if `cell`'s context differs from the one the probe resolves, the
+        # ceilings are computed against the WRONG daemon. A --cpus larger than
+        # the real daemon's CPU count makes dockerd exit 125 outright.
+        # CONFIRM: `docker context show` != the daemon `docker info` reports,
+        # or DOCKER_HOST set to something other than the active context.
+        # REFUTE:  exactly one context, no DOCKER_HOST, Name == colima.
+        section "H1: DOCKER CONTEXT WIRING"
+        item "ambient env (what cell inherits — NOT pinned)"
+        echo "  DOCKER_HOST=$AMBIENT_DOCKER_HOST"
+        echo "  DOCKER_CONTEXT=${DOCKER_CONTEXT:-<unset>}"
+        item "docker context ls"
+        docker context ls 2>&1 || echo "  docker context ls failed"
+        item "docker context show"
+        docker context show 2>&1 || echo "  failed"
+
+        # The core H1 comparison: the daemon the AMBIENT CLI resolves vs. the
+        # daemon Colima actually is. probeDockerCapacity() runs a bare
+        # `docker info`, so it sees the ambient one — if these two rows differ,
+        # the ceilings are computed against the wrong daemon.
+        item "AMBIENT docker info (this is what clampBuildLimits probes)"
+        env -u DOCKER_HOST docker info \
+          --format '  Name={{`{{.Name}}`}} NCPU={{`{{.NCPU}}`}} MemTotal={{`{{.MemTotal}}`}} Server={{`{{.ServerVersion}}`}} Driver={{`{{.Driver}}`}}' 2>&1 | head -3 \
+          || echo "  ambient docker info failed"
+        item "COLIMA docker info (pinned to $COLIMA_HOST)"
+        DOCKER_HOST="$COLIMA_HOST" docker info \
+          --format '  Name={{`{{.Name}}`}} NCPU={{`{{.NCPU}}`}} MemTotal={{`{{.MemTotal}}`}} Server={{`{{.ServerVersion}}`}} Driver={{`{{.Driver}}`}}' 2>&1 | head -3 \
+          || echo "  colima docker info failed"
+        item "VERDICT: do ambient and colima resolve to the same daemon?"
+        _amb=$(env -u DOCKER_HOST docker info --format '{{`{{.Name}}`}}/{{`{{.NCPU}}`}}/{{`{{.MemTotal}}`}}' 2>/dev/null)
+        _col=$(DOCKER_HOST="$COLIMA_HOST" docker info --format '{{`{{.Name}}`}}/{{`{{.NCPU}}`}}/{{`{{.MemTotal}}`}}' 2>/dev/null)
+        echo "  ambient: ${_amb:-<unreachable>}"
+        echo "  colima:  ${_col:-<unreachable>}"
+        if [ -n "$_amb" ] && [ -n "$_col" ] && [ "$_amb" = "$_col" ]; then
+          echo "  => SAME daemon. H1 REFUTED."
+        else
+          echo "  => DIFFERENT daemons (or one unreachable). H1 SUPPORTED:"
+          echo "     cell's ceilings are sized against 'ambient', not colima."
+        fi
+        item "docker info per context (does capacity differ between them?)"
+        for ctx in $(docker context ls --format '{{`{{.Name}}`}}' 2>/dev/null); do
+          printf '  %-18s ' "$ctx"
+          docker --context "$ctx" info --format 'Name={{`{{.Name}}`}} NCPU={{`{{.NCPU}}`}} MemTotal={{`{{.MemTotal}}`}}' 2>&1 | head -1
+        done
+        item "socket paths"
+        ls -la "$COLIMA_SOCK" 2>/dev/null || echo "  no colima docker.sock at $COLIMA_SOCK"
+        ls -la ~/.docker/run/docker.sock 2>/dev/null || echo "  no docker-desktop user sock"
+        ls -la /var/run/docker.sock 2>/dev/null || echo "  no /var/run/docker.sock"
+
+        # ── Everything below measures COLIMA specifically ─────────────────
+        # Ambient wiring is already recorded above, so pin from here on. This
+        # is what lets the task debug Colima while normal docker use continues
+        # against another daemon.
+        export DOCKER_HOST="$COLIMA_HOST"
+        echo ""
+        echo "  >>> DOCKER_HOST pinned to $DOCKER_HOST for all sections below <<<"
+
+        # ── H2: VM disk exhaustion ────────────────────────────────────────
+        # Hypothesis: the memory fix unblocks the build only to hit a full VM
+        # disk. A prior run reported "62.7 GB total, 59.5 GB used, 0.0 GB
+        # available" with 45 GB in local volumes — a nix build needs tens of GB
+        # in the shared /nix volume.
+        # CONFIRM: Avail on the VM's / (or /var/lib/docker) under ~20 GB.
+        # REFUTE:  ample free space AND the nix-store volume well under quota.
+        section "H2: VM DISK CAPACITY"
+        item "colima list (disk column)"
+        colima list 2>&1 || echo "  colima not installed / not running"
+        item "df inside the VM"
+        colima ssh -- df -h 2>&1 | head -20 || echo "  colima ssh failed"
+        item "df for the docker data root specifically"
+        colima ssh -- df -h /var/lib/docker 2>&1 || echo "  colima ssh failed"
+        item "docker system df -v (volume + build cache breakdown)"
+        docker system df -v 2>&1 | head -40 || echo "  docker system df failed"
+        item "nix-store volume size"
+        docker system df -v 2>&1 | grep -iE 'nix|VOLUME NAME' || echo "  no nix volume found"
+        item "docker builder cache"
+        docker builder du 2>&1 | tail -5 || echo "  docker builder du unsupported"
+
+        # ── H3: VM memory/swap under-provisioned vs. expectation ──────────
+        # Hypothesis: the VM has less RAM than assumed and/or no swap. Lima VMs
+        # are swapless by default, so --memory is a HARD ceiling. If the VM is
+        # the stock 2 GiB rather than 8 GiB, the 4g default is >= VM total and
+        # gets dropped entirely — the build then runs uncapped and dies to the
+        # VM-wide OOM killer instead, with a less legible failure.
+        # CONFIRM: MemTotal < 8 GiB, or SwapTotal 0 with a tight ceiling.
+        # REFUTE:  MemTotal ~8 GiB and the emitted ceiling below it.
+        section "H3: VM MEMORY & SWAP"
+        item "colima ssh -- free -m"
+        colima ssh -- free -m 2>&1 || echo "  colima ssh failed"
+        item "VM /proc/meminfo (MemTotal / MemAvailable / Swap)"
+        colima ssh -- grep -E 'MemTotal|MemAvailable|SwapTotal|SwapFree' /proc/meminfo 2>&1 || echo "  colima ssh failed"
+        item "VM cgroup version + root memory.max"
+        colima ssh -- sh -c 'stat -fc %T /sys/fs/cgroup; cat /sys/fs/cgroup/memory.max 2>/dev/null' 2>&1 || echo "  colima ssh failed"
+        item "VM nproc"
+        colima ssh -- nproc 2>&1 || echo "  colima ssh failed"
+        item "colima config (requested vs actual)"
+        cat ~/.colima/default/colima.yaml 2>/dev/null | grep -E '^(cpu|memory|disk|vmType|mountType|arch):' || echo "  no colima.yaml"
+
+        # ── What the fix actually emits ───────────────────────────────────
+        # Not a hypothesis — the ground truth for all three. Prints the real
+        # ceilings and nix concurrency for the daemon in force, so the log
+        # records what the builder was told rather than what we assume.
+        section "EMITTED BUILD CEILINGS (ground truth)"
+        item "DEVCELL_* overrides in the environment"
+        env | grep -E '^DEVCELL_(BUILD|NIX)_' || echo "  none set — defaults apply"
+        # --dry-run is documented as "print docker run argv and exit without
+        # running" (cmd/root.go). It is wired for the tart/qemu/vagrant builders;
+        # if the thin/docker path does not honour it yet this prints a real build
+        # instead, so it is guarded by a timeout and --debug supplies the daemon
+        # diagnostics (logDockerDiagnostics) regardless.
+        item "cell build --dry-run --debug (argv + docker diagnostics)"
+        ( DEVCELL_STACK="${DEVCELL_STACK:-base}" \
+          timeout 90 cell build --dry-run --debug 2>&1 \
+            | grep -viE '^(copying|building) path' \
+            | head -60 ) || echo "  (--dry-run not honoured by the thin path, or timed out — see note in task)"
+        item "grep the emitted ceilings out of that output"
+        ( DEVCELL_STACK="${DEVCELL_STACK:-base}" \
+          timeout 90 cell build --dry-run --debug 2>&1 \
+            | grep -oE '\-\-(memory|cpus) [^ ]+|DEVCELL_NIX_(MAX_JOBS|CORES)=[0-9]+' \
+            | sort -u ) || echo "  none captured"
+        echo "  expected with defaults: --memory = 3/4 of daemon RAM, no --cpus,"
+        echo "    DEVCELL_NIX_MAX_JOBS = ceiling/8GiB, DEVCELL_NIX_CORES = ncpu/max-jobs"
+        echo "  (e.g. 24 GiB / 8-CPU daemon: --memory 18g  MAX_JOBS=2  CORES=4)"
+        echo "  if --memory is ABSENT, the daemon probe failed or ceiling opted out"
+
+        # ── Prior OOM evidence, for regression comparison ─────────────────
+        section "RECENT OOM / EXIT-137 EVIDENCE"
+        item "VM dmesg OOM kills"
+        colima ssh -- sh -c 'dmesg 2>/dev/null | grep -iE "out of memory|oom-kill|killed process" | tail -20' 2>&1 || echo "  no dmesg access"
+        item "exited containers killed by OOM"
+        docker ps -a --filter 'status=exited' --format '{{`{{.Names}}`}}\t{{`{{.Status}}`}}' 2>&1 | head -15 || true
+        for c in $(docker ps -aq 2>/dev/null | head -20); do
+          docker inspect "$c" --format '{{`{{.Name}}`}} OOMKilled={{`{{.State.OOMKilled}}`}} ExitCode={{`{{.State.ExitCode}}`}}' 2>/dev/null
+        done | grep -E 'OOMKilled=true|ExitCode=137' || echo "  no OOM-killed containers retained"
+
+        section "DONE"
+        echo "Paste this output back to /continue-debug to narrow the hypotheses."
         }
 
         _dump 2>&1 | tee "{{.LOG}}"

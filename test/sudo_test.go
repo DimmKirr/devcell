@@ -108,49 +108,6 @@ func TestSudo_PamStubCoversAllPamPhases(t *testing.T) {
 	}
 }
 
-// TestSudo_DockerfileStagesEnvKeep pins the impure (Debian-based) Dockerfile's
-// sudoers config. Mirrors TestSudo_SudoersPreservesNixEnv from the pure path
-// (image.nix) — the env_keep set must be the SAME on both image variants,
-// because `TestSudo_PreservesNixEnv` (L2) runs against whatever image CI ships,
-// which today is the impure Dockerfile output (`docker-build` → `docker-bake`
-// → images/Dockerfile). Without this, Debian's stock /etc/sudoers (env_reset
-// + no env_keep) strips SSL_CERT_FILE / NIX_SSL_CERT_FILE / LOCALE_ARCHIVE on
-// every `sudo` invocation and `sudo nix profile add nixpkgs#foo` fails on
-// cert validation against cache.nixos.org.
-func TestSudo_DockerfileStagesEnvKeep(t *testing.T) {
-	df := readImagesDockerfile(t)
-
-	if !strings.Contains(df, "env_keep") {
-		t.Fatal("images/Dockerfile doesn't add `Defaults env_keep += ...` to /etc/sudoers — Debian's stock sudoers env_reset will strip SSL_CERT_FILE/NIX_SSL_CERT_FILE/LOCALE_ARCHIVE across sudo, breaking `sudo nix profile add nixpkgs#foo` on cert validation")
-	}
-	// Same minimum set as the pure path (image.nix). Adding more is fine;
-	// dropping one is the regression we're guarding against.
-	for _, v := range []string{"SSL_CERT_FILE", "NIX_SSL_CERT_FILE", "NIX_PATH", "LOCALE_ARCHIVE"} {
-		if !strings.Contains(df, v) {
-			t.Errorf("images/Dockerfile sudoers config missing %q — `sudo nix ...` will lose this var across the privilege boundary", v)
-		}
-	}
-}
-
-// TestSudo_DockerfileSetsNixSSLEnv asserts the impure image's OCI Env carries
-// SSL_CERT_FILE / NIX_SSL_CERT_FILE / LOCALE_ARCHIVE so docker exec sessions
-// inherit them. Without these on the image config, even a correct env_keep
-// has nothing to keep — sudo's parent env doesn't contain the vars in the
-// first place.
-func TestSudo_DockerfileSetsNixSSLEnv(t *testing.T) {
-	df := readImagesDockerfile(t)
-
-	for _, v := range []string{"SSL_CERT_FILE=", "NIX_SSL_CERT_FILE=", "LOCALE_ARCHIVE="} {
-		// Match an `ENV <var>=...` line (Dockerfile ENV syntax). Substring
-		// check is sufficient because the only places these tokens legitimately
-		// appear with a trailing `=` are ENV directives or shell assignments
-		// inside RUN.
-		if !strings.Contains(df, "ENV "+v) && !strings.Contains(df, "ENV "+strings.TrimSuffix(v, "=")+" ") {
-			t.Errorf("images/Dockerfile doesn't set %s via ENV — docker exec sessions won't inherit it; sudo env_keep then has nothing to keep, so TestSudo_PreservesNixEnv fails", v)
-		}
-	}
-}
-
 // ---------------------------------------------------------------------------
 // L2 — Container behavior (requires docker; skip otherwise)
 // ---------------------------------------------------------------------------
@@ -221,4 +178,97 @@ func TestSudo_PreservesNixEnv(t *testing.T) {
 			t.Errorf("sudo env missing %q — env_keep not effective; sudo nix install paths will fail on cert/locale issues\n--- sudo env output ---\n%s", want, out)
 		}
 	}
+}
+
+// ---------------------------------------------------------------------------
+// CELL-358 — setuid wrapper (thin images)
+//
+// CELL-86 above fixed the pure image only. Thin images resolve sudo from the
+// devcell-tools profile on the SHARED /nix volume, where the store is 0555 and
+// can never carry a setuid bit. Chmod-ing the store was the old fix and is
+// wrong on a shared volume: a `nix profile upgrade` in any cell repoints the
+// profile at a fresh 0555 path and breaks sudo in EVERY cell at once.
+//
+// The entrypoint now installs a setuid copy at /run/wrappers/bin/sudo (NixOS
+// security-wrappers pattern), pins its closure with a GC root, and writes the
+// PAM stub when missing.
+// ---------------------------------------------------------------------------
+
+// TestSudo_FragmentInstallsSetuidWrapper pins the entrypoint wiring. Guards
+// against a regression to chmod-ing the shared store.
+func TestSudo_FragmentInstallsSetuidWrapper(t *testing.T) {
+	frag := readNixhomeFile(t, "modules/fragments/04-nix-daemon.sh")
+
+	if !strings.Contains(frag, "/run/wrappers/bin/sudo") {
+		t.Fatal("04-nix-daemon.sh doesn't install a setuid sudo wrapper at /run/wrappers/bin/sudo — sudo is broken in thin cells because the nix store is 0555")
+	}
+	if !strings.Contains(frag, "4755") {
+		t.Error("sudo wrapper must be installed mode 4755 — without the setuid bit sudo reports \"must be owned by uid 0\"")
+	}
+	// The copy dlopens sudoers.so from its store closure; once a profile
+	// upgrade moves on, nothing else roots that closure and a GC would rip the
+	// plugins out from under the running wrapper.
+	if !strings.Contains(frag, "gcroots/devcell/sudo-wrapper-") {
+		t.Error("entrypoint must pin the wrapper's store closure as a GC root (gcroots/devcell/sudo-wrapper-<hash>) or a shared-volume GC can break the running copy")
+	}
+	// Naming matters: the GC reaper in internal/runner/prune.go globs
+	// *-profile and *-meta. A sudo root must not collide with those.
+	if strings.Contains(frag, "sudo-wrapper-${_sudo_hash}-profile") || strings.Contains(frag, "sudo-wrapper-${_sudo_hash}-meta") {
+		t.Error("sudo GC root name must not end in -profile or -meta — the prune reaper globs those and would treat it as a stale project root")
+	}
+	if !strings.Contains(frag, "/etc/pam.d/sudo") || !strings.Contains(frag, "pam_permit.so") {
+		t.Error("entrypoint must write the /etc/pam.d/sudo stub — thin images ship no /etc/pam.d and sudo aborts with a PAM account management error")
+	}
+	if strings.Contains(frag, "_chmod_setuid_target") {
+		t.Error("entrypoint still chmods the shared nix store — that breaks sudo in every cell on the next profile rebuild and leaks a setuid binary across containers; use the wrapper instead")
+	}
+}
+
+// TestSudo_SessionUserCanEscalate is the user-visible bug: `sudo` from the
+// session user's shell. The CELL-86 L2 tests above exec as uid 0, so they pass
+// even when the setuid bit is missing entirely — only an unprivileged caller
+// actually exercises the wrapper.
+func TestSudo_SessionUserCanEscalate(t *testing.T) {
+	if testing.Short() {
+		t.Skip("long: starts a container (may build an image); run without -short or set DEVCELL_TEST_IMAGE")
+	}
+	c := startContainer(t, map[string]string{"HOST_USER": hostUser})
+
+	t.Run("wrapper is setuid root", func(t *testing.T) {
+		out, code := exec(t, c, []string{"stat", "-c", "%U %a", "/run/wrappers/bin/sudo"})
+		if code != 0 {
+			t.Fatalf("/run/wrappers/bin/sudo missing (exit %d) — entrypoint did not install the wrapper", code)
+		}
+		if !strings.HasPrefix(out, "root ") || !strings.Contains(out, "4755") {
+			t.Fatalf("wrapper must be root-owned mode 4755, got %q", out)
+		}
+	})
+
+	t.Run("wrapper shadows profile sudo on PATH", func(t *testing.T) {
+		out, code := asUser(t, c, "command -v sudo")
+		if code != 0 {
+			t.Fatalf("sudo not on PATH (exit %d)", code)
+		}
+		if got := strings.TrimSpace(out); got != "/run/wrappers/bin/sudo" {
+			t.Fatalf("PATH resolves sudo to %q, want /run/wrappers/bin/sudo — the non-setuid profile sudo is shadowing the wrapper", got)
+		}
+	})
+
+	t.Run("session user can escalate", func(t *testing.T) {
+		out, code := asUser(t, c, "sudo whoami")
+		if code != 0 || strings.TrimSpace(out) != "root" {
+			t.Fatalf("`sudo whoami` returned %q (exit %d), want \"root\"", strings.TrimSpace(out), code)
+		}
+	})
+
+	// Scripts hardcode these paths; they must reach the wrapper in both
+	// image variants.
+	t.Run("fhs paths reach the wrapper", func(t *testing.T) {
+		for _, p := range []string{"/bin/sudo", "/usr/bin/sudo"} {
+			out, code := asUser(t, c, p+" whoami")
+			if code != 0 || strings.TrimSpace(out) != "root" {
+				t.Errorf("`%s whoami` returned %q (exit %d), want \"root\"", p, strings.TrimSpace(out), code)
+			}
+		}
+	})
 }

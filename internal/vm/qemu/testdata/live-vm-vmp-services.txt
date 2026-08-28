@@ -1,0 +1,238 @@
+** This session may be vulnerable to "store now, decrypt later" attacks.
+** The server may need to be upgraded. See https://openssh.com/pq.html
+===SERVICE vmbus=== 
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\vmbus
+    ImagePath    REG_EXPAND_SZ    System32\drivers\vmbus.sys
+    Type    REG_DWORD    0x1
+    Start    REG_DWORD    0x0
+    ErrorControl    REG_DWORD    0x1
+    Group    REG_SZ    System Bus Extender
+    Tag    REG_DWORD    0x6
+    DisplayName    REG_SZ    @wvmbus.inf,%vmbus.SVCDESC%;Virtual Machine Bus
+    Owners    REG_MULTI_SZ    wvmbus.inf
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\vmbus\Parameters
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\vmbus\Parameters\Wdf
+    WdfMajorVersion    REG_DWORD    0x1
+    WdfMinorVersion    REG_DWORD    0x21
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\vmbus\Parameters\Winsock
+    MaxSockAddrLength    REG_DWORD    0x24
+    MinSockAddrLength    REG_DWORD    0x24
+    HelperDllName    REG_EXPAND_SZ    %SystemRoot%\system32\wshhyperv.dll
+    ProviderGUID    REG_BINARY    1B193412F74BA74C86E0DFD7C32B5445
+    OfflineCapable    REG_DWORD    0x1
+    Mapping    REG_BINARY    0300000003000000220000000100000001000000220000000100000000000000220000000000000001000000
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\vmbus\Parameters\Winsock\0
+    Version    REG_DWORD    0x2
+    AddressFamily    REG_DWORD    0x22
+    MaxSockAddrLength    REG_DWORD    0x24
+    MinSockAddrLength    REG_DWORD    0x24
+    SocketType    REG_DWORD    0x1
+    Protocol    REG_DWORD    0x1
+    ProtocolMaxOffset    REG_DWORD    0x0
+    ByteOrder    REG_DWORD    0x0
+    MessageSize    REG_DWORD    0x0
+    szProtocol    REG_EXPAND_SZ    Hyper-V RAW
+    ProviderFlags    REG_DWORD    0x8
+    ServiceFlags    REG_DWORD    0x20026
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\vmbus\StartOverride
+    2    REG_DWORD    0x3
+    0    REG_DWORD    0x3
+
+===SERVICE vmbusr=== 
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\vmbusr
+    ImagePath    REG_EXPAND_SZ    \SystemRoot\System32\drivers\vmbusr.sys
+    Type    REG_DWORD    0x1
+    Start    REG_DWORD    0x3
+    ErrorControl    REG_DWORD    0x1
+    Group    REG_SZ    Extended Base
+    Tag    REG_DWORD    0xb
+    DisplayName    REG_SZ    @%SystemRoot%\system32\drivers\vmbusr.sys,-1001
+    Owners    REG_MULTI_SZ    wvmbusr.inf
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\vmbusr\Parameters
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\vmbusr\Parameters\Wdf
+    WdfMajorVersion    REG_DWORD    0x1
+    WdfMinorVersion    REG_DWORD    0x21
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\vmbusr\State
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\vmbusr\State\Wdf
+    TimeOfLastTelemetryLog    REG_QWORD    0x1dd329df7295d18
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\vmbusr\Enum
+    0    REG_SZ    ROOT\VMBus\0000
+    Count    REG_DWORD    0x1
+    NextInstance    REG_DWORD    0x1
+
+===SERVICE vmbusproxy=== 
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\vmbusproxy
+    ErrorControl    REG_DWORD    0x1
+    ImagePath    REG_EXPAND_SZ    \SystemRoot\system32\drivers\vmbusproxy.sys
+    Start    REG_DWORD    0x3
+    Type    REG_DWORD    0x1
+
+===SERVICE hvservice=== 
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\hvservice
+    ImagePath    REG_EXPAND_SZ    \SystemRoot\System32\drivers\hvservice.sys
+    Type    REG_DWORD    0x1
+    Start    REG_DWORD    0x3
+    ErrorControl    REG_DWORD    0x1
+    DisplayName    REG_SZ    @hvservice.inf,%hvservice.SvcDesc%;Microsoft Hypervisor Service Driver
+    Owners    REG_MULTI_SZ    hvservice.inf
+
+===SERVICE hvcrash=== 
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\hvcrash
+    ImagePath    REG_EXPAND_SZ    \SystemRoot\System32\drivers\hvcrash.sys
+    Type    REG_DWORD    0x1
+    Start    REG_DWORD    0x4
+    ErrorControl    REG_DWORD    0x1
+    Owners    REG_MULTI_SZ    whvcrash.inf
+
+===SERVICE hvsocketcontrol=== 
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\hvsocketcontrol
+    ErrorControl    REG_DWORD    0x1
+    ImagePath    REG_EXPAND_SZ    \SystemRoot\system32\drivers\hvsocketcontrol.sys
+    Start    REG_DWORD    0x1
+    Type    REG_DWORD    0x1
+
+===SERVICE vmgid=== 
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\vmgid
+    ImagePath    REG_EXPAND_SZ    \SystemRoot\System32\drivers\vmgid.sys
+    Type    REG_DWORD    0x1
+    Start    REG_DWORD    0x3
+    ErrorControl    REG_DWORD    0x1
+    DisplayName    REG_SZ    @wvmgid.inf,%VmGid.SVCDESC%;Microsoft Hyper-V Guest Infrastructure Driver
+    Owners    REG_MULTI_SZ    wvmgid.inf
+
+===SERVICE VMSP=== 
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\VMSP
+    DependOnService    REG_MULTI_SZ    VMSNPXY
+    DisplayName    REG_SZ    VmSwitch Protocol Driver
+    ErrorControl    REG_DWORD    0x1
+    Group    REG_SZ    NDIS
+    ImagePath    REG_EXPAND_SZ    System32\drivers\vmswitch.sys
+    Start    REG_DWORD    0x2
+    Type    REG_DWORD    0x1
+    NdisMajorVersion    REG_DWORD    0x6
+    NdisMinorVersion    REG_DWORD    0x53
+    DriverMajorVersion    REG_DWORD    0x13
+    DriverMinorVersion    REG_DWORD    0x0
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\VMSP\Linkage
+    Export    REG_MULTI_SZ    \Device\VMSP
+    Bind    REG_MULTI_SZ    
+    Route    REG_MULTI_SZ    
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\VMSP\SharedState
+    WppRecorder_TraceGuid    REG_SZ    {1f387cbc-6818-4530-9db6-5f1058cd7e86}
+
+===SERVICE VmsProxy=== 
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\VmsProxy
+    DisplayName    REG_SZ    VmSwitch Proxy Driver
+    ErrorControl    REG_DWORD    0x1
+    Group    REG_SZ    Extended Base
+    ImagePath    REG_EXPAND_SZ    system32\drivers\VmsProxy.sys
+    Start    REG_DWORD    0x0
+    Tag    REG_DWORD    0xc
+    Type    REG_DWORD    0x1
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\VmsProxy\parameters
+    WppRecorder_PerBufferMaxBytes    REG_DWORD    0x10000
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\VmsProxy\SharedState
+    WppRecorder_TraceGuid    REG_SZ    {3b7922bb-c097-495d-bf47-d7003fd40a1a}
+
+===SERVICE VMSNPXY=== 
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\VMSNPXY
+    DisplayName    REG_SZ    VmSwitch NIC Proxy Driver
+    ErrorControl    REG_DWORD    0x1
+    Group    REG_SZ    Extended Base
+    ImagePath    REG_EXPAND_SZ    system32\drivers\VmsProxyHNic.sys
+    Start    REG_DWORD    0x0
+    Type    REG_DWORD    0x1
+    NdisMajorVersion    REG_DWORD    0x6
+    NdisMinorVersion    REG_DWORD    0x51
+    DriverMajorVersion    REG_DWORD    0x1
+    DriverMinorVersion    REG_DWORD    0x1
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\VMSNPXY\parameters
+    WppRecorder_PerBufferMaxBytes    REG_DWORD    0x10000
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\VMSNPXY\SharedState
+    WppRecorder_TraceGuid    REG_SZ    {c0ddafb5-16eb-470b-bf17-24ed39a9e8ba}
+
+===SERVICE vmcompute=== 
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\vmcompute
+    DependOnService    REG_MULTI_SZ    rpcss\0wcifs\0hvsocketcontrol\0condrv
+    Description    REG_SZ    @%systemroot%\system32\vmcompute.exe,-101
+    DisplayName    REG_SZ    @%systemroot%\system32\vmcompute.exe,-100
+    ErrorControl    REG_DWORD    0x1
+    ImagePath    REG_EXPAND_SZ    %systemroot%\system32\vmcompute.exe
+    ObjectName    REG_SZ    LocalSystem
+    ServiceSidType    REG_DWORD    0x1
+    Start    REG_DWORD    0x3
+    Type    REG_DWORD    0x10
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\vmcompute\Security
+    Security    REG_BINARY    010014807800000084000000140000003000000002001C000100000002801400FF010F00010100000000000100000000020048000300000000001400FD01020001010000000000051200000000001800FF010F0001020000000000052000000020020000000014008D00020001010000000000050B000000010100000000000512000000010100000000000512000000
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\vmcompute\TriggerInfo
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\vmcompute\TriggerInfo\0
+    Action    REG_DWORD    0x1
+    Data0    REG_BINARY    450037004100320031003600410046002D0031004500430031002D0034003400370046002D0038004400330046002D004100380037003200370038004400420035003600340044000000
+    DataType0    REG_DWORD    0x2
+    GUID    REG_BINARY    67D190BC70943941A9BABE0BBBF5B74D
+    Type    REG_DWORD    0x6
+
+===SERVICE HvHost=== 
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\HvHost
+    DependOnService    REG_MULTI_SZ    hvservice
+    Description    REG_SZ    @%SystemRoot%\system32\hvhostsvc.dll,-101
+    DisplayName    REG_SZ    @%SystemRoot%\system32\hvhostsvc.dll,-100
+    ErrorControl    REG_DWORD    0x1
+    ImagePath    REG_EXPAND_SZ    %SystemRoot%\system32\svchost.exe -k LocalSystemNetworkRestricted -p
+    ObjectName    REG_SZ    LocalSystem
+    ServiceSidType    REG_DWORD    0x1
+    Start    REG_DWORD    0x3
+    Type    REG_DWORD    0x20
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\HvHost\Parameters
+    ServiceDll    REG_EXPAND_SZ    %SystemRoot%\System32\hvhostsvc.dll
+    ServiceDllUnloadOnStop    REG_DWORD    0x1
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\HvHost\TriggerInfo
+
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\HvHost\TriggerInfo\0
+    Action    REG_DWORD    0x1
+    Data0    REG_BINARY    7508BCA325188A41
+    DataType0    REG_DWORD    0x1
+    GUID    REG_BINARY    16287A2D5E0CFC459CE7570E5ECDE9C9
+    Type    REG_DWORD    0x7
+
+===SERVICE winhv=== 
+ERROR: The system was unable to find the specified registry key or value.
+===SERVICE winhvr=== 
+ERROR: The system was unable to find the specified registry key or value.
+===SERVICE vmbkmcl=== 
+ERROR: The system was unable to find the specified registry key or value.
+===SERVICE hvsocket=== 
+ERROR: The system was unable to find the specified registry key or value.

@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DimmKirr/devcell/internal/testutil"
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -614,16 +615,25 @@ const testdataDir = "testdata/devcell-config-simple/devcell"
 // Layout: test/results/<YYYYMMDD-HHMMSS>-<sha>/
 // When running inside a devcell container (Docker-in-Docker), the path is
 // resolved to the host filesystem so Docker on the host can mount it.
+//
+// Callers that have a *testing.T should prefer testutil.TestResultsDir(t, hostBaseDirFn)
+// for per-root-test grouping; testRunDir exists for non-test helpers (e.g. buildTestdataImage).
 func testRunDir() string {
 	runDirOnce.Do(func() {
-		ts := time.Now().Format("20060102-150405")
-		runDir = filepath.Join(hostProjectPath("results"), ts+"-"+shortSHA())
+		ts := testutil.RunTimestamp()
+		runDir = filepath.Join(hostProjectPath("results"), ts+"-"+testutil.ShortSHA())
 		if err := os.MkdirAll(runDir, 0755); err != nil {
 			panic(fmt.Sprintf("create run dir: %v", err))
 		}
 		log.Printf("Test run dir: %s", runDir)
 	})
 	return runDir
+}
+
+// hostBaseDirFn returns the base directory for test results, accounting for
+// Docker host path remapping. Pass to testutil.TestResultsDir as baseDirFn.
+func hostBaseDirFn() string {
+	return hostProjectPath("")
 }
 
 // hostProjectPath returns a path under the project's test/ directory that is
@@ -635,27 +645,8 @@ func hostProjectPath(rel string) string {
 	if dir := os.Getenv("DEVCELL_TEST_PROJECT_DIR"); dir != "" {
 		return filepath.Join(dir, rel)
 	}
-	// Detect devcell container by checking if /devcell-68 mount exists in mountinfo.
-	if data, err := os.ReadFile("/proc/1/mountinfo"); err == nil {
-		for _, line := range strings.Split(string(data), "\n") {
-			// Example: 511 477 0:44 /dmitry/dev/dimmkirr/devcell /devcell-68 rw,...- fakeowner /run/host_mark/Users rw,...
-			if strings.Contains(line, " /devcell-68 ") || strings.Contains(line, " "+os.Getenv("WORKSPACE")+" ") {
-				fields := strings.Fields(line)
-				if len(fields) >= 4 {
-					// fields[3] = mount source relative path (e.g. /dmitry/dev/dimmkirr/devcell)
-					// Find the filesystem root after the " - " separator
-					for i, f := range fields {
-						if f == "-" && i+2 < len(fields) {
-							fsRoot := fields[i+2] // e.g. /run/host_mark/Users
-							// macOS Docker: /run/host_mark/Users → /Users
-							hostRoot := strings.TrimPrefix(fsRoot, "/run/host_mark")
-							hostPath := filepath.Join(hostRoot, fields[3], "test", rel)
-							return hostPath
-						}
-					}
-				}
-			}
-		}
+	if ws := os.Getenv("WORKSPACE"); ws != "" {
+		return filepath.Join(ws, "test", rel)
 	}
 	return rel
 }

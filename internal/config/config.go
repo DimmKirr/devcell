@@ -12,9 +12,9 @@ import (
 
 // Config holds all runtime variables resolved from environment and cwd.
 type Config struct {
-	Bunk        string
+	Bunk          string
 	AppName       string
-	CellName   string
+	CellName      string
 	CellHome      string
 	ConfigDir     string
 	BuildDir      string // build context dir: .devcell/ when project config exists, else ConfigDir
@@ -47,9 +47,9 @@ func Load(cwd string, getenv func(string) string) Config {
 
 	configDir := resolveConfigDir(getenv)
 	return Config{
-		Bunk:        bunk,
+		Bunk:          bunk,
 		AppName:       appName,
-		CellName:   cellName,
+		CellName:      cellName,
 		CellHome:      home + "/.devcell/" + cellName,
 		ConfigDir:     configDir,
 		BuildDir:      configDir,
@@ -58,8 +58,8 @@ func Load(cwd string, getenv func(string) string) Config {
 		ContainerName: "cell-" + appName + "-run",
 		Hostname:      "cell-" + appName,
 		PortPrefix:    portPrefix,
-		VNCPort:       clampPort(portPrefix + "50"),
-		RDPPort:       clampPort(portPrefix + "89"),
+		VNCPort:       ClampPort(portPrefix + "50"),
+		RDPPort:       ClampPort(portPrefix + "89"),
 		BaseDir:       cwd,
 		HostUser:      getenv("USER"),
 		HostHome:      home,
@@ -144,15 +144,15 @@ func (c *Config) ResolveAvailablePorts() {
 	// Gather docker-allocated host ports once: on Docker Desktop (linuxkit VM)
 	// and native Linux with userland-proxy disabled, published ports never open
 	// a host-side socket, so net.Listen alone can't see them (CELL-119).
-	taken := dockerAllocatedPorts()
-	c.VNCPort = resolveAvailablePort(c.VNCPort, taken)
-	c.RDPPort = resolveAvailablePort(c.RDPPort, taken)
+	taken := DockerAllocatedPorts()
+	c.VNCPort = ResolveAvailablePort(c.VNCPort, taken)
+	c.RDPPort = ResolveAvailablePort(c.RDPPort, taken)
 }
 
-// dockerAllocatedPorts returns the set of host ports currently published by
+// DockerAllocatedPorts returns the set of host ports currently published by
 // running docker containers. Degrades gracefully: any error (docker absent,
 // daemon down) yields an empty set, falling back to net.Listen-only probing.
-func dockerAllocatedPorts() map[int]struct{} {
+func DockerAllocatedPorts() map[int]struct{} {
 	out, err := exec.Command("docker", "ps", "--format", "{{.Ports}}").Output()
 	if err != nil {
 		return map[int]struct{}{}
@@ -201,7 +201,7 @@ func parseDockerPublishedPorts(psOutput string) map[int]struct{} {
 // Bump <1024 to ≥1024 BEFORE the scan so dockerd's bind actually succeeds
 // (dockerd is root but the host already has the port allocated to another
 // container, which is the real collision we need to detect).
-func resolveAvailablePort(preferred string, taken map[int]struct{}) string {
+func ResolveAvailablePort(preferred string, taken map[int]struct{}) string {
 	port, err := strconv.Atoi(preferred)
 	if err != nil {
 		return preferred
@@ -229,11 +229,11 @@ func resolveAvailablePort(preferred string, taken map[int]struct{}) string {
 	return strconv.Itoa(port)
 }
 
-// clampPort ensures a port string represents a valid TCP port (1024–65535).
+// ClampPort ensures a port string represents a valid TCP port (1024–65535).
 // If the value exceeds 65535, it subtracts 65535 repeatedly until it fits,
 // then floors at 1024 to stay out of the privileged range.
 // Pure arithmetic — no I/O. Port availability is handled by ResolveAvailablePorts.
-func clampPort(s string) string {
+func ClampPort(s string) string {
 	p, err := strconv.Atoi(s)
 	if err != nil || p <= 65535 {
 		return s

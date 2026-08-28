@@ -12,8 +12,8 @@ type Observer interface {
 // NopObserver silently discards all events.
 type NopObserver struct{}
 
-func (NopObserver) Logf(string, ...any)        {}
-func (NopObserver) Progress(float64, string)    {}
+func (NopObserver) Logf(string, ...any)      {}
+func (NopObserver) Progress(float64, string) {}
 
 // ProvisionStep pairs a human-readable phase name with the SSH command to run.
 type ProvisionStep struct {

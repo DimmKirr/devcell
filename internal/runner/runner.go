@@ -217,12 +217,16 @@ type RunSpec struct {
 	UserArgs     []string
 	Debug        bool                // pass DEVCELL_DEBUG=true into the container
 	NixDaemon    bool                // pass DEVCELL_NIX_DAEMON=true into the container
+	SkipFlake    bool                // pass DEVCELL_SKIP_FLAKE=1 into the container
+	TrustFlake   bool                // pass DEVCELL_FLAKE_TRUST=1 into the container
 	Image        string              // image ID or tag to run; defaults to UserImageTag
 	ExtraEnv     map[string]string   // additional env vars injected by the command handler
 	InheritEnv   []string            // env var names to inherit from host (passed as -e KEY with no value)
 	Getenv       func(string) string // env lookup; defaults to os.Getenv when nil
 	ThinImage    bool                // when true, mount devcell-nix-store volume for /nix
 	BootDir      string              // CELL-264: host-side boot dir for fsnotify sentinels; empty disables the bind-mount
+	TTY          bool                // allocate a pseudo-TTY (-it); set from isatty check on stdin
+	Detach       bool                // run container in detached mode (-d); set by `cell start`
 }
 
 func (s RunSpec) getenv(key string) string {
@@ -244,11 +248,47 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 		argv = append(argv, "op", "run", "--")
 	}
 
-	dockerRunFlags := []string{"--rm", "-it", "--shm-size=1g", "--device=/dev/fuse"}
-	for _, cap := range spec.CellCfg.Cell.DockerCapAdd {
+	dockerRunFlags := []string{"--rm", "--shm-size=" + spec.CellCfg.Docker.ResolvedShmSize(), "--device=/dev/fuse"}
+	if mem := spec.CellCfg.Docker.ResolvedMemLimit(); mem != "0" {
+		dockerRunFlags = append(dockerRunFlags, "--memory="+mem)
+	}
+	if cpu := spec.CellCfg.Docker.ResolvedCPULimit(); cpu != "0" {
+		dockerRunFlags = append(dockerRunFlags, "--cpus="+cpu)
+	}
+	if spec.Detach {
+		dockerRunFlags = append(dockerRunFlags, "-d")
+	} else if spec.TTY {
+		dockerRunFlags = append(dockerRunFlags, "-it")
+	}
+	// KVM passthrough for QEMU guests (Windows cells). Must be --device, not
+	// a -v bind-mount: the mount creates the node but the cgroup device
+	// controller still denies open(2) (EPERM). Requires nested virtualization
+	// on the daemon host — on Colima that is `vmType: vz` +
+	// `nestedVirtualization: true`; without it docker run fails loudly.
+	if spec.CellCfg.Cell.ResolvedKVM() {
+		dockerRunFlags = append(dockerRunFlags, "--device=/dev/kvm")
+	}
+	for _, cap := range spec.CellCfg.Docker.CapAdd {
 		dockerRunFlags = append(dockerRunFlags, "--cap-add="+cap)
 	}
-	if spec.CellCfg.Cell.DockerPrivileged {
+	wgEnabled := cfg.WireguardEnabled(spec.CellCfg)
+	if wgEnabled && !spec.CellCfg.Docker.Privileged {
+		hasNetAdmin := false
+		for _, cap := range spec.CellCfg.Docker.CapAdd {
+			if cap == "NET_ADMIN" {
+				hasNetAdmin = true
+				break
+			}
+		}
+		if !hasNetAdmin {
+			dockerRunFlags = append(dockerRunFlags, "--cap-add=NET_ADMIN")
+		}
+	}
+	if wgEnabled {
+		dockerRunFlags = append(dockerRunFlags, "--device=/dev/net/tun")
+		dockerRunFlags = append(dockerRunFlags, "--sysctl", "net.ipv4.conf.all.src_valid_mark=1")
+	}
+	if spec.CellCfg.Docker.Privileged {
 		dockerRunFlags = append(dockerRunFlags, "--privileged")
 	}
 	argv = append(argv, "docker", "run")
@@ -267,6 +307,7 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 	// Core env vars
 	e := func(k, v string) { argv = append(argv, "-e", k+"="+v) }
 	e("APP_NAME", c.AppName)
+	e("DEVCELL_CELL_NAME", c.CellName)
 	e("HOST_USER", c.HostUser)
 	e("HOME", "/home/"+c.HostUser)
 	e("IS_SANDBOX", "1")
@@ -326,8 +367,12 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 	}
 
 	// GUI flag — only publish VNC port when GUI is enabled (default: true)
-	if spec.CellCfg.Cell.ResolvedGUI() {
+	if spec.CellCfg.GUI.ResolvedEnabled() {
 		argv = append(argv, "-e", "DEVCELL_GUI_ENABLED=true")
+		argv = append(argv, "-e", "DEVCELL_WM="+spec.CellCfg.GUI.ResolvedWM())
+		argv = append(argv, "-e", "DEVCELL_RESOLUTION="+spec.CellCfg.GUI.ResolvedFramebufferResolution())
+		argv = append(argv, "-e", fmt.Sprintf("DEVCELL_DPI=%d", spec.CellCfg.GUI.ResolvedDPI()))
+		argv = append(argv, "-e", fmt.Sprintf("DEVCELL_SCALE=%d", spec.CellCfg.GUI.ResolvedScale()))
 		argv = append(argv, "-e", "EXT_VNC_PORT="+c.VNCPort)
 		argv = append(argv, "-e", "EXT_RDP_PORT="+c.RDPPort)
 	}
@@ -340,6 +385,16 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 	// Nix daemon — enables in-container package installation via nix-daemon
 	if spec.NixDaemon {
 		argv = append(argv, "-e", "DEVCELL_NIX_DAEMON=true")
+	}
+
+	// Skip project flake — degrades install failure to warning instead of boot abort
+	if spec.SkipFlake {
+		argv = append(argv, "-e", "DEVCELL_SKIP_FLAKE=1")
+	}
+
+	// Project flake trust — user confirmed host-side that flake.nix packages should be installed
+	if spec.TrustFlake {
+		argv = append(argv, "-e", "DEVCELL_FLAKE_TRUST=1")
 	}
 
 	// Pass the image tag/ID into the container for debug logging
@@ -421,6 +476,8 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 	v(c.HostHome + "/.claude/commands:/home/" + c.HostUser + "/.claude/commands")
 	v(c.HostHome + "/.claude/agents:/home/" + c.HostUser + "/.claude/agents:ro")
 	v(c.HostHome + "/.claude/skills:/home/" + c.HostUser + "/.claude/skills")
+	v(c.HostHome + "/.agents:/home/" + c.HostUser + "/.agents:ro")
+	v(c.HostHome + "/.claude/agents:/home/" + c.HostUser + "/.config/opencode/agents:ro")
 	v(c.ConfigDir + ":/etc/devcell/config")
 	v(c.ConfigDir + ":/home/" + c.HostUser + "/.config/devcell")
 
@@ -439,9 +496,27 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 		e("DEVCELL_BOOT_DIR", bootContainerPath)
 	}
 
-
-	// cfg [[volumes]] entries
+	// cfg [[volumes]] entries — skip any whose container path duplicates
+	// a standard mount (e.g. BaseDir identity mount) to avoid Docker's
+	// "Duplicate mount point" error.
+	stdMounts := map[string]bool{
+		c.BaseDir:              true,
+		"/" + c.AppName:        true,
+		"/home/" + c.HostUser:  true,
+		"/var/run/docker.sock": true,
+		"/home/" + c.HostUser + "/.claude/commands":        true,
+		"/home/" + c.HostUser + "/.claude/agents":          true,
+		"/home/" + c.HostUser + "/.claude/skills":          true,
+		"/home/" + c.HostUser + "/.agents":                 true,
+		"/home/" + c.HostUser + "/.config/opencode/agents": true,
+		"/etc/devcell/config":                              true,
+		"/home/" + c.HostUser + "/.config/devcell":         true,
+	}
 	for _, vol := range spec.CellCfg.Volumes {
+		cp := vol.ContainerPath()
+		if stdMounts[cp] {
+			continue
+		}
 		argv = append(argv, "-v", vol.Resolved())
 	}
 
@@ -464,9 +539,16 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 	}
 
 	// GUI port mapping
-	if spec.CellCfg.Cell.ResolvedGUI() {
+	if spec.CellCfg.GUI.ResolvedEnabled() {
 		argv = append(argv, "-p", publishPrefix+c.VNCPort+":5900")
 		argv = append(argv, "-p", publishPrefix+c.RDPPort+":3389")
+	}
+
+	// Wireguard env + config mount
+	if wgEnabled {
+		argv = append(argv, "-e", "DEVCELL_WG_ENABLED=1")
+		wgDir := filepath.Join(c.CellHome, ".wg")
+		argv = append(argv, "-v", wgDir+":/home/"+c.HostUser+"/.devcell/"+c.CellName+"/.wg:ro")
 	}
 
 	// In-memory secrets mount — Playwright MCP reads .secrets-playwright from here
@@ -518,6 +600,15 @@ func RemoveOrphanedContainer(ctx context.Context, name string) error {
 		return fmt.Errorf("remove orphaned container %q: %w", name, err)
 	}
 	return nil
+}
+
+// ContainerRunning checks if a container with the given name is currently running.
+func ContainerRunning(ctx context.Context, name string) bool {
+	out, err := exec.CommandContext(ctx, "docker", "inspect", "--format", "{{.State.Status}}", name).Output()
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(out)) == "running"
 }
 
 // EnsureNetwork creates the devcell-network docker network if it doesn't exist.
@@ -575,8 +666,6 @@ func BuildImage(ctx context.Context, configDir string, noCache bool, verbose boo
 	return nil
 }
 
-
-
 // DetectArch returns "aarch64" or "x86_64". Respects DEVCELL_ARCH env
 // override ("amd64"→"x86_64", "arm64"→"aarch64") for cross-architecture builds.
 func DetectArch() string {
@@ -607,10 +696,36 @@ func ImageExists(ctx context.Context, tag string) bool {
 	return exec.CommandContext(ctx, "docker", "image", "inspect", tag).Run() == nil
 }
 
+// ImageExistsForPlatform returns true if a Docker image with the given tag
+// exists locally AND matches the requested platform (e.g. "linux/amd64").
+// Empty platform falls back to ImageExists (host default).
+func ImageExistsForPlatform(ctx context.Context, tag, platform string) bool {
+	if platform == "" {
+		return ImageExists(ctx, tag)
+	}
+	out, err := exec.CommandContext(ctx, "docker", "image", "inspect",
+		"--format", "{{.Os}}/{{.Architecture}}", tag).Output()
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(out)) == platform
+}
+
 // PullImage attempts to pull a Docker image. Returns nil on success.
 // When verbose is true, docker pull output is streamed to os.Stderr.
 func PullImage(ctx context.Context, tag string, verbose bool) error {
-	cmd := exec.CommandContext(ctx, "docker", "pull", tag)
+	return PullImageForPlatform(ctx, tag, "", verbose)
+}
+
+// PullImageForPlatform pulls a Docker image for a specific platform.
+// Empty platform uses Docker's default (host architecture).
+func PullImageForPlatform(ctx context.Context, tag, platform string, verbose bool) error {
+	args := []string{"pull"}
+	if platform != "" {
+		args = append(args, "--platform", platform)
+	}
+	args = append(args, tag)
+	cmd := exec.CommandContext(ctx, "docker", args...)
 	if verbose {
 		cmd.Stdout = os.Stderr
 		cmd.Stderr = os.Stderr
@@ -860,7 +975,7 @@ func ImageMetadataFromContainer(ctx context.Context) ImageMetadata {
 // output. Pure helper, no I/O.
 func imageMetadataFromInspect(created string, labels map[string]string, env []string) ImageMetadata {
 	m := ImageMetadata{
-		BaseImage: labels["devcell.built-with"],   // "nix2container" / ""
+		BaseImage: labels["devcell.built-with"], // "nix2container" / ""
 		Stack:     labels["devcell.stack"],
 		GitCommit: labels["org.opencontainers.image.revision"],
 		BuildDate: labels["org.opencontainers.image.created"],
@@ -1045,4 +1160,57 @@ func envOrDefaultFn(getenv func(string) string, key, def string) string {
 		return v
 	}
 	return def
+}
+
+// PrepareWireguard writes WireGuard config files for each enabled entry
+// to <cellHome>/.wg/<name>.conf. PrivateKey lines are stripped from the
+// config; a PostUp directive loads the key from /run/secrets/wg-private-key
+// at runtime. No-op when no entries are enabled.
+func PrepareWireguard(cellHome string, cellCfg cfg.CellConfig) error {
+	if !cfg.WireguardEnabled(cellCfg) {
+		return nil
+	}
+	wgDir := filepath.Join(cellHome, ".wg")
+	if err := os.MkdirAll(wgDir, 0700); err != nil {
+		return fmt.Errorf("create wireguard dir: %w", err)
+	}
+	for _, entry := range cellCfg.Wireguard {
+		if !entry.Enabled {
+			continue
+		}
+		conf := rewriteWireguardConfig(entry.Config)
+		path := filepath.Join(wgDir, entry.Name+".conf")
+		if err := os.WriteFile(path, []byte(conf), 0600); err != nil {
+			return fmt.Errorf("write %s: %w", path, err)
+		}
+	}
+	return nil
+}
+
+// rewriteWireguardConfig strips PrivateKey from [Interface] and adds a
+// PostUp directive that loads the key from /run/secrets/wg-private-key.
+func rewriteWireguardConfig(raw string) string {
+	var out strings.Builder
+	inInterface := false
+	postUpAdded := false
+	for _, line := range strings.Split(raw, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+			section := strings.TrimSpace(trimmed[1 : len(trimmed)-1])
+			if inInterface && !postUpAdded {
+				out.WriteString("PostUp = wg set %i private-key /run/secrets/wg-private-key\n")
+				postUpAdded = true
+			}
+			inInterface = section == "Interface"
+		}
+		if inInterface && strings.HasPrefix(trimmed, "PrivateKey") {
+			continue
+		}
+		out.WriteString(line)
+		out.WriteByte('\n')
+	}
+	if inInterface && !postUpAdded {
+		out.WriteString("PostUp = wg set %i private-key /run/secrets/wg-private-key\n")
+	}
+	return strings.TrimRight(out.String(), "\n") + "\n"
 }

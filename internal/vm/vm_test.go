@@ -7,35 +7,10 @@ import (
 
 	"github.com/DimmKirr/devcell/internal/vm"
 	"github.com/DimmKirr/devcell/internal/vm/hyperv"
-	"github.com/DimmKirr/devcell/internal/vm/libvirt"
 )
 
-func TestLibvirtPreflight_NotImplemented(t *testing.T) {
-	e := libvirt.New()
-	err := e.Preflight()
-	if err == nil {
-		t.Fatal("expected error from libvirt placeholder")
-	}
-	if !errors.Is(err, vm.ErrNotImplemented) {
-		t.Fatalf("expected ErrNotImplemented, got: %v", err)
-	}
-}
-
-func TestLibvirtBoot_NotImplemented(t *testing.T) {
-	e := libvirt.New()
-	err := e.Boot(context.Background())
-	if !errors.Is(err, vm.ErrNotImplemented) {
-		t.Fatalf("expected ErrNotImplemented, got: %v", err)
-	}
-}
-
-func TestLibvirtShutdown_NotImplemented(t *testing.T) {
-	e := libvirt.New()
-	err := e.Shutdown(context.Background())
-	if !errors.Is(err, vm.ErrNotImplemented) {
-		t.Fatalf("expected ErrNotImplemented, got: %v", err)
-	}
-}
+// The libvirt engine is real since CELL-377 — its contract lives in
+// internal/vm/libvirt/engine_test.go. Only hyperv remains a placeholder.
 
 func TestHypervPreflight_NotImplemented(t *testing.T) {
 	e := hyperv.New()

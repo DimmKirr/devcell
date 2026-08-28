@@ -1,6 +1,7 @@
 package runner_test
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,9 +16,9 @@ func baseConfig() config.Config {
 	return config.Load("/home/bob/myproject", func(k string) string {
 		m := map[string]string{
 			"DEVCELL_BUNK": "3",
-			"HOME":    "/home/bob",
-			"USER":    "bob",
-			"TERM":    "xterm-256color",
+			"HOME":         "/home/bob",
+			"USER":         "bob",
+			"TERM":         "xterm-256color",
 		}
 		return m[k]
 	})
@@ -92,6 +93,89 @@ func findFlag(argv []string, flag string) (string, bool) {
 	return "", false
 }
 
+// --- Docker resource limits ---
+
+func TestArgv_DefaultResourceLimits(t *testing.T) {
+	t.Setenv("DEVCELL_DOCKER_MEM_LIMIT", "")
+	t.Setenv("DEVCELL_DOCKER_CPU_LIMIT", "")
+	t.Setenv("DEVCELL_DOCKER_SHM_SIZE", "")
+	argv := buildArgv(t)
+	if !hasArg(argv, "--memory=4g") {
+		t.Error("missing default --memory=4g")
+	}
+	if !hasArg(argv, "--cpus=2") {
+		t.Error("missing default --cpus=2")
+	}
+	if !hasArg(argv, "--shm-size=1g") {
+		t.Error("missing default --shm-size=1g")
+	}
+}
+
+func TestArgv_ResourceLimitsFromTOML(t *testing.T) {
+	t.Setenv("DEVCELL_DOCKER_MEM_LIMIT", "")
+	t.Setenv("DEVCELL_DOCKER_CPU_LIMIT", "")
+	t.Setenv("DEVCELL_DOCKER_SHM_SIZE", "")
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.CellCfg.Docker = cfg.DockerSection{
+			MemLimit: "16g",
+			CPULimit: "8",
+			ShmSize:  "4g",
+		}
+	})
+	if !hasArg(argv, "--memory=16g") {
+		t.Errorf("expected --memory=16g from TOML, argv: %v", argv)
+	}
+	if !hasArg(argv, "--cpus=8") {
+		t.Errorf("expected --cpus=8 from TOML, argv: %v", argv)
+	}
+	if !hasArg(argv, "--shm-size=4g") {
+		t.Errorf("expected --shm-size=4g from TOML, argv: %v", argv)
+	}
+}
+
+func TestArgv_ResourceLimitsZeroOmitsFlag(t *testing.T) {
+	t.Setenv("DEVCELL_DOCKER_MEM_LIMIT", "")
+	t.Setenv("DEVCELL_DOCKER_CPU_LIMIT", "")
+	t.Setenv("DEVCELL_DOCKER_SHM_SIZE", "")
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.CellCfg.Docker = cfg.DockerSection{
+			MemLimit: "0",
+			CPULimit: "0",
+		}
+	})
+	for _, a := range argv {
+		if strings.HasPrefix(a, "--memory=") {
+			t.Errorf("--memory should be omitted when set to 0, got %q", a)
+		}
+		if strings.HasPrefix(a, "--cpus=") {
+			t.Errorf("--cpus should be omitted when set to 0, got %q", a)
+		}
+	}
+}
+
+// --- Detach mode ---
+
+func TestArgv_DetachFlag(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.Detach = true
+	})
+	if !hasArg(argv, "-d") {
+		t.Error("detach mode should add -d")
+	}
+	if hasArg(argv, "-it") {
+		t.Error("detach mode should not add -it")
+	}
+}
+
+func TestArgv_DetachKeepsRm(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.Detach = true
+	})
+	if !hasArg(argv, "--rm") {
+		t.Error("detach mode should keep --rm")
+	}
+}
+
 // --- Structure ---
 
 func TestArgv_StartsWithDockerRunFlags(t *testing.T) {
@@ -102,8 +186,17 @@ func TestArgv_StartsWithDockerRunFlags(t *testing.T) {
 	if !hasArg(argv, "--rm") {
 		t.Error("missing --rm")
 	}
+}
+
+func TestArgv_TTY(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) { s.TTY = true })
 	if !hasArg(argv, "-it") {
-		t.Error("missing -it")
+		t.Error("TTY=true should produce -it")
+	}
+
+	argv = buildArgv(t)
+	if hasArg(argv, "-it") {
+		t.Error("TTY=false (default) should not produce -it")
 	}
 }
 
@@ -182,7 +275,7 @@ func TestArgv_HostnameEnvOverridesTOML(t *testing.T) {
 
 func TestArgv_MandatoryEnvVars(t *testing.T) {
 	argv := buildArgv(t, func(s *runner.RunSpec) {
-		s.CellCfg.Cell.GUI = boolPtr(true)
+		s.CellCfg.GUI.Enabled = boolPtr(true)
 	})
 	mustHaveEnv := []string{
 		"APP_NAME=myproject-3",
@@ -196,6 +289,22 @@ func TestArgv_MandatoryEnvVars(t *testing.T) {
 		if !hasArg(argv, e) {
 			t.Errorf("missing -e %s", e)
 		}
+	}
+}
+
+func TestArgv_CellNameEnvVar(t *testing.T) {
+	argv := buildArgv(t)
+	if !hasArg(argv, "DEVCELL_CELL_NAME=main") {
+		t.Errorf("missing -e DEVCELL_CELL_NAME=main in argv: %v", argv)
+	}
+}
+
+func TestArgv_CellNameEnvVar_Explicit(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.Config.CellName = "bunkhouse"
+	})
+	if !hasArg(argv, "DEVCELL_CELL_NAME=bunkhouse") {
+		t.Errorf("missing -e DEVCELL_CELL_NAME=bunkhouse in argv: %v", argv)
 	}
 }
 
@@ -349,6 +458,66 @@ func TestArgv_CfgVolumes_SinglePathShorthand(t *testing.T) {
 	}
 }
 
+func TestArgv_CfgVolumes_DedupAgainstBaseDir(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.CellCfg.Volumes = []cfg.VolumeMount{
+			{Mount: "/home/bob/myproject"},
+			{Mount: "/other/path:/other/path"},
+		}
+	})
+	count := 0
+	for i, a := range argv {
+		if a == "-v" && i+1 < len(argv) {
+			if strings.Contains(argv[i+1], "/home/bob/myproject:/home/bob/myproject") {
+				count++
+			}
+		}
+	}
+	if count != 1 {
+		t.Errorf("BaseDir identity mount should appear exactly once, got %d", count)
+	}
+	if !hasConsecutive(argv, "-v", "/other/path:/other/path") {
+		t.Errorf("non-duplicate volume should still be present")
+	}
+}
+
+func TestArgv_CfgVolumes_DedupTrailingSlash(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.CellCfg.Volumes = []cfg.VolumeMount{
+			{Mount: "/home/bob/myproject/"},
+		}
+	})
+	// Without dedup this would produce a third "-v /home/bob/myproject/:/home/bob/myproject/"
+	// that Docker rejects as "Duplicate mount point".
+	// The two standard mounts (identity + appname alias) should still be present.
+	withoutDedup := buildArgv(t, func(s *runner.RunSpec) {})
+	count := 0
+	for i, a := range argv {
+		if a == "-v" && i+1 < len(argv) && argv[i+1] == "/home/bob/myproject/:/home/bob/myproject/" {
+			count++
+		}
+	}
+	if count != 0 {
+		t.Errorf("trailing-slash user volume should be suppressed, but found %d", count)
+	}
+	// Standard mounts must be unchanged
+	stdCount := 0
+	for i, a := range argv {
+		if a == "-v" && i+1 < len(argv) && strings.HasPrefix(argv[i+1], "/home/bob/myproject:") {
+			stdCount++
+		}
+	}
+	baselineStd := 0
+	for i, a := range withoutDedup {
+		if a == "-v" && i+1 < len(withoutDedup) && strings.HasPrefix(withoutDedup[i+1], "/home/bob/myproject:") {
+			baselineStd++
+		}
+	}
+	if stdCount != baselineStd {
+		t.Errorf("standard mounts changed: got %d, want %d", stdCount, baselineStd)
+	}
+}
+
 // --- cfg mise ---
 
 func TestArgv_MiseEnvVars(t *testing.T) {
@@ -451,7 +620,7 @@ func TestArgv_CfgPortsMappedUDP(t *testing.T) {
 
 func TestArgv_CfgPortsEmpty(t *testing.T) {
 	argv := buildArgv(t, func(s *runner.RunSpec) {
-		s.CellCfg.Cell.GUI = boolPtr(false)
+		s.CellCfg.GUI.Enabled = boolPtr(false)
 	})
 	// No -p flags when no ports configured and GUI explicitly off
 	for i, a := range argv {
@@ -465,7 +634,7 @@ func TestArgv_CfgPortsEmpty(t *testing.T) {
 
 func TestArgv_VNCPort(t *testing.T) {
 	argv := buildArgv(t, func(s *runner.RunSpec) {
-		s.CellCfg.Cell.GUI = boolPtr(true)
+		s.CellCfg.GUI.Enabled = boolPtr(true)
 	})
 	if !hasConsecutive(argv, "-p", "0.0.0.0:350:5900") {
 		t.Errorf("expected -p 0.0.0.0:350:5900 in argv: %v", argv)
@@ -532,16 +701,18 @@ func TestArgv_UserArgsAppended(t *testing.T) {
 func boolPtr(b bool) *bool { return &b }
 
 func TestArgv_GUIEnabledByDefault(t *testing.T) {
-	// GUI defaults to true when not set (nil)
 	argv := buildArgv(t)
 	if !hasArg(argv, "DEVCELL_GUI_ENABLED=true") {
 		t.Errorf("expected DEVCELL_GUI_ENABLED=true by default: %v", argv)
+	}
+	if !hasArg(argv, "DEVCELL_WM=icewm") {
+		t.Errorf("expected DEVCELL_WM=icewm by default: %v", argv)
 	}
 }
 
 func TestArgv_GUIExplicitTrue(t *testing.T) {
 	argv := buildArgv(t, func(s *runner.RunSpec) {
-		s.CellCfg.Cell.GUI = boolPtr(true)
+		s.CellCfg.GUI.Enabled = boolPtr(true)
 	})
 	if !hasArg(argv, "DEVCELL_GUI_ENABLED=true") {
 		t.Errorf("expected DEVCELL_GUI_ENABLED=true in argv: %v", argv)
@@ -550,10 +721,24 @@ func TestArgv_GUIExplicitTrue(t *testing.T) {
 
 func TestArgv_GUIExplicitFalse(t *testing.T) {
 	argv := buildArgv(t, func(s *runner.RunSpec) {
-		s.CellCfg.Cell.GUI = boolPtr(false)
+		s.CellCfg.GUI.Enabled = boolPtr(false)
 	})
 	if hasArg(argv, "DEVCELL_GUI_ENABLED=true") {
 		t.Error("DEVCELL_GUI_ENABLED should not be present when gui=false")
+	}
+	for _, a := range argv {
+		if strings.HasPrefix(a, "DEVCELL_WM=") {
+			t.Errorf("DEVCELL_WM should not be present when gui=false, got %q", a)
+		}
+	}
+}
+
+func TestArgv_GUIWMFluxbox(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.CellCfg.GUI.WM = "fluxbox"
+	})
+	if !hasArg(argv, "DEVCELL_WM=fluxbox") {
+		t.Errorf("expected DEVCELL_WM=fluxbox in argv: %v", argv)
 	}
 }
 
@@ -825,10 +1010,10 @@ func TestImageMetadataFromInspect_LabelsPopulated(t *testing.T) {
 	m := runner.ImageMetadataFromInspectExport(
 		"2026-05-16T21:33:48Z",
 		map[string]string{
-			"devcell.built-with":                  "nix2container",
-			"devcell.stack":                       "ultimate",
-			"org.opencontainers.image.created":    "2026-05-16T21:33:48Z",
-			"org.opencontainers.image.revision":   "abc123",
+			"devcell.built-with":                "nix2container",
+			"devcell.stack":                     "ultimate",
+			"org.opencontainers.image.created":  "2026-05-16T21:33:48Z",
+			"org.opencontainers.image.revision": "abc123",
 		},
 		nil,
 	)
@@ -885,13 +1070,13 @@ func TestImageVersions_Format(t *testing.T) {
 	// The format string ImageVersions emits is "<commit> built <date>"
 	// when both fields are real, " built <date>" when only date, etc.
 	cases := []struct {
-		name   string
-		m      runner.ImageMetadata
+		name    string
+		m       runner.ImageMetadata
 		wantHas string // substring we expect in the formatted "user" output
 	}{
 		{"commit+date", runner.ImageMetadata{GitCommit: "abc123", BuildDate: "2026-05-16T21:33:48Z", BaseImage: "nix2container"}, "abc123 built 2026-05-16T21:33:48Z"},
-		{"date only",   runner.ImageMetadata{GitCommit: "unknown", BuildDate: "2026-05-16T21:33:48Z", BaseImage: "nix2container"}, "built 2026-05-16T21:33:48Z"},
-		{"epoch date",  runner.ImageMetadata{GitCommit: "abc123", BuildDate: "1970-01-01T00:00:00Z"}, "abc123"},
+		{"date only", runner.ImageMetadata{GitCommit: "unknown", BuildDate: "2026-05-16T21:33:48Z", BaseImage: "nix2container"}, "built 2026-05-16T21:33:48Z"},
+		{"epoch date", runner.ImageMetadata{GitCommit: "abc123", BuildDate: "1970-01-01T00:00:00Z"}, "abc123"},
 		{"placeholders only", runner.ImageMetadata{GitCommit: "unknown", BuildDate: "1970-01-01T00:00:00Z"}, ""},
 	}
 	for _, tc := range cases {
@@ -1039,6 +1224,30 @@ func TestDetectArch_IgnoresUnknownValue(t *testing.T) {
 	}
 }
 
+func TestImageExistsForPlatform_EmptyPlatformDelegatesToImageExists(t *testing.T) {
+	ctx := context.Background()
+	got := runner.ImageExistsForPlatform(ctx, "no-such-image:never", "")
+	if got {
+		t.Error("should return false for nonexistent image with empty platform")
+	}
+}
+
+func TestImageExistsForPlatform_WrongPlatformReturnsFalse(t *testing.T) {
+	ctx := context.Background()
+	got := runner.ImageExistsForPlatform(ctx, "no-such-image:never", "linux/mips64")
+	if got {
+		t.Error("should return false for nonexistent image even with specific platform")
+	}
+}
+
+func TestPullImageForPlatform_FailsForNonexistentImage(t *testing.T) {
+	ctx := context.Background()
+	err := runner.PullImageForPlatform(ctx, "no-such-registry.invalid/no-image:never", "linux/amd64", false)
+	if err == nil {
+		t.Error("should fail for nonexistent image")
+	}
+}
+
 func TestDockerPlatform_MatchesArch(t *testing.T) {
 	tests := []struct {
 		arch, want string
@@ -1051,5 +1260,293 @@ func TestDockerPlatform_MatchesArch(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("DockerPlatform(%q) = %q, want %q", tt.arch, got, tt.want)
 		}
+	}
+}
+
+// CELL-358: sudo works in cells only because the entrypoint installs a setuid
+// wrapper at /run/wrappers/bin/sudo. Docker's --security-opt no-new-privileges
+// sets PR_SET_NO_NEW_PRIVS, which makes the kernel ignore the setuid bit — the
+// wrapper would install cleanly and then fail at first use, in every cell at
+// once. This guards the invariant so nobody adds the flag as a hardening tweak
+// without understanding it breaks privilege escalation inside the cell.
+func TestArgv_NeverDisablesNewPrivileges(t *testing.T) {
+	argv := buildArgv(t)
+	for i, a := range argv {
+		if strings.Contains(a, "no-new-privileges") {
+			t.Errorf("argv[%d]=%q sets no-new-privileges — this neutralizes the setuid sudo wrapper and breaks sudo in every cell", i, a)
+		}
+	}
+}
+
+// --- Cross-tool agent mounts (CELL-448) ---
+
+func TestArgv_CrossToolAgentMounts(t *testing.T) {
+	argv := buildArgv(t)
+	// ~/.agents is mounted as a single ro bind (host has agents/ symlink → ~/.claude/agents)
+	if !hasConsecutive(argv, "-v", "/home/bob/.agents:/home/bob/.agents:ro") {
+		t.Errorf("expected ~/.agents:ro mount in argv: %v", argv)
+	}
+	// ~/.claude/agents should also be mounted at ~/.config/opencode/agents (OpenCode fallback)
+	if !hasConsecutive(argv, "-v", "/home/bob/.claude/agents:/home/bob/.config/opencode/agents:ro") {
+		t.Errorf("expected opencode fallback mount ~/.claude/agents → ~/.config/opencode/agents:ro in argv: %v", argv)
+	}
+}
+
+func TestArgv_CrossToolAgentMounts_DedupAgainstCfgVolumes(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.CellCfg.Volumes = []cfg.VolumeMount{
+			{Mount: "/custom:/home/bob/.config/opencode/agents"},
+		}
+	})
+	countOpencode := 0
+	for i, a := range argv {
+		if a == "-v" && i+1 < len(argv) {
+			if strings.HasSuffix(argv[i+1], "/.config/opencode/agents:ro") || strings.HasSuffix(argv[i+1], "/.config/opencode/agents") {
+				countOpencode++
+			}
+		}
+	}
+	if countOpencode != 1 {
+		t.Errorf("~/.config/opencode/agents mount should appear exactly once (dedup), got %d", countOpencode)
+	}
+}
+
+func TestArgv_SkipFlakeEnvVar(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) { s.SkipFlake = true })
+	if !hasConsecutive(argv, "-e", "DEVCELL_SKIP_FLAKE=1") {
+		t.Fatal("expected DEVCELL_SKIP_FLAKE=1 when SkipFlake is true")
+	}
+}
+
+func TestArgv_SkipFlakeAbsentByDefault(t *testing.T) {
+	argv := buildArgv(t)
+	for _, a := range argv {
+		if strings.Contains(a, "DEVCELL_SKIP_FLAKE") {
+			t.Fatalf("DEVCELL_SKIP_FLAKE should not appear by default, got: %s", a)
+		}
+	}
+}
+
+func TestArgv_TrustFlakeEnvVar(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) { s.TrustFlake = true })
+	if !hasConsecutive(argv, "-e", "DEVCELL_FLAKE_TRUST=1") {
+		t.Fatal("expected DEVCELL_FLAKE_TRUST=1 when TrustFlake is true")
+	}
+}
+
+func TestArgv_TrustFlakeAbsentByDefault(t *testing.T) {
+	argv := buildArgv(t)
+	for _, a := range argv {
+		if strings.Contains(a, "DEVCELL_FLAKE_TRUST") {
+			t.Fatalf("DEVCELL_FLAKE_TRUST should not appear by default, got: %s", a)
+		}
+	}
+}
+
+// --- Wireguard ---
+
+func TestArgv_WireguardEnabled_AddsNetAdmin(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.CellCfg.Wireguard = []cfg.WireguardEntry{
+			{Name: "test", Enabled: true, Config: "[Interface]\nAddress = 10.0.0.2/32"},
+		}
+	})
+	if !hasArg(argv, "--cap-add=NET_ADMIN") {
+		t.Fatal("expected --cap-add=NET_ADMIN when wireguard is enabled")
+	}
+}
+
+func TestArgv_WireguardEnabled_AddsDevNetTun(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.CellCfg.Wireguard = []cfg.WireguardEntry{
+			{Name: "test", Enabled: true, Config: "[Interface]\nAddress = 10.0.0.2/32"},
+		}
+	})
+	if !hasConsecutive(argv, "--device=/dev/net/tun", "") && !hasArg(argv, "--device=/dev/net/tun") {
+		t.Fatal("expected --device=/dev/net/tun when wireguard is enabled")
+	}
+}
+
+func TestArgv_WireguardEnabled_SetsSrcValidMark(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.CellCfg.Wireguard = []cfg.WireguardEntry{
+			{Name: "test", Enabled: true, Config: "[Interface]\nAddress = 10.0.0.2/32"},
+		}
+	})
+	if !hasConsecutive(argv, "--sysctl", "net.ipv4.conf.all.src_valid_mark=1") {
+		t.Fatal("expected --sysctl net.ipv4.conf.all.src_valid_mark=1 when wireguard is enabled")
+	}
+}
+
+func TestArgv_WireguardEnabled_SetsEnvVar(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.CellCfg.Wireguard = []cfg.WireguardEntry{
+			{Name: "test", Enabled: true, Config: "[Interface]\nAddress = 10.0.0.2/32"},
+		}
+	})
+	if !hasConsecutive(argv, "-e", "DEVCELL_WG_ENABLED=1") {
+		t.Fatal("expected DEVCELL_WG_ENABLED=1 env var when wireguard is enabled")
+	}
+}
+
+func TestArgv_WireguardEnabled_MountsWgDir(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.CellCfg.Wireguard = []cfg.WireguardEntry{
+			{Name: "test", Enabled: true, Config: "[Interface]\nAddress = 10.0.0.2/32"},
+		}
+	})
+	found := false
+	for _, a := range argv {
+		if strings.Contains(a, ".wg") && strings.Contains(a, ":ro") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected .wg/ directory mount (read-only) when wireguard is enabled")
+	}
+}
+
+func TestArgv_WireguardDisabled_NoNetAdmin(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.CellCfg.Wireguard = []cfg.WireguardEntry{
+			{Name: "test", Enabled: false, Config: "some config"},
+		}
+	})
+	if hasArg(argv, "--cap-add=NET_ADMIN") {
+		t.Fatal("--cap-add=NET_ADMIN should not appear when wireguard is disabled")
+	}
+}
+
+func TestArgv_WireguardDisabled_NoEnvVar(t *testing.T) {
+	argv := buildArgv(t)
+	for _, a := range argv {
+		if strings.Contains(a, "DEVCELL_WG_ENABLED") {
+			t.Fatalf("DEVCELL_WG_ENABLED should not appear by default, got: %s", a)
+		}
+	}
+}
+
+func TestArgv_WireguardEnabled_NoDuplicateNetAdmin(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.CellCfg.Docker.CapAdd = []string{"NET_ADMIN"}
+		s.CellCfg.Wireguard = []cfg.WireguardEntry{
+			{Name: "test", Enabled: true, Config: "[Interface]\nAddress = 10.0.0.2/32"},
+		}
+	})
+	count := 0
+	for _, a := range argv {
+		if a == "--cap-add=NET_ADMIN" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("expected exactly 1 --cap-add=NET_ADMIN, got %d", count)
+	}
+}
+
+func TestArgv_WireguardEnabled_Privileged_NoExtraCap(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.CellCfg.Docker.Privileged = true
+		s.CellCfg.Wireguard = []cfg.WireguardEntry{
+			{Name: "test", Enabled: true, Config: "[Interface]\nAddress = 10.0.0.2/32"},
+		}
+	})
+	if hasArg(argv, "--cap-add=NET_ADMIN") {
+		t.Fatal("--cap-add=NET_ADMIN should not appear when --privileged is set")
+	}
+}
+
+// ── PrepareWireguard ─────────────────────────────────────────────────────────
+
+func TestPrepareWireguard_WritesConfFiles(t *testing.T) {
+	dir := t.TempDir()
+	cellCfg := cfg.CellConfig{
+		Wireguard: []cfg.WireguardEntry{
+			{
+				Name:    "proton-pt",
+				Enabled: true,
+				Config:  "[Interface]\nAddress = 10.2.0.2/32\nDNS = 10.2.0.1\n\n[Peer]\nPublicKey = abc123\nEndpoint = 1.2.3.4:51820\nAllowedIPs = 0.0.0.0/0\n",
+			},
+		},
+	}
+	err := runner.PrepareWireguard(dir, cellCfg)
+	if err != nil {
+		t.Fatalf("PrepareWireguard: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, ".wg", "proton-pt.conf"))
+	if err != nil {
+		t.Fatalf("read conf: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "Address = 10.2.0.2/32") {
+		t.Error("conf missing Address")
+	}
+	if !strings.Contains(content, "PostUp = wg set %i private-key /run/secrets/wg-private-key") {
+		t.Error("conf missing PostUp for private key file")
+	}
+}
+
+func TestPrepareWireguard_StripsPrivateKey(t *testing.T) {
+	dir := t.TempDir()
+	cellCfg := cfg.CellConfig{
+		Wireguard: []cfg.WireguardEntry{
+			{
+				Name:    "test",
+				Enabled: true,
+				Config:  "[Interface]\nPrivateKey = SECRET\nAddress = 10.0.0.2/32\n\n[Peer]\nPublicKey = abc\nEndpoint = 1.2.3.4:51820\nAllowedIPs = 0.0.0.0/0\n",
+			},
+		},
+	}
+	if err := runner.PrepareWireguard(dir, cellCfg); err != nil {
+		t.Fatalf("PrepareWireguard: %v", err)
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, ".wg", "test.conf"))
+	if strings.Contains(string(data), "SECRET") {
+		t.Fatal("conf must not contain the PrivateKey value")
+	}
+}
+
+func TestPrepareWireguard_SkipsDisabled(t *testing.T) {
+	dir := t.TempDir()
+	cellCfg := cfg.CellConfig{
+		Wireguard: []cfg.WireguardEntry{
+			{Name: "off", Enabled: false, Config: "[Interface]\nAddress = 10.0.0.2/32"},
+		},
+	}
+	if err := runner.PrepareWireguard(dir, cellCfg); err != nil {
+		t.Fatalf("PrepareWireguard: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".wg", "off.conf")); err == nil {
+		t.Fatal("disabled entry should not produce a .conf file")
+	}
+}
+
+func TestPrepareWireguard_MultipleEntries(t *testing.T) {
+	dir := t.TempDir()
+	cellCfg := cfg.CellConfig{
+		Wireguard: []cfg.WireguardEntry{
+			{Name: "a", Enabled: true, Config: "[Interface]\nAddress = 10.0.0.2/32\n\n[Peer]\nPublicKey = k1\nEndpoint = 1.1.1.1:51820\nAllowedIPs = 0.0.0.0/0\n"},
+			{Name: "b", Enabled: true, Config: "[Interface]\nAddress = 10.0.0.3/32\n\n[Peer]\nPublicKey = k2\nEndpoint = 2.2.2.2:51820\nAllowedIPs = 0.0.0.0/0\n"},
+		},
+	}
+	if err := runner.PrepareWireguard(dir, cellCfg); err != nil {
+		t.Fatalf("PrepareWireguard: %v", err)
+	}
+	for _, name := range []string{"a", "b"} {
+		if _, err := os.Stat(filepath.Join(dir, ".wg", name+".conf")); err != nil {
+			t.Errorf("expected %s.conf to exist", name)
+		}
+	}
+}
+
+func TestPrepareWireguard_NoEntries(t *testing.T) {
+	dir := t.TempDir()
+	cellCfg := cfg.CellConfig{}
+	if err := runner.PrepareWireguard(dir, cellCfg); err != nil {
+		t.Fatalf("PrepareWireguard: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".wg")); err == nil {
+		t.Fatal(".wg dir should not be created when there are no entries")
 	}
 }

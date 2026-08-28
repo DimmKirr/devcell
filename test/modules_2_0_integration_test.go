@@ -23,6 +23,7 @@ import (
 
 	"github.com/DimmKirr/devcell/internal/cfg"
 	"github.com/DimmKirr/devcell/internal/scaffold"
+	"github.com/DimmKirr/devcell/internal/testutil"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
@@ -252,11 +253,7 @@ func TestModules2_FreshVolumeStartsCleanly(t *testing.T) {
 // `test/results/<datetime>-<sha>/TestModules2_GlobalTOMLOverrideViaHOME/`
 // for post-run inspection.
 func TestModules2_GlobalTOMLOverrideViaHOME(t *testing.T) {
-	// All generated artifacts go under the per-run results dir.
-	outDir := filepath.Join(testRunDir(), "TestModules2_GlobalTOMLOverrideViaHOME")
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		t.Fatalf("mkdir output: %v", err)
-	}
+	outDir := testutil.TestResultsDir(t, hostBaseDirFn)
 
 	// Fake HOME with a global config.
 	fakeHome := filepath.Join(outDir, "home")
@@ -358,10 +355,7 @@ func TestModules2_E2E_GlobalAndProjectModulesBothInstalled(t *testing.T) {
 		innerBinary = "mailslurp-mcp"
 	)
 
-	outDir := filepath.Join(testRunDir(), "TestModules2_E2E_GlobalAndProjectModulesBothInstalled")
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		t.Fatalf("mkdir output: %v", err)
-	}
+	outDir := testutil.TestResultsDir(t, hostBaseDirFn)
 
 	// ── Step 1: write outer (global) + inner (project) TOMLs ────────────
 	fakeHome := filepath.Join(outDir, "home")
@@ -508,10 +502,7 @@ func TestModules2_LongE2E_CleanVolume_TwoModulesFromGlobalAndProject(t *testing.
 		innerBinary = "mailslurp-mcp"
 	)
 
-	outDir := filepath.Join(testRunDir(), t.Name())
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		t.Fatalf("mkdir output: %v", err)
-	}
+	outDir := testutil.TestResultsDir(t, hostBaseDirFn)
 
 	// ── Fresh empty volume ──────────────────────────────────────────────────
 	volName := "devcell-test-cleanvol-" + shortSHA()
@@ -647,10 +638,7 @@ func TestModules2_LongE2E_UpstreamGithub_TwoModulesFromGlobalAndProject(t *testi
 		innerBinary = "mailslurp-mcp"
 	)
 
-	outDir := filepath.Join(testRunDir(), t.Name())
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		t.Fatalf("mkdir output: %v", err)
-	}
+	outDir := testutil.TestResultsDir(t, hostBaseDirFn)
 
 	volName := "devcell-test-upstream-" + shortSHA()
 	_ = osexec.Command("docker", "volume", "rm", "-f", volName).Run()

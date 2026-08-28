@@ -29,16 +29,20 @@ func TestContainerContext_DescribesMountsAndConstraints(t *testing.T) {
 	ctx := ContainerContext(sampleConfig(), cellCfg)
 
 	checks := map[string]string{
-		"container identity":  "Docker container",
-		"project alias":       "/devcell-85",
-		"host base dir":       "/Users/dmitry/dev/dimmkirr/devcell",
-		"same filesystem":     "same filesystem",
-		"persistent home":     "/home/dmitry",
-		"skills mount":        ".claude/skills",
-		"user volume":         "/run/secrets",
-		"user volume ro":      "read-only",
-		"host mapping prefix": "host: /Users/dmitry/dev/dimmkirr/devcell",
-		"nix constraint":      "/opt/devcell",
+		"container identity": "Docker container",
+		"project alias":      "/devcell-85",
+		"host base dir":      "/Users/dmitry/dev/dimmkirr/devcell",
+		"same filesystem":    "same filesystem",
+		"persistent home":    "/home/dmitry",
+		"skills mount":       ".claude/skills",
+		"user volume":        "/run/secrets",
+		"user volume ro":     "read-only",
+		"host path mapping":  "Host path mapping",
+		"nix constraint":     "/opt/devcell",
+		"nix ad-hoc install": "nix profile install",
+		"nix PATH layout":    "PATH layout",
+		"nix ld libs":        "NIX_LD_LIBRARY_PATH",
+		"nix cgo":            "CGO_CFLAGS",
 	}
 
 	for name, want := range checks {
@@ -224,9 +228,9 @@ func TestResolveSystemPrompt_FileNotFound(t *testing.T) {
 	}
 }
 
-func TestAssembleSystemPrompt_PrependsContainerContext(t *testing.T) {
-	out, err := AssembleSystemPrompt(sampleConfig(), cfg.CellConfig{}, ResolveOpts{
-		FlagInline: "be terse",
+func TestAssembleOverlayPrompt_PrependsContainerContext(t *testing.T) {
+	out, err := AssembleOverlayPrompt(sampleConfig(), cfg.CellConfig{}, ResolveOpts{
+		AppendFlagInline: "be terse",
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -244,8 +248,8 @@ func TestAssembleSystemPrompt_PrependsContainerContext(t *testing.T) {
 	}
 }
 
-func TestAssembleSystemPrompt_EmptyResolverReturnsContextOnly(t *testing.T) {
-	out, err := AssembleSystemPrompt(sampleConfig(), cfg.CellConfig{}, ResolveOpts{})
+func TestAssembleOverlayPrompt_EmptyResolverReturnsContextOnly(t *testing.T) {
+	out, err := AssembleOverlayPrompt(sampleConfig(), cfg.CellConfig{}, ResolveOpts{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

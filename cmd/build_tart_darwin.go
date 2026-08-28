@@ -14,6 +14,7 @@ import (
 
 	"github.com/DimmKirr/devcell/internal/runner"
 	"github.com/DimmKirr/devcell/internal/ux"
+	"github.com/DimmKirr/devcell/internal/version"
 	"github.com/DimmKirr/devcell/internal/vm/tart"
 )
 
@@ -22,7 +23,7 @@ import (
 // Mirrors the Docker build flow: init scaffolds config/keys (no images),
 // build creates and provisions the image. The VM is booted for provisioning
 // and shut down when done — cell shell starts it again for the session.
-func runBuildTart(cellName, hostHome, projectDir, stack string, modules []string, nixhomePath string, force, noCache, dryRun bool, tartOCIImage string) error {
+func runBuildTart(cellName, hostHome, projectDir, stack string, modules []string, force, noCache, dryRun bool, tartOCIImage string) error {
 	cfg := tart.BuildConfig{
 		CellName: cellName,
 		HomeDir:  hostHome,
@@ -37,18 +38,12 @@ func runBuildTart(cellName, hostHome, projectDir, stack string, modules []string
 	templateName := tart.TemplateVMName(stack, modules)
 	buildVM := "devcell-build-tmp"
 
-	// Resolve nixhome to absolute — tart --dir requires paths the host can resolve.
-	if !filepath.IsAbs(nixhomePath) {
-		abs, err := filepath.Abs(nixhomePath)
-		if err == nil {
-			nixhomePath = abs
-		}
-	}
+	nixhomeRef := runner.ResolveNixhomeRef(version.Version)
 
 	ux.Debugf("build config: cell=%s stack=%s cpus=%d mem=%dGB sshPort=%d",
 		cfg.CellName, cfg.Stack, cfg.CPUs, cfg.MemoryGB, cfg.SSHPort)
 	ux.Debugf("template: %s  buildVM: %s  force=%v noCache=%v", templateName, buildVM, force, noCache)
-	ux.Debugf("nixhome: %s  projectDir: %s", nixhomePath, projectDir)
+	ux.Debugf("nixhome: %s  projectDir: %s", nixhomeRef, projectDir)
 
 	if dryRun {
 		fmt.Printf("Would build macOS VM template: %s\n", templateName)
@@ -69,7 +64,7 @@ func runBuildTart(cellName, hostHome, projectDir, stack string, modules []string
 	if _, err := os.Stat(sshPaths.PrivateKey); err != nil {
 		ux.Debugf("SSH key not found at %s — running auto-init", sshPaths.PrivateKey)
 		fmt.Println(ux.StyleSection.Render(" SSH keys not found — running init"))
-		if initErr := runInitTart(cellName, hostHome, projectDir, stack, nixhomePath, false, false); initErr != nil {
+		if initErr := runInitTart(cellName, hostHome, projectDir, stack, false, false); initErr != nil {
 			return fmt.Errorf("auto-init failed: %w", initErr)
 		}
 	}
@@ -92,7 +87,7 @@ func runBuildTart(cellName, hostHome, projectDir, stack string, modules []string
 
 	// --- Platform compatibility preflight ---
 	if err := pr.PhaseDetailed("Platform compatibility check", func() (string, error) {
-		flakeRef := "path:" + nixhomePath
+		flakeRef := runner.ResolveNixhomeRef(version.Version)
 		if err := runner.PreflightPlatformCheck(ctx, flakeRef, "aarch64-darwin"); err != nil {
 			return "", err
 		}
@@ -190,15 +185,9 @@ func runBuildTart(cellName, hostHome, projectDir, stack string, modules []string
 		getOut, _ := exec.CommandContext(ctx, "tart", "get", buildVM).CombinedOutput()
 		ux.Debugf("tart get %s (pre-boot):\n%s", buildVM, string(getOut))
 	}
-	if info, err := os.Stat(nixhomePath); err != nil {
-		ux.Debugf("WARNING: nixhomePath stat failed: %v", err)
-	} else {
-		ux.Debugf("nixhomePath verified: dir=%v mode=%s", info.IsDir(), info.Mode())
-	}
-
 	// --- Phase 4: Boot VM ---
 	sharedDirs := map[string]string{
-		"nixhome": nixhomePath,
+		"nixhome": nixhomeRef,
 		"home":    cellHome,
 	}
 	disks := []string{nixVolumePath}

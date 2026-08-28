@@ -170,6 +170,14 @@ func (ps *ProgressSpinner) stop() {
 	<-ps.stopped
 }
 
+// Warn stops the spinner and prints a warning row (⚠ instead of ✓).
+func (ps *ProgressSpinner) Warn(message string) *ProgressSpinner {
+	ps.stop()
+	elapsed := time.Since(ps.start).Round(time.Millisecond)
+	fmt.Printf("\r %s %s %s\r\n", prefix(StyleWarning, "⚠"), message, StyleMuted.Render(elapsed.String()))
+	return ps
+}
+
 // Fail stops the spinner and prints a failure message.
 func (ps *ProgressSpinner) Fail(message string) *ProgressSpinner {
 	ps.stop()
@@ -325,12 +333,13 @@ func CloseDebugLog() {
 func Debugf(format string, a ...any) {
 	if Verbose {
 		msg := fmt.Sprintf(format, a...)
-		fmt.Printf(" %s %s\n", prefix(StyleDebug, "DBG"), msg)
+		ts := time.Now().UTC().Format("2006-01-02T15:04:05Z")
+		fmt.Printf(" %s %s %s\n", prefix(StyleDebug, "DBG"), ts, msg)
 		debugLogMu.Lock()
 		f := debugLogFile
 		debugLogMu.Unlock()
 		if f != nil {
-			fmt.Fprintln(f, msg)
+			fmt.Fprintf(f, "%s %s\n", ts, msg)
 		}
 	}
 }

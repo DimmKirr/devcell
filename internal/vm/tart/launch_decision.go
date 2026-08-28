@@ -4,7 +4,7 @@ package tart
 type LaunchAction int
 
 const (
-	ActionUseLocal  LaunchAction = iota // disk image exists locally
+	ActionUseLocal LaunchAction = iota // disk image exists locally
 	ActionBuild                        // build from IPSW (full init + provision)
 	ActionDryRun                       // dry-run mode, no VM work
 	ActionPullTart                     // pull pre-built image from Tart OCI registry

@@ -11,8 +11,12 @@
 # Modules merge UNION with global ~/.config/devcell/devcell.toml — set explicit empty (modules = []) to clear global.
 # modules = ["electronics"]
 #
-# gui = true
 # timezone = "Europe/Prague"
+
+# GUI desktop (Xvfb + VNC + window manager).
+# [gui]
+# enabled = true
+# wm = "icewm"   # or "fluxbox"
 
 # Project context injected into all AI agents (Claude, Codex, OpenCode).
 # Sits on top of CLAUDE.md — use for personal/local instructions not checked into the repo.

@@ -46,7 +46,7 @@ Add-on modules (set `modules = ["android"]` in `.devcell.toml`):
 
 | Module | What's inside |
 |---|---|
-| **android** | ADB + fastboot (all platforms), Android SDK + build-tools + emulator + apktool + jadx (x86_64 only) |
+| **android** | ADB + fastboot and the full app RE toolkit — decompilers (jadx, apktool, cfr, dex2jar, enjarify, procyon, androguard), APK acquisition/signing (apkeep, bundletool, apksigner), static triage (apkleaks, apkid, quark-engine), dynamic analysis (mitmproxy, mitmproxy2swagger, frida-tools, jnitrace, scrcpy), OTA/boot-image tools — all platforms; Android SDK + build-tools + emulator (x86_64 only) |
 | **desktop** | GUI desktop: VNC, RDP, Fluxbox, PulseAudio |
 | **scraping** | Playwright stealth scripts, anti-fingerprint Chromium config |
 | **infra** | Cloud CLI tools: AWS, GCP, Azure |
@@ -72,6 +72,59 @@ vagrant_box = "utm/bookworm"
 ```
 
 On first run the CLI scaffolds a `Vagrantfile`, starts the VM, installs Nix single-user, and applies the same home-manager configuration used by Docker images. Subsequent runs detect whether provisioning is needed and skip it if the binary is already present.
+
+## libvirt engine (host VMs from inside a cell)
+
+Inside a Docker cell on a Mac there is no HVF and no `/dev/kvm`, so `--engine=qemu` falls back to TCG software emulation (10–20× slower). The libvirt engine instead drives QEMU **on the macOS host** — with HVF acceleration — through libvirtd, reached from the cell over `qemu+tcp://host.docker.internal/session`.
+
+Scope: libvirt mode boots and connects to an **already-prepped template**. Build the template once with `cell build --engine=qemu` on the macOS host; `cell build --engine=libvirt` intentionally refuses (CELL-379 tracks install-over-libvirt).
+
+One-time host setup (macOS):
+
+```bash
+brew install libvirt
+brew services start libvirt
+```
+
+Enable TCP listen for the session daemon in `libvirtd.conf` (usually `/opt/homebrew/etc/libvirt/libvirtd.conf`):
+
+```
+listen_tcp = 1
+listen_addr = "127.0.0.1"
+auth_tcp = "none"
+```
+
+> **Security note:** `qemu+tcp` with `auth_tcp = "none"` is unauthenticated — anyone who can reach the port can control your VMs. Keep `listen_addr` on loopback/the Docker bridge only. A hardened `qemu+ssh://` transport is planned; until then treat this as a local-development convenience.
+
+Then from any cell:
+
+```bash
+cell shell --engine=libvirt            # boot the template on the host, SSH in
+cell shell --engine=libvirt --dry-run  # print the resolved URI + domain XML
+```
+
+**Auto-default:** inside a Docker cell on a Mac (container + `host.docker.internal` resolves + no usable `/dev/kvm`), `--engine=qemu` automatically upgrades to libvirt remote mode — local qemu could only mean TCG. Pin the in-container path with `--engine=qemu --local`.
+
+**Project files:** the guest's `~\<project>` is synced over the session's SSH channel — pushed before your agent starts (`push`, default), optionally pulled back on exit (`two-way`), or disabled (`off`).
+
+Configuration (`.devcell.toml`):
+
+```toml
+[cell]
+engine = "libvirt"
+libvirt_uri = "qemu+tcp://host.docker.internal/session"  # default; env: DEVCELL_LIBVIRT_URI
+qemu_project_sync = "push"  # push (default) | two-way | off; env: DEVCELL_QEMU_PROJECT_SYNC
+
+# Container→host path rewrites for the domain XML: QEMU on the host must
+# open disks/firmware at HOST paths, not the cell's bind-mount paths.
+[cell.libvirt_path_map]
+"/devcell-155" = "/Users/dmitry/dev/dimmkirr/devcell"
+"/home/dmitry" = "/Users/dmitry"
+```
+
+The host UEFI firmware defaults to brew's `/opt/homebrew/share/qemu/edk2-aarch64-code.fd`; override with `DEVCELL_LIBVIRT_FIRMWARE`.
+
+Verify connectivity with `virsh -c qemu+tcp://host.docker.internal/session list --all` from inside the cell, or just run any libvirt-engine command — the preflight maps each failure (port closed, wrong service, auth enabled) to the fix.
 
 ## MCP servers
 
@@ -130,7 +183,7 @@ Start simple, go deeper when you need to.
 
 **Extend a stack** - edit `.devcell/flake.nix` to add nix packages. Run `cell build` to apply.
 
-**Fork nixhome** - fork the [nixhome](https://github.com/DimmKirr/devcell/tree/main/nixhome) repo, point your flake to your fork. Upstream updates still merge cleanly.
+**Fork nixhome** - fork the [nixhome](https://github.com/devcell-sh/community-home) repo, point your flake to your fork. Upstream updates still merge cleanly.
 
 <details>
 <summary><strong>Development</strong></summary>

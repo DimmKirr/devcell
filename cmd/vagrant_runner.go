@@ -20,6 +20,7 @@ import (
 //  2. Ensures the VM is up (skipped in dry-run mode)
 //  3. Execs: vagrant ssh -- -t [env KEY=VAL...] <binary> <defaultFlags...> <userArgs...>
 //     with cmd.Dir=vagrantDir so vagrant locates the correct Vagrantfile
+//
 // stackNeedsGUI reports whether the stack + modules configuration includes
 // desktop/GUI components. Only "ultimate" and "electronics" stacks include
 // the desktop module; it can also be added explicitly via extra modules.
@@ -116,7 +117,7 @@ func runVagrantAgent(
 	}
 
 	// 2c. Start GUI services when the stack includes desktop and GUI is enabled.
-	guiNeeded := cellCfg.Cell.ResolvedGUI() && stackNeedsGUI(stack, cellCfg.Cell.Modules)
+	guiNeeded := cellCfg.GUI.ResolvedEnabled() && stackNeedsGUI(stack, cellCfg.Cell.Modules)
 	if guiNeeded {
 		guiCtx, guiCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer guiCancel()

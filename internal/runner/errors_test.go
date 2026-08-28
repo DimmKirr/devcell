@@ -89,3 +89,29 @@ func TestTranslateError_NilSafe(t *testing.T) {
 		t.Errorf("nil error should return empty string, got: %s", got)
 	}
 }
+
+// TestTranslateError_MissingKVMDevice: `[cell] kvm = true` on a daemon host
+// without nested virtualization. The raw text is verbatim from docker 29.2.1.
+func TestTranslateError_MissingKVMDevice(t *testing.T) {
+	raw := errors.New(`docker: Error response from daemon: error gathering device information while adding custom device "/dev/kvm": no such file or directory`)
+	got := runner.TranslateError(raw)
+	lower := strings.ToLower(got)
+	if !strings.Contains(lower, "kvm") {
+		t.Errorf("expected mention of KVM, got: %s", got)
+	}
+	if !strings.Contains(lower, "nested") {
+		t.Errorf("expected mention of nested virtualization as the cause, got: %s", got)
+	}
+	if !strings.Contains(lower, "kvm = false") && !strings.Contains(lower, "devcell_kvm=0") {
+		t.Errorf("expected an opt-out hint, got: %s", got)
+	}
+}
+
+// A non-KVM custom device must not be mistranslated into KVM advice.
+func TestTranslateError_MissingOtherDeviceIsNotKVMAdvice(t *testing.T) {
+	raw := errors.New(`docker: Error response from daemon: error gathering device information while adding custom device "/dev/ttyUSB0": no such file or directory`)
+	got := runner.TranslateError(raw)
+	if strings.Contains(strings.ToLower(got), "kvm") {
+		t.Errorf("non-KVM device error must not produce KVM advice, got: %s", got)
+	}
+}

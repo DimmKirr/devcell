@@ -39,7 +39,7 @@ func TestParseDockerPublishedPorts_Empty(t *testing.T) {
 func TestResolveAvailablePort_BumpsOffDockerAllocated(t *testing.T) {
 	taken := map[int]struct{}{10089: {}}
 	// preferred "89" → <1024 → hoist +10000 → 10089, which is in `taken`.
-	got := resolveAvailablePort("89", taken)
+	got := ResolveAvailablePort("89", taken)
 	if got == "10089" {
 		t.Fatalf("should have bumped off docker-allocated 10089, got %q", got)
 	}
@@ -51,7 +51,7 @@ func TestResolveAvailablePort_BumpsOffDockerAllocated(t *testing.T) {
 
 func TestResolveAvailablePort_EmptyTakenPreservesBehavior(t *testing.T) {
 	// 4250 is ≥1024 and almost certainly free in test → unchanged.
-	got := resolveAvailablePort("4250", map[int]struct{}{})
+	got := ResolveAvailablePort("4250", map[int]struct{}{})
 	if got != "4250" {
 		t.Errorf("empty taken set should preserve net.Listen behavior: want 4250, got %q", got)
 	}

@@ -1,0 +1,85 @@
+Registry	Root	Key	Name	Value	Component_
+s72	i2	l255	L255	L0	s72
+Registry	Registry
+regRFkGemxKr92mvlYMW_x9DmdYXi8	2	SOFTWARE\Microsoft\Windows\CurrentVersion\Lxss\MSI	InstallLocation	[INSTALLDIR]	wsl
+regQ6GAjLavAOafXIgLfkZbRwDZxDc	2	SOFTWARE\Microsoft\Windows\CurrentVersion\Lxss\MSI	ProductCode	[ProductCode]	wsl
+regocgwZ3596NVSnrtQbfWiSsjTm6U	2	SOFTWARE\Microsoft\Windows\CurrentVersion\Lxss\MSI	Version	2.7.11.0	wsl
+regz3vxvanHh7I3zihOf0W8Hma68zM	2	SOFTWARE\Classes\CLSID\{B2B4A4D1-2754-4140-A2EB-9A76D9D7CDC6}		Linux	explorerplan9shortcut
+reghO7vObrb7ciJTbK0_tc22eYYISI	2	SOFTWARE\Classes\CLSID\{B2B4A4D1-2754-4140-A2EB-9A76D9D7CDC6}	SortOrderIndex	#119	explorerplan9shortcut
+regntjJukBhD39gYEV.hSoP3fn9sE4	2	SOFTWARE\Classes\CLSID\{B2B4A4D1-2754-4140-A2EB-9A76D9D7CDC6}	System.IsPinnedToNameSpaceTree	#1	explorerplan9shortcut
+regHP_hbYnhiG7H2Pjso5B40Y27Bu0	2	SOFTWARE\Classes\CLSID\{B2B4A4D1-2754-4140-A2EB-9A76D9D7CDC6}\DefaultIcon		[System64Folder]wsl.exe,-1	explorerplan9shortcut
+regN68BjM7NWXTsG9cF9Fq.2FvXSAM	2	SOFTWARE\Classes\CLSID\{B2B4A4D1-2754-4140-A2EB-9A76D9D7CDC6}\InProcServer32		[System64Folder]windows.storage.dll	explorerplan9shortcut
+regyZwVjIyHRwI9LqFeviVxLXHasOc	2	SOFTWARE\Classes\CLSID\{B2B4A4D1-2754-4140-A2EB-9A76D9D7CDC6}\ShellFolder	Attributes	#2692743245	explorerplan9shortcut
+reggLNXESJnGBox2HF2LIiq9dESujo	2	SOFTWARE\Classes\CLSID\{B2B4A4D1-2754-4140-A2EB-9A76D9D7CDC6}\ShellFolder	FolderValueFlags	#40	explorerplan9shortcut
+regP_GnOBGMXkliMnfRBINtojZROag	2	SOFTWARE\Classes\CLSID\{B2B4A4D1-2754-4140-A2EB-9A76D9D7CDC6}\Instance	CLSID	{4FE04BFD-85B9-49DD-B914-F4C9556B9DA6}	explorerplan9shortcut
+regBZ.laOfolirN4s27Aevb6K.qow0	2	SOFTWARE\Classes\CLSID\{B2B4A4D1-2754-4140-A2EB-9A76D9D7CDC6}\Instance\InitPropertyBag	DisplayType	#2	explorerplan9shortcut
+regC8Uy6f0oWFH7knuTiu2bNQEODxM	2	SOFTWARE\Classes\CLSID\{B2B4A4D1-2754-4140-A2EB-9A76D9D7CDC6}\Instance\InitPropertyBag	EnumObjectsTelemetryValue	WSL	explorerplan9shortcut
+reg2FyiRg9DN3CIxORSPMPwLKZf9.I	2	SOFTWARE\Classes\CLSID\{B2B4A4D1-2754-4140-A2EB-9A76D9D7CDC6}\Instance\InitPropertyBag	Provider	Plan 9 Network Provider	explorerplan9shortcut
+regvrPBXFcCYEzxwOBcSTqYBNQImeA	2	SOFTWARE\Classes\CLSID\{B2B4A4D1-2754-4140-A2EB-9A76D9D7CDC6}\Instance\InitPropertyBag	ResName	\\wsl.localhost	explorerplan9shortcut
+regF48TFtecurAyhoZVvZlyjGpkoW0	2	SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\HideDesktopIcons\NewStartPanel	{B2B4A4D1-2754-4140-A2EB-9A76D9D7CDC6}	#1	explorerplan9shortcut
+regDAeL5wpONzRT.k8tlVw2XMFmojE	2	SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Desktop\NameSpace\{B2B4A4D1-2754-4140-A2EB-9A76D9D7CDC6}		Linux	explorerplan9shortcut
+reg1XZMWkMUhBBj2EpDQjlwgBpNxbs	2	SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\IdListAliasTranslations\WSL	Target	::{B2B4A4D1-2754-4140-A2EB-9A76D9D7CDC6}	explorerplan9shortcut
+regQYLRBUMVxD78dmlTBBe2vnax7kY	2	SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\IdListAliasTranslations\WSL	Source	\\wsl.localhost	explorerplan9shortcut
+regQnnI_90wrcIauzZxfDheiXzGjd8	2	SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\IdListAliasTranslations\WSLLegacy	Target	::{B2B4A4D1-2754-4140-A2EB-9A76D9D7CDC6}	explorerplan9shortcut
+regwpG13L6stBrTjOP6AUDP6nLjDqk	2	SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\IdListAliasTranslations\WSLLegacy	Source	\\wsl$	explorerplan9shortcut
+regGq2e8gXtkjx52NTb9zR6HsGZwTs	2	SOFTWARE\Classes\Directory\shell\WSL		@wsl.exe,-2	explorershell
+regxPOpVy523wLhiZ18VKLETfPnHyU	2	SOFTWARE\Classes\Directory\shell\WSL	Extended		explorershell
+regNEDkutUtyE4EpwO331h6d5hznOI	2	SOFTWARE\Classes\Directory\shell\WSL	NoWorkingDirectory		explorershell
+reg06ImyE3_BTn53YuBz2Ust7.XUN4	2	SOFTWARE\Classes\Directory\shell\WSL\command		wsl.exe --cd "%V"	explorershell
+regOVcvEB1V5JvwusW4zju07I6tJTc	2	SOFTWARE\Classes\Directory\Background\shell\WSL		@wsl.exe,-2	explorershell
+regwVCJu_2BQGvyC5lTE.yEMr0aVao	2	SOFTWARE\Classes\Directory\Background\shell\WSL	Extended		explorershell
+regDaeZ0BhYKutymIrUwmVThE2o3uI	2	SOFTWARE\Classes\Directory\Background\shell\WSL	NoWorkingDirectory		explorershell
+regLvciBBuFfCaSZ4kaw3Qgw7O2b6M	2	SOFTWARE\Classes\Directory\Background\shell\WSL\command		wsl.exe --cd "%V"	explorershell
+regpuYiILf6GGtTvyvWBnWZMXjUfPo	2	SOFTWARE\Classes\Drive\shell\WSL		@wsl.exe,-2	explorershell
+reguXjtZ8BwkfRqQOcpluiZvJKXiew	2	SOFTWARE\Classes\Drive\shell\WSL	Extended		explorershell
+rega5CrNHon_BJdPnTJaILV1WeX7C8	2	SOFTWARE\Classes\Drive\shell\WSL	NoWorkingDirectory		explorershell
+regDOn1Ig4Vme7fUiuOQps68v.jgZo	2	SOFTWARE\Classes\Drive\shell\WSL\command		wsl.exe --cd "%V"	explorershell
+regY7Dxe4u3Xg2pH8I6mh3rpqSVzVA	0	WSLDistributionTar\shell\open		open	explorershell
+regEfsTtC3aalzZnHVDWiKqG9OtFxQ	0	WSLDistributionTar\shell\open\command		"[#wsl.exe]" --install --prompt-before-exit --from-file "%1"	explorershell
+regbM3oz.6H77SswRPLmMN_dfkh7sU	0	.wsl		WSLDistributionTar	explorershell
+regYtyxdhv0efeu9UZdb2KpN6.A46U	0	WSLDistributionTar		WSL tar distribution	explorershell
+regt.cnvtrKRWwyg_iU83mTTMNdn0A	0	WSLDistributionTar\DefaultIcon		"[#wsl.exe]"	explorershell
+regdQzqVDJCfI6l3.2D5UnOe4DCPlk	0	Interface\{38541BDC-F54F-4CEB-85D0-37F0F3D2617E}		ILxssUserSession	wslservice
+regBDMwM.Tts7HlsLyz5z_128H4CIQ	0	Interface\{38541BDC-F54F-4CEB-85D0-37F0F3D2617E}\ProxyStubClsid32		{4EA0C6DD-E9FF-48E7-994E-13A31D10DC60}	wslservice
+regr6bwT4PcwEsxU7tj42tH4dNWiHU	0	CLSID\{4EA0C6DD-E9FF-48E7-994E-13A31D10DC60}		PSFactoryBuffer	wslservice
+regBxaYsdER_Zmlq7AKMmKnVRwWm80	0	CLSID\{4EA0C6DD-E9FF-48E7-994E-13A31D10DC60}\InProcServer32		[INSTALLDIR]wslserviceproxystub.dll	wslservice
+regeh09Mr7VmUTvctc67ClBDVqcgNk	0	CLSID\{4EA0C6DD-E9FF-48E7-994E-13A31D10DC60}\InProcServer32	ThreadingModel	Both	wslservice
+regGVtom5F0jFuEkl4Myqz_Qc32zjI	0	AppID\{370121D2-AA7E-4608-A86D-0BBAB9DA1A60}	AccessPermission	#x01000480580000006800000000000000140000000200440003000000000014000B00000001010000000000050B000000000014000B00000001010000000000050A000000000014000B0000000101000000000005120000000102000000000005200000002002000001020000000000052000000020020000	wslservice
+regj3i3BO1vGCRm6XbDTn0_xbvB58E	0	AppID\{370121D2-AA7E-4608-A86D-0BBAB9DA1A60}	LaunchPermission	#x01000480580000006800000000000000140000000200440003000000000014000B00000001010000000000050B000000000014000B00000001010000000000050A000000000014000B0000000101000000000005120000000102000000000005200000002002000001020000000000052000000020020000	wslservice
+regcgnq9OpRvlUIIFD9PKmOez1blRE	0	AppID\{370121D2-AA7E-4608-A86D-0BBAB9DA1A60}	LocalService	WSLService	wslservice
+regfNOyFJBo1Se.6lBontfvm9BxsbA	0	CLSID\{a9b7a1b9-0671-405c-95f1-e0612cb4ce7e}	AppId	{370121D2-AA7E-4608-A86D-0BBAB9DA1A60}	wslservice
+regwAs74w2LAuOpamlTd9EpG3N1jSk	0	CLSID\{a9b7a1b9-0671-405c-95f1-e0612cb4ce7e}		LxssUserSession	wslservice
+regx.2HBa4pFn8hx6kD25O.CN9W5Yc	0	CLSID\{2B9C59C3-98F1-45C8-B87B-12AE3C7927E8}\LocalServer32		"[INSTALLDIR]wslhost.exe"	wslservice
+regG5LAT0yQ9VnkVQAbnm3DFLlTlZI	0	AppID\{17696EAC-9568-4CF5-BB8C-82515AAD6C09}	DllSurrogate		wslservice
+regaA9TkvR8BI3f5xXDu0VY1ZB0X0U	0	AppID\{17696EAC-9568-4CF5-BB8C-82515AAD6C09}	AppIDFlags	#2048	wslservice
+regbQUHYIT0_jQjS7x_l7l0jltFBU4	0	AppID\{17696EAC-9568-4CF5-BB8C-82515AAD6C09}	AccessPermission	#x01000480580000006800000000000000140000000200440003000000000014000B00000001010000000000050B000000000014000B00000001010000000000050A000000000014000B0000000101000000000005120000000102000000000005200000002002000001020000000000052000000020020000	wslservice
+regHbNGjgaeHHCLZXoAVL.DUVJr7qQ	0	AppID\{17696EAC-9568-4CF5-BB8C-82515AAD6C09}	LaunchPermission	#x01000480580000006800000000000000140000000200440003000000000014000B00000001010000000000050B000000000014000B00000001010000000000050A000000000014000B0000000101000000000005120000000102000000000005200000002002000001020000000000052000000020020000	wslservice
+reg1xAWkpoolyQp3dB9Ws5Wg6qXkoc	0	CLSID\{ABB755FC-1B86-4255-83E2-E5787ABCF6C2}		WslDeviceHost_VirtioPmem	wslservice
+regZ8ERQkQt1bu5cmdTr11HPfK_OAU	0	CLSID\{ABB755FC-1B86-4255-83E2-E5787ABCF6C2}	AppId	{17696EAC-9568-4CF5-BB8C-82515AAD6C09}	wslservice
+regSVRpYuJPolvtpH7P6w6byms0WL4	0	CLSID\{ABB755FC-1B86-4255-83E2-E5787ABCF6C2}\InProcServer32		[INSTALLDIR]wsldevicehost.dll	wslservice
+reg_6K4JzfBMlsYWW9u3Yu1GTC_tyI	0	CLSID\{ABB755FC-1B86-4255-83E2-E5787ABCF6C2}\InProcServer32	ThreadingModel	Both	wslservice
+regRTBLFk72ydmU0pSnsSONvZCw3hg	0	CLSID\{7e6ad219-d1b3-42d5-b8ee-d96324e64ff6}		WslDeviceHost_VirtioFs_Admin	wslservice
+reg3cMp1vgjW6BNVzunkWAjyTjb2Ho	0	CLSID\{7e6ad219-d1b3-42d5-b8ee-d96324e64ff6}	AppId	{17696EAC-9568-4CF5-BB8C-82515AAD6C09}	wslservice
+regr7lpx4wywTC5psnu3V5ddS4UMEo	0	CLSID\{7e6ad219-d1b3-42d5-b8ee-d96324e64ff6}\InProcServer32		[INSTALLDIR]wsldevicehost.dll	wslservice
+regwPWvrOna9JhYjU0gl.kSZfWayyA	0	CLSID\{7e6ad219-d1b3-42d5-b8ee-d96324e64ff6}\InProcServer32	ThreadingModel	Both	wslservice
+reg9eSYAIR1DzSGm726Ecj38Eu4LBg	0	CLSID\{60285AE6-AAF3-4456-B444-A6C2D0DEDA38}		WslDeviceHost_VirtioFs	wslservice
+regALzAtaTw9pqSUGkZZFTiS1ljW2Q	0	CLSID\{60285AE6-AAF3-4456-B444-A6C2D0DEDA38}	AppId	{17696EAC-9568-4CF5-BB8C-82515AAD6C09}	wslservice
+regS6m4ttMkdEJGad_STsj9io4zVMo	0	CLSID\{60285AE6-AAF3-4456-B444-A6C2D0DEDA38}\InProcServer32		[INSTALLDIR]wsldevicehost.dll	wslservice
+regXa3oc0yPg6i8EcirmcCvxPQPWSE	0	CLSID\{60285AE6-AAF3-4456-B444-A6C2D0DEDA38}\InProcServer32	ThreadingModel	Both	wslservice
+regDv1HTihbweYpCbJy6v4R4xmbQik	0	CLSID\{16479D2E-F0C3-4DBA-BF7A-04FFF0892B07}		WslDeviceHost_Net	wslservice
+reg1zEKY4NLef4zJcKTn90Z1VhHe7o	0	CLSID\{16479D2E-F0C3-4DBA-BF7A-04FFF0892B07}	AppId	{17696EAC-9568-4CF5-BB8C-82515AAD6C09}	wslservice
+reglbj5kZhOmE_oxMINHiTqlqfNIsY	0	CLSID\{16479D2E-F0C3-4DBA-BF7A-04FFF0892B07}\InProcServer32		[INSTALLDIR]wsldevicehost.dll	wslservice
+regXMqyfS237ghj5cv7jvVBfMq76AI	0	CLSID\{16479D2E-F0C3-4DBA-BF7A-04FFF0892B07}\InProcServer32	ThreadingModel	Both	wslservice
+reguAN4THQncrjDRocTzLh5eQweULo	2	SOFTWARE\Microsoft\Terminal Server Client\Default\OptionalAddIns\WSLDVC_PACKAGE	Name	[INSTALLDIR]WSLDVCPlugin.dll	wslg
+reggvCc.ae.2NwaM791OTU1o1hiCiI	2	Software\Classes\wsl-settings		URL:wsl-settings	wslsettingsnonserver
+regW4yJqJZFO4Cjuz5zGL5geESShO4	2	Software\Classes\wsl-settings	URL Protocol		wslsettingsnonserver
+regWuBRrKRQ2rPGT.5f73ZCLKHNY4A	2	Software\Classes\[WSLSETTINGSPROGID]\Application	ApplicationName	WSL Settings	wslsettingsnonserver
+regoWtR78OBsMw38Y_.42ZGHGNrOQM	2	Software\Classes\[WSLSETTINGSPROGID]\shell\open\command		"[WSLSETTINGS]wslsettings.exe" "----ms-protocol:%1"	wslsettingsnonserver
+regfhDiUDXhk.m1u6lkQpLtye8Rwb0	2	Software\Microsoft\WindowsAppRuntimeApplications\[WSLSETTINGSAPPID]\Capabilities\UrlAssociations	wsl-settings	[WSLSETTINGSPROGID]	wslsettingsnonserver
+reg8_dO_9G.AKQMQOffFXRNiOBuzqw	2	Software\RegisteredApplications	[WSLSETTINGSAPPID]	Software\Microsoft\WindowsAppRuntimeApplications\[WSLSETTINGSAPPID]\Capabilities	wslsettingsnonserver
+reg3cMOb8anA1M.Ja0IoCgBOK2vHNk	2	Software\Classes\wsl-settings		URL:wsl-settings	wslsettingsserver
+regZ1SS.33r6cZtPN4VkAsTczpAjBs	2	Software\Classes\wsl-settings	URL Protocol		wslsettingsserver
+regKFIeIBpu_3iprT67J2rXFHsdFps	2	Software\Classes\[WSLSETTINGSPROGID]\Application	ApplicationName	WSL Settings	wslsettingsserver
+regY8vDuAaO5uArEFeWPcUo9zZOiaw	2	Software\Classes\[WSLSETTINGSPROGID]\shell\open\command		"[WSLSETTINGS]wslsettings.exe" "----ms-protocol:%1"	wslsettingsserver
+regc1k1mFn9KUOUYeaa6m4ueYXgELQ	2	Software\Microsoft\WindowsAppRuntimeApplications\[WSLSETTINGSAPPID]\Capabilities\UrlAssociations	wsl-settings	[WSLSETTINGSPROGID]	wslsettingsserver
+reg0SOAgZz_sEPBmdSigTpojxec49g	2	Software\RegisteredApplications	[WSLSETTINGSAPPID]	Software\Microsoft\WindowsAppRuntimeApplications\[WSLSETTINGSAPPID]\Capabilities	wslsettingsserver

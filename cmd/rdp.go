@@ -7,12 +7,15 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 
 	"github.com/DimmKirr/devcell/internal/config"
 	internalrdp "github.com/DimmKirr/devcell/internal/rdp"
 	"github.com/DimmKirr/devcell/internal/runner"
+	"github.com/DimmKirr/devcell/internal/telemetry"
 	"github.com/DimmKirr/devcell/internal/ux"
+	"github.com/DimmKirr/devcell/internal/vm/qemu"
 	"github.com/spf13/cobra"
 )
 
@@ -44,6 +47,8 @@ func runRDP(cmd *cobra.Command, args []string) error {
 	rdpGlobal, _ = cmd.Flags().GetBool("global")
 	rdpFullscreen, _ = cmd.Flags().GetBool("fullscreen")
 	rdpViewer, _ = cmd.Flags().GetString("viewer")
+
+	telemetry.Track("rdp", map[string]any{"viewer": rdpViewer, "list": list, "global": rdpGlobal, "fullscreen": rdpFullscreen})
 
 	if list {
 		return rdpList()
@@ -209,6 +214,17 @@ func collectRDPCells(c config.Config, global bool) map[string]string {
 			} else {
 				rdpDebug("vagrant: no RDP port found in Vagrantfile")
 			}
+		}
+	}
+
+	// QEMU VMs (always global — one per cell, not per project)
+	rdpDebug("qemu: scanning for running VMs")
+	for _, vm := range qemu.DiscoverRunningVMs(c.HostHome) {
+		if vm.Ports.RDPPort > 0 {
+			appName := "qemu-" + vm.CellName
+			port := strconv.Itoa(int(vm.Ports.RDPPort))
+			rdpDebug("qemu cell found: %s → %s", appName, port)
+			result[appName] = port
 		}
 	}
 

@@ -14,7 +14,7 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/DimmKirr/devcell/internal/nixstore"
+	nixoci "github.com/devcell-sh/go-nixoci"
 	"github.com/spf13/cobra"
 )
 
@@ -101,19 +101,19 @@ func runNixStorePush(cmd *cobra.Command, args []string) error {
 	minSizeStr, _ := cmd.Flags().GetString("min-size")
 
 	if os.Getenv("DEVCELL_NIX_PUSH_DEBUG") != "" {
-		nixstore.Debug = true
+		nixoci.Debug = true
 	}
 
 	if volume != "" {
 		var minSize int64
 		if minSizeStr != "" {
-			v, err := nixstore.ParseSize(minSizeStr)
+			v, err := nixoci.ParseSize(minSizeStr)
 			if err != nil {
 				return errFlag(fmt.Sprintf("invalid --min-size: %v", err))
 			}
 			minSize = v
 		}
-		return nixstore.PushFromVolume(cmd.Context(), volume, base, image, nixstore.PushOpts{
+		return nixoci.PushFromVolume(cmd.Context(), volume, base, image, nixoci.PushOpts{
 			TagAlias: tagAlias,
 			Retries:  retries,
 			MinSize:  minSize,
@@ -122,10 +122,10 @@ func runNixStorePush(cmd *cobra.Command, args []string) error {
 
 	if s := os.Getenv("DEVCELL_NIX_TOTAL_SIZE"); s != "" {
 		if v, err := strconv.ParseInt(s, 10, 64); err == nil && v > 0 {
-			nixstore.TotalSizeHint = v
+			nixoci.TotalSizeHint = v
 		}
 	}
-	return nixstore.Push(cmd.Context(), base, image, io.NopCloser(os.Stdin))
+	return nixoci.Push(cmd.Context(), base, image, io.NopCloser(os.Stdin))
 }
 
 func runNixStorePull(cmd *cobra.Command, args []string) error {
@@ -142,7 +142,7 @@ func runNixStorePull(cmd *cobra.Command, args []string) error {
 		return errFlag("--volume and --dir are mutually exclusive")
 	}
 
-	resolved, err := nixstore.ResolveImage(cmd.Context(), image, fallback)
+	resolved, err := nixoci.ResolveImage(cmd.Context(), image, fallback)
 	if err != nil {
 		return err
 	}
@@ -153,9 +153,9 @@ func runNixStorePull(cmd *cobra.Command, args []string) error {
 	fmt.Fprintf(os.Stderr, "cache HIT: %s\n", resolved)
 
 	if volume != "" {
-		return nixstore.PullToDockerVolume(cmd.Context(), resolved, volume, strip)
+		return nixoci.PullToDockerVolume(cmd.Context(), resolved, volume, strip)
 	}
-	return nixstore.Pull(cmd.Context(), resolved, dir, strip)
+	return nixoci.Pull(cmd.Context(), resolved, dir, strip)
 }
 
 // errFlag wraps a flag-usage error in a way that cobra's `Use:` help

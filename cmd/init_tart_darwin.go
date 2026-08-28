@@ -19,7 +19,7 @@ const tartImagePassword = "admin"
 // runInitTart prepares the local artifact directory and SSH keypair for a tart
 // VM. It mirrors what Docker init does: scaffold config, no images, no
 // containers. The actual VM creation happens in `cell build --engine=tart`.
-func runInitTart(cellName, hostHome, projectDir, stack, nixhomePath string, force, noCache bool) error {
+func runInitTart(cellName, hostHome, projectDir, stack string, force, noCache bool) error {
 	cfg := tart.InitConfig{
 		CellName: cellName,
 		HomeDir:  hostHome,

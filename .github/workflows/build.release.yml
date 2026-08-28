@@ -87,12 +87,12 @@ jobs:
 
       # Hydrate /nix volume from the GHCR cache image populated by
       # build.dev.yml (same `nix-cache-${arch}-*` tag scheme). Release
-      # builds reuse the same nixhome closure as dev builds for any
-      # given `hashFiles('nixhome/**')`, so the cache is interchangeable.
+      # builds reuse the same nixhome closure as dev builds, so the
+      # cache is interchangeable.
       - name: Hydrate /nix volume from GHCR cache
         if: inputs.skip_nix_cache != true
         run: |
-          HASH=${{ hashFiles('nixhome/**') }}
+          HASH=${{ github.sha }}
           ./bin/cell nix-store pull \
             --image "${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:nix-cache-${{ matrix.arch }}-${HASH}" \
             --fallback "${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:nix-cache-${{ matrix.arch }}-latest" \
@@ -103,10 +103,9 @@ jobs:
         id: build
         env:
           DEVCELL_NIX_VOLUME: devcell-nix-store-${{ matrix.arch }}
-          DEVCELL_NIXHOME_PATH: ${{ github.workspace }}/nixhome
         run: |
           TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME_LC }}:${{ env.VERSION }}-${{ matrix.arch }}"
-          ./bin/cell build --thin --image "$TAG" --debug
+          ./bin/cell build --image "$TAG" --debug
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Push to GHCR
@@ -120,7 +119,7 @@ jobs:
         timeout-minutes: 45
         env:
           ARCH: ${{ matrix.arch }}
-          HASH: ${{ hashFiles('nixhome/**') }}
+          HASH: ${{ github.sha }}
           STAGE: release
         run: task nix-cache:publish
 
@@ -236,8 +235,6 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run cell claude --version (full pipeline)
-        env:
-          DEVCELL_NIXHOME_PATH: ${{ github.workspace }}/nixhome
         run: |
           # Simulate a new user in a fresh project dir
           mkdir -p /tmp/e2e-project && cd /tmp/e2e-project

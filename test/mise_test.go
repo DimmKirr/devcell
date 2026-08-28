@@ -23,36 +23,6 @@ import (
 // L1 — Wiring checks (file content)
 // ---------------------------------------------------------------------------
 
-// TestMise_DockerfileBakesShims asserts the Dockerfile runs `mise reshim` at
-// build time with MISE_DATA_DIR pointed at the image-level baked shim dir.
-// Without this, the impure path never produces /opt/devcell/.local/share/mise/shims/.
-func TestMise_DockerfileBakesShims(t *testing.T) {
-	dockerfile := readDockerfile(t)
-
-	want := "/opt/devcell/.local/share/mise"
-	if !strings.Contains(dockerfile, want+" mise reshim") &&
-		!strings.Contains(dockerfile, "MISE_DATA_DIR="+want) {
-		t.Fatalf("Dockerfile missing baked-shim step: expected `MISE_DATA_DIR=%s mise reshim` (or env-exported equivalent) somewhere in the build chain", want)
-	}
-}
-
-// TestMise_DockerfileBakesShimsForReshim asserts the reshim invocation comes
-// AFTER mise install (so there are installs to reshim against). Order matters.
-func TestMise_DockerfileBakesShimsForReshim(t *testing.T) {
-	dockerfile := readDockerfile(t)
-
-	installIdx := strings.Index(dockerfile, "mise install")
-	reshimIdx := strings.Index(dockerfile, "mise reshim")
-	if installIdx == -1 {
-		t.Fatal("Dockerfile has no `mise install` step — baseline broken")
-	}
-	if reshimIdx == -1 {
-		t.Fatal("Dockerfile has no `mise reshim` step (TestMise_DockerfileBakesShims should also fail)")
-	}
-	if reshimIdx < installIdx {
-		t.Fatalf("`mise reshim` (idx %d) comes BEFORE `mise install` (idx %d) — order must be install→reshim", reshimIdx, installIdx)
-	}
-}
 
 // TestMise_SessionPathUserShimsOnly asserts nixhome/modules/mise.nix puts the
 // user shims dir on home.sessionPath and does NOT re-add the retired baked
@@ -298,21 +268,6 @@ func TestMise_ImageNixStagesToolVersions(t *testing.T) {
 	}
 }
 
-// TestMise_AllDeclaredToolsCoveredByBakeStep — sanity check that the baseline
-// `mise install` step exists; downstream reshim picks up whatever it produces.
-func TestMise_AllDeclaredToolsCoveredByBakeStep(t *testing.T) {
-	declared := declaredMiseTools(t)
-	if len(declared) == 0 {
-		t.Fatal("no devcell.mise.tools.* declarations found across nixhome modules — baseline broken")
-	}
-
-	dockerfile := readDockerfile(t)
-	if !strings.Contains(dockerfile, "mise install") {
-		t.Fatal("Dockerfile missing `mise install` step — declared tools won't be installed at build time")
-	}
-
-	t.Logf("declared mise tools (%d): %v", len(declared), declared)
-}
 
 // ---------------------------------------------------------------------------
 // L2 — Container behavior (requires docker; skip otherwise)
@@ -492,15 +447,6 @@ func readNixhomeFile(t *testing.T, relPath string) string {
 	return string(data)
 }
 
-// readImagesDockerfile returns the contents of images/Dockerfile (impure build path).
-func readImagesDockerfile(t *testing.T) string {
-	t.Helper()
-	data, err := os.ReadFile(filepath.Join("..", "images", "Dockerfile"))
-	if err != nil {
-		t.Fatalf("read images/Dockerfile: %v", err)
-	}
-	return string(data)
-}
 
 // declaredMiseTools parses nixhome/modules/*.nix for `devcell.mise.tools.<name> = "..."`
 // declarations and returns the list of tool names.
