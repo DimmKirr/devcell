@@ -2,6 +2,8 @@ module github.com/DimmKirr/devcell
 
 go 1.26.0
 
+replace github.com/devcell-sh/go-winkit => /Users/dmitry/dev/devcell-sh/go-winkit
+
 require (
 	github.com/BurntSushi/toml v1.4.0
 	github.com/charmbracelet/bubbles v0.21.1-0.20250623103423-23b8fd6302d7

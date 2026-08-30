@@ -106,8 +106,6 @@ github.com/devcell-sh/go-regedit v0.1.0 h1:+eT+eLZQZtDpKhzjlGBP2DdyNuUhFTX+8354j
 github.com/devcell-sh/go-regedit v0.1.0/go.mod h1:pWEerGIoAAVu00kuyFaXCmIzIWghcJYwiK8xGha1L5E=
 github.com/devcell-sh/go-wimlib v0.1.0 h1:pg1WxyqfMm/9Anmp9amfr+nMKwzAc4D5ra4n8qkZkMg=
 github.com/devcell-sh/go-wimlib v0.1.0/go.mod h1:BFGCDzvSqoVtHxQ8j5GhXHmO8c3w/kLnHDJaOogPstE=
-github.com/devcell-sh/go-winkit v0.2.0 h1:qx4udUGbd33q3mE1Cg2nNzN5bpGMymD2VI49sPCC4PU=
-github.com/devcell-sh/go-winkit v0.2.0/go.mod h1:knVXG2/GhrkkHZIvie9+NeZLH93F0NbISzeXtMROTUk=
 github.com/digitalocean/go-libvirt v0.0.0-20260609165003-6254771e63a8 h1:R4zqGCPowg1bfJXFxsS122mzkivaMz+wPLxBsF9qsiY=
 github.com/digitalocean/go-libvirt v0.0.0-20260609165003-6254771e63a8/go.mod h1:qb0Ofa71d3oXARQf633h2tNaeBxLsVxuDp+jcsVO2+4=
 github.com/diskfs/go-diskfs v1.9.4 h1:0j2d7eG4IjyxL6+ChWbDPocdBCF6HQ4HBWU2WDYWVnc=
