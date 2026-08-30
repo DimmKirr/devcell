@@ -40,23 +40,21 @@ func init() {
 func runBuild(cmd *cobra.Command, _ []string) error {
 	applyOutputFlagsWithLog("build")
 
-	telemetry.Track("build", map[string]any{
-		"engine":     scanStringFlag("--engine"),
-		"subcommand": "build",
-		"update":     scanFlag("--update"),
-		"no_cache":   scanFlag("--no-cache"),
-		"force":      scanFlag("--force"),
-	})
-
 	c, err := config.LoadFromOS()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	engine := scanStringFlag("--engine")
-	if scanFlag("--macos") {
-		engine = "vagrant"
-	}
+	cellCfgForEngine := cfg.LoadFromOS(c.ConfigDir, c.BaseDir)
+	engine := resolveEngine(scanStringFlag("--engine"), cellCfgForEngine.Cell.Engine, scanFlag("--macos"))
+
+	telemetry.Track("build", map[string]any{
+		"engine":     engine,
+		"subcommand": "build",
+		"update":     scanFlag("--update"),
+		"no_cache":   scanFlag("--no-cache"),
+		"force":      scanFlag("--force"),
+	})
 
 	// ── tart engine ──────────────────────────────────────────────────────────
 	if engine == "tart" {

@@ -325,16 +325,8 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 		fmt.Printf(" First run — scaffolding %s (stack: %s)\n", c.BaseDir, result.Stack)
 	}
 
-	// Vagrant engine branch
-	// Priority: CLI flag > [cell] config > default.
 	cellCfgForEngine := cfg.LoadFromOS(c.ConfigDir, c.BaseDir)
-	engine := scanStringFlag("--engine")
-	if engine == "" {
-		engine = cellCfgForEngine.Cell.Engine
-	}
-	if scanFlag("--macos") {
-		engine = "vagrant"
-	}
+	engine := resolveEngine(scanStringFlag("--engine"), cellCfgForEngine.Cell.Engine, scanFlag("--macos"))
 	if engine == "vagrant" {
 		telemetry.Track("command_run", map[string]any{"command": filepath.Base(binary), "engine": "vagrant"})
 		vagrantBox := scanStringFlag("--vagrant-box")
