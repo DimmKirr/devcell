@@ -454,13 +454,13 @@ func TestModules2_CellModulesListEndToEnd(t *testing.T) {
 	// devcell thin cells and sandboxed CI where the daemon socket is absent.
 	probe := osexec.Command("nix", "eval", "--json",
 		"--extra-experimental-features", "nix-command flakes",
-		"path:../nixhome#devcellProfiles.base")
+		"path:"+nixhomeDir()+"#devcellProfiles.base")
 	if err := probe.Run(); err != nil {
 		t.Skipf("nix can't evaluate the local flake in this env (%v); skipping — works on hosts with running nix daemon", err)
 	}
 
 	cmd := osexec.Command("../bin/cell", "modules", "list")
-	cmd.Env = append(os.Environ(), "DEVCELL_NIXHOME_PATH=../nixhome")
+	cmd.Env = append(os.Environ(), "DEVCELL_NIXHOME_PATH="+nixhomeDir())
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("cell modules list: %v\noutput tail: %s", err, lastNLines(string(out), 20))
@@ -519,7 +519,7 @@ func TestModules2_LongE2E_CleanVolume_TwoModulesFromGlobalAndProject(t *testing.
 	// reads [cell].nixhome as tier 1 (explicit user setting), skipping the
 	// github fallback. Mirrors how other long tests cite a known-good nixhome
 	// instead of relying on the network + upstream pin.
-	localNixhome, err := filepath.Abs("../nixhome")
+	localNixhome, err := filepath.Abs(nixhomeDir())
 	if err != nil {
 		t.Fatalf("abs nixhome: %v", err)
 	}

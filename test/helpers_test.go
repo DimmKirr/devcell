@@ -24,6 +24,22 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
+// nixhomeDir resolves the nixhome checkout that file-reading tests assert
+// against. Mirrors runner.ResolveNixhomeRef precedence:
+// DEVCELL_NIXHOME > DEVCELL_NIXHOME_PATH (legacy) > ../nixhome (in-repo).
+// Env values that aren't existing local directories (e.g. github: flake
+// refs) are skipped — these tests read files from disk.
+func nixhomeDir() string {
+	for _, env := range []string{"DEVCELL_NIXHOME", "DEVCELL_NIXHOME_PATH"} {
+		if v := os.Getenv(env); v != "" {
+			if fi, err := os.Stat(v); err == nil && fi.IsDir() {
+				return v
+			}
+		}
+	}
+	return filepath.Join("..", "nixhome")
+}
+
 var (
 	ultimateOnce sync.Once
 	ultimateTag  string
@@ -514,7 +530,7 @@ func buildElectronicsImage() (string, error) {
 	}
 
 	// Copy local nixhome/ into the build context.
-	nixhomeSrc := filepath.Join("..", "nixhome")
+	nixhomeSrc := nixhomeDir()
 	nixhomeDst := filepath.Join(dir, "nixhome")
 	if err := copyDirRecursive(nixhomeSrc, nixhomeDst); err != nil {
 		return "", fmt.Errorf("copy nixhome: %w", err)
@@ -667,7 +683,7 @@ func buildTestdataImage() (string, error) {
 	// Replace testdata nixhome with current repo nixhome for iteration.
 	nixhomeDst := filepath.Join(dir, "nixhome")
 	os.RemoveAll(nixhomeDst)
-	if err := copyDirRecursive(filepath.Join("..", "nixhome"), nixhomeDst); err != nil {
+	if err := copyDirRecursive(nixhomeDir(), nixhomeDst); err != nil {
 		return "", fmt.Errorf("copy nixhome: %w", err)
 	}
 
