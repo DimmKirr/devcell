@@ -217,7 +217,7 @@ type RunSpec struct {
 	UserArgs     []string
 	Debug        bool                // pass DEVCELL_DEBUG=true into the container
 	NixDaemon    bool                // pass DEVCELL_NIX_DAEMON=true into the container
-	SkipFlake    bool                // pass DEVCELL_SKIP_FLAKE=1 into the container
+	NoPorts      bool                // skip all -p port mappings (user ports and GUI)
 	TrustFlake   bool                // pass DEVCELL_FLAKE_TRUST=1 into the container
 	Image        string              // image ID or tag to run; defaults to UserImageTag
 	ExtraEnv     map[string]string   // additional env vars injected by the command handler
@@ -387,11 +387,6 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 		argv = append(argv, "-e", "DEVCELL_NIX_DAEMON=true")
 	}
 
-	// Skip project flake — degrades install failure to warning instead of boot abort
-	if spec.SkipFlake {
-		argv = append(argv, "-e", "DEVCELL_SKIP_FLAKE=1")
-	}
-
 	// Project flake trust — user confirmed host-side that flake.nix packages should be installed
 	if spec.TrustFlake {
 		argv = append(argv, "-e", "DEVCELL_FLAKE_TRUST=1")
@@ -442,6 +437,11 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 	// Stealth identity — drives CDP userAgentMetadata + JS spoofs inside container
 	e("DEVCELL_STEALTH_ARCH", spec.CellCfg.Stealth.ResolvedArch())
 	e("DEVCELL_STEALTH_PLATFORM", spec.CellCfg.Stealth.ResolvedPlatform())
+
+	// [mcp] enabled — runtime MCP server selection (fragments filter at start)
+	if len(spec.CellCfg.Mcp.Enabled) > 0 {
+		e("DEVCELL_MCP_ENABLED", strings.Join(spec.CellCfg.Mcp.Enabled, ","))
+	}
 
 	// cfg [env] entries
 	for k, v := range spec.CellCfg.Env {
@@ -520,28 +520,31 @@ func BuildArgv(spec RunSpec, fs FS, lookPath func(string) (string, error)) []str
 		argv = append(argv, "-v", vol.Resolved())
 	}
 
-	// [ports].publish_ip — host interface prefix for `docker run -p`.
-	// Defaults to "0.0.0.0" (set by ResolvedPublishIP) so cells are reachable
-	// from other hosts on the LAN regardless of dockerd bind defaults.
-	publishPrefix := spec.CellCfg.Ports.ResolvedPublishIP() + ":"
+	// --no-ports: skip all -p mappings (user ports and GUI).
+	if !spec.NoPorts {
+		// [ports].publish_ip — host interface prefix for `docker run -p`.
+		// Defaults to "0.0.0.0" (set by ResolvedPublishIP) so cells are reachable
+		// from other hosts on the LAN regardless of dockerd bind defaults.
+		publishPrefix := spec.CellCfg.Ports.ResolvedPublishIP() + ":"
 
-	// cfg [ports] entries
-	for _, port := range spec.CellCfg.Ports.Forward {
-		if !strings.Contains(port, ":") {
-			// "54321/udp" → host=54321, container=54321/udp
-			num := port
-			if idx := strings.IndexByte(num, '/'); idx != -1 {
-				num = num[:idx]
+		// cfg [ports] entries
+		for _, port := range spec.CellCfg.Ports.Forward {
+			if !strings.Contains(port, ":") {
+				// "54321/udp" → host=54321, container=54321/udp
+				num := port
+				if idx := strings.IndexByte(num, '/'); idx != -1 {
+					num = num[:idx]
+				}
+				port = num + ":" + port
 			}
-			port = num + ":" + port
+			argv = append(argv, "-p", publishPrefix+port)
 		}
-		argv = append(argv, "-p", publishPrefix+port)
-	}
 
-	// GUI port mapping
-	if spec.CellCfg.GUI.ResolvedEnabled() {
-		argv = append(argv, "-p", publishPrefix+c.VNCPort+":5900")
-		argv = append(argv, "-p", publishPrefix+c.RDPPort+":3389")
+		// GUI port mapping
+		if spec.CellCfg.GUI.ResolvedEnabled() {
+			argv = append(argv, "-p", publishPrefix+c.VNCPort+":5900")
+			argv = append(argv, "-p", publishPrefix+c.RDPPort+":3389")
+		}
 	}
 
 	// Wireguard env + config mount
@@ -1073,6 +1076,7 @@ func UpdateFlakeLock(ctx context.Context, configDir string, lockOnly bool, verbo
 	args := []string{
 		"run", "--rm",
 		"-v", configDir + ":/work",
+		"-e", "NIX_CONFIG=experimental-features = nix-command flakes",
 		"--entrypoint", "sh",
 		FlakeNixImage(),
 		"-c", "cd /work && " + nixCmd,
@@ -1113,6 +1117,7 @@ ls "$SRC/stacks/" 2>/dev/null | sed 's/\.nix$//' | sort`
 	args := []string{
 		"run", "--rm",
 		"-v", configDir + ":/work",
+		"-e", "NIX_CONFIG=experimental-features = nix-command flakes",
 		"--entrypoint", "sh",
 		FlakeNixImage(),
 		"-c", script,
