@@ -75,6 +75,24 @@ func runBuildQemu(cellName, hostHome, baseDir, stack string, force, noCache, dry
 		}
 	}()
 
+	// --- Disk cache probe ---
+	// Pull a cached base-profile image if available, skipping the entire
+	// build pipeline. --no-cache bypasses this probe but still pushes after
+	// a successful build.
+	if _, err := os.Stat(templateDisk); err != nil {
+		ref := diskCacheRefFromEnv(stack, "base-profile", modules)
+		if diskCachePullIfEnabled(ctx, templateDisk, ref, noCache) {
+			if err := os.MkdirAll(templateDir, 0755); err != nil {
+				return fmt.Errorf("creating template dir for cache pull: %w", err)
+			}
+			if err := os.WriteFile(marker, []byte("pulled from disk cache\n"), 0644); err != nil {
+				return fmt.Errorf("stamping provisioned marker: %w", err)
+			}
+			fmt.Printf("  Pulled cached template from %s\n", ref)
+			return nil
+		}
+	}
+
 	runTS := time.Now().UTC().Format("20060102T150405Z")
 	runDir := filepath.Join(baseDir, ".scratch", "debug", runTS)
 	if err := os.MkdirAll(runDir, 0755); err != nil {
@@ -713,6 +731,7 @@ func runBuildQemu(cellName, hostHome, baseDir, stack string, force, noCache, dry
 		}
 		pr.Seal(fmt.Sprintf("qemu template %s built (ssh-able; dev-env finalization skipped)",
 			qemu.TemplateVMName(stack, modules)))
+		diskCachePush(ctx, templateDisk, stack, "ssh-able", modules)
 		return nil
 	}
 
@@ -721,6 +740,8 @@ func runBuildQemu(cellName, hostHome, baseDir, stack string, force, noCache, dry
 		return err
 	}
 
+	dest := qemu.BaseProfileImagePath(hostHome, stack, modules)
+	diskCachePush(ctx, dest, stack, "base-profile", modules)
 	pr.Seal(fmt.Sprintf("qemu template %s built (WSL2 + nix + home-manager)", qemu.TemplateVMName(stack, modules)))
 	return nil
 }
