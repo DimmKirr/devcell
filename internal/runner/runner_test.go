@@ -1311,22 +1311,6 @@ func TestArgv_CrossToolAgentMounts_DedupAgainstCfgVolumes(t *testing.T) {
 	}
 }
 
-func TestArgv_SkipFlakeEnvVar(t *testing.T) {
-	argv := buildArgv(t, func(s *runner.RunSpec) { s.SkipFlake = true })
-	if !hasConsecutive(argv, "-e", "DEVCELL_SKIP_FLAKE=1") {
-		t.Fatal("expected DEVCELL_SKIP_FLAKE=1 when SkipFlake is true")
-	}
-}
-
-func TestArgv_SkipFlakeAbsentByDefault(t *testing.T) {
-	argv := buildArgv(t)
-	for _, a := range argv {
-		if strings.Contains(a, "DEVCELL_SKIP_FLAKE") {
-			t.Fatalf("DEVCELL_SKIP_FLAKE should not appear by default, got: %s", a)
-		}
-	}
-}
-
 func TestArgv_TrustFlakeEnvVar(t *testing.T) {
 	argv := buildArgv(t, func(s *runner.RunSpec) { s.TrustFlake = true })
 	if !hasConsecutive(argv, "-e", "DEVCELL_FLAKE_TRUST=1") {
@@ -1340,6 +1324,41 @@ func TestArgv_TrustFlakeAbsentByDefault(t *testing.T) {
 		if strings.Contains(a, "DEVCELL_FLAKE_TRUST") {
 			t.Fatalf("DEVCELL_FLAKE_TRUST should not appear by default, got: %s", a)
 		}
+	}
+}
+
+// --- NoPorts ---
+
+func TestArgv_NoPorts_SkipsUserPorts(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.NoPorts = true
+		s.CellCfg.Ports = cfg.PortsSection{Forward: []string{"3000", "8080:3000"}}
+	})
+	for _, a := range argv {
+		if strings.Contains(a, "3000") {
+			t.Fatalf("expected no port mappings with NoPorts, got: %s", a)
+		}
+	}
+}
+
+func TestArgv_NoPorts_SkipsGUIPorts(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.NoPorts = true
+		s.CellCfg.GUI.Enabled = boolPtr(true)
+	})
+	for _, a := range argv {
+		if strings.Contains(a, "5900") || strings.Contains(a, "3389") {
+			t.Fatalf("expected no GUI port mappings with NoPorts, got: %s", a)
+		}
+	}
+}
+
+func TestArgv_NoPorts_DefaultFalse(t *testing.T) {
+	argv := buildArgv(t, func(s *runner.RunSpec) {
+		s.CellCfg.Ports = cfg.PortsSection{Forward: []string{"3000"}}
+	})
+	if !hasConsecutive(argv, "-p", "0.0.0.0:3000:3000") {
+		t.Errorf("expected -p 0.0.0.0:3000:3000 when NoPorts is false: %v", argv)
 	}
 }
 
