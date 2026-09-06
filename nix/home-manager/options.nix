@@ -19,6 +19,7 @@ in
     stack = opt types.str;
     modules = opt (types.listOf types.str);
     nixhome = opt types.str;
+    os = opt types.str;
     engine = opt types.str;
     vagrant_provider = opt types.str;
     vagrant_box = opt types.str;
@@ -45,6 +46,7 @@ in
     libvirt_path_map = opt (types.attrsOf types.str);
     qemu_project_sync = opt types.str;
     default_command = opt types.str;
+    flake = opt types.bool;
   };
   docker = {
     privileged = opt types.bool;
@@ -96,6 +98,9 @@ in
   };
   aws = {
     read_only = opt types.bool;
+  };
+  mcp = {
+    enabled = opt (types.listOf types.str);
   };
   stealth = {
     arch = opt types.str;

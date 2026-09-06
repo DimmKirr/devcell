@@ -149,7 +149,8 @@ func init() {
 	rootCmd.PersistentFlags().Bool("plain-text", false, "disable spinners, use plain log output (for CI/non-TTY)")
 	rootCmd.PersistentFlags().Bool("debug", false, "plain-text mode plus stream full build log to stdout")
 	rootCmd.PersistentFlags().String("format", "text", "output format: text, yaml, or json")
-	rootCmd.PersistentFlags().String("engine", "docker", "execution engine: docker, vagrant, tart, qemu, or libvirt")
+	rootCmd.PersistentFlags().String("engine", "", "execution engine: docker, vagrant, tart, qemu, or libvirt")
+	rootCmd.PersistentFlags().String("os", "", "guest OS: linux, macos, or windows (derives engine when --engine is unset)")
 	rootCmd.PersistentFlags().Bool("local", false, "pin --engine=qemu to the in-container path (skip the libvirt auto-default)")
 	rootCmd.PersistentFlags().Bool("background", false, "keep VM/container running after shell exit")
 	rootCmd.PersistentFlags().Bool("macos", false, "use macOS VM via Vagrant (alias for --engine=vagrant)")
@@ -235,13 +236,17 @@ var cellBoolFlags = map[string]bool{
 	"--no-1password": true, // skip [op] documents resolution at cell-open (CELL-42)
 	"--local":        true, // pin --engine=qemu to the in-container path (CELL-378)
 	"--auto-cleanup": true, // run the CELL-334 root reaper at cell start (CELL-390)
-	"--skip-flake":   true, // skip project-level flake.nix install (CELL-447)
+	"--use-flake":    true, // opt-in to project-level flake.nix install (CELL-447)
+	"--no-flake":     true, // legacy, ignored (flake is off by default now)
+	"--skip-flake":   true, // legacy, ignored
+	"--no-ports":     true, // skip allocating docker ports even if [ports] is configured
 }
 
 // cellStringFlags are string flags consumed by devcell: strip the flag token
 // AND its value (handles both "--flag value" and "--flag=value" forms).
 var cellStringFlags = map[string]bool{
 	"--engine":           true,
+	"--os":               true,
 	"--vagrant-provider": true,
 	"--vagrant-box":      true,
 	"--tart-ssh-port":    true,
@@ -326,7 +331,10 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 	}
 
 	cellCfgForEngine := cfg.LoadFromOS(c.ConfigDir, c.BaseDir)
-	engine := resolveEngine(scanStringFlag("--engine"), cellCfgForEngine.Cell.Engine, scanFlag("--macos"))
+	engine, engineErr := resolveEngine(scanStringFlag("--engine"), scanStringFlag("--os"), cellCfgForEngine.Cell.Engine, cellCfgForEngine.Cell.OS, scanFlag("--macos"))
+	if engineErr != nil {
+		return engineErr
+	}
 	if engine == "vagrant" {
 		telemetry.Track("command_run", map[string]any{"command": filepath.Base(binary), "engine": "vagrant"})
 		vagrantBox := scanStringFlag("--vagrant-box")
@@ -796,9 +804,10 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 	}
 
 	// CELL-447: detect project flake.nix and prompt for trust host-side.
-	skipFlake := scanFlag("--skip-flake")
+	// Flake is opt-in: enabled by --use-flake flag or flake=true in [cell] config.
+	useFlake := scanFlag("--use-flake") || cellCfg.Cell.FlakeEnabled()
 	trustFlake := false
-	if !skipFlake {
+	if useFlake {
 		trustFlake = resolveTrustFlake(c.BaseDir, c.CellHome)
 	}
 
@@ -810,7 +819,7 @@ func runAgent(binary string, defaultFlags, userArgs []string, extraEnv map[strin
 		UserArgs:     userArgs,
 		Debug:        ux.Verbose,
 		NixDaemon:    scanFlag("--nix-daemon"),
-		SkipFlake:    skipFlake,
+		NoPorts:      scanFlag("--no-ports"),
 		TrustFlake:   trustFlake,
 		Image:        imageID,
 		ExtraEnv:     extraEnv,

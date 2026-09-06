@@ -40,7 +40,10 @@ func runInit(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("load config: %w", err)
 	}
 	cellCfgForEngine := cfg.LoadFromOS(c.ConfigDir, c.BaseDir)
-	engine := resolveEngine(scanStringFlag("--engine"), cellCfgForEngine.Cell.Engine, scanFlag("--macos"))
+	engine, err := resolveEngine(scanStringFlag("--engine"), scanStringFlag("--os"), cellCfgForEngine.Cell.Engine, cellCfgForEngine.Cell.OS, scanFlag("--macos"))
+	if err != nil {
+		return err
+	}
 	telemetry.Track("init", map[string]any{"engine": engine, "stack": cmd.Flags().Lookup("stack").Value.String()})
 
 	if engine == "tart" {
@@ -82,12 +85,13 @@ func runInit(cmd *cobra.Command, _ []string) error {
 	modules, _ := cmd.Flags().GetStringSlice("modules")
 
 	result, err := RunInitFlow(InitFlowOptions{
-		BaseDir:   c.BaseDir,
-		ConfigDir: c.ConfigDir,
-		Stack:     stack,
-		Modules:   modules,
-		Yes:       yes,
-		Force:     force,
+		BaseDir:    c.BaseDir,
+		ConfigDir:  c.ConfigDir,
+		NixhomeSrc: cellCfgForEngine.Nix.NixhomePath,
+		Stack:      stack,
+		Modules:    modules,
+		Yes:        yes,
+		Force:      force,
 	})
 	if err != nil {
 		return err
