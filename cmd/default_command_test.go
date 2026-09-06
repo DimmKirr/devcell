@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -54,6 +56,36 @@ func TestRewriteDefaultCommand_ExplicitSubcommandWins(t *testing.T) {
 	want := []string{"build", "--stack", "go"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("explicit subcommand must not be shadowed: got %v, want %v", got, want)
+	}
+}
+
+func TestRewriteDefaultCommand_UnknownPositionalNotRewritten(t *testing.T) {
+	// `cell abc` must NOT become `cell claude abc` — an unknown positional
+	// falls through to rootCmd.RunE, which reports "unknown command".
+	for _, args := range [][]string{
+		{"abc"},
+		{"abc", "-c"},
+	} {
+		got := rewriteDefaultCommand(args, "claude", testKnownCmds())
+		if !reflect.DeepEqual(got, args) {
+			t.Errorf("unknown positional %v must be left alone: got %v", args, got)
+		}
+	}
+}
+
+func TestRootRunE_UnknownCommandShowsHelp(t *testing.T) {
+	var out bytes.Buffer
+	rootCmd.SetOut(&out)
+	rootCmd.SetErr(&out)
+	defer rootCmd.SetOut(nil)
+	defer rootCmd.SetErr(nil)
+
+	err := rootCmd.RunE(rootCmd, []string{"abc"})
+	if err == nil || !strings.Contains(err.Error(), `unknown command "abc"`) {
+		t.Fatalf("want unknown-command error, got %v", err)
+	}
+	if !strings.Contains(out.String(), "Available Commands:") {
+		t.Errorf("help must be printed with the error, got output:\n%s", out.String())
 	}
 }
 

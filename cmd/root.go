@@ -58,7 +58,8 @@ tools inside a consistent Docker dev environment.`,
 	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if len(args) > 0 {
-			return fmt.Errorf("unknown command %q — run 'cell --help' for usage", args[0])
+			_ = cmd.Help()
+			return fmt.Errorf("unknown command %q", args[0])
 		}
 		// A valid default_command never reaches here — applyDefaultCommand
 		// rewrites os.Args before Execute, so cobra dispatches to the
@@ -94,6 +95,13 @@ func rewriteDefaultCommand(args []string, defaultCmd string, knownCmds map[strin
 		}
 		switch first {
 		case "--help", "-h", "--version", "help", "completion", "__complete", "__completeNoDesc":
+			return args
+		}
+		// An unknown positional (not a flag) is a typo'd subcommand, not
+		// input for the default command — leave it for rootCmd.RunE to
+		// report as "unknown command" instead of silently launching the
+		// default agent with it.
+		if !strings.HasPrefix(first, "-") {
 			return args
 		}
 	}
