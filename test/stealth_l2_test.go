@@ -428,20 +428,25 @@ func TestStealth_L2_AllLayersConsistent(t *testing.T) {
 	} else {
 		t.Logf("PASS Layer 2: navigator.platform=%q", results.Main.Platform)
 	}
-	// navigator.webdriver must NOT be `true`. Both `undefined` (patchright's
-	// preferred spoof — property deleted entirely) and `false` (real Chrome
-	// non-automated value) are acceptable. The existing TestMcp_PatchrightUndetected
-	// at mcp_test.go:317 documents `undefined` as the expected stealth output.
-	if results.Main.Webdriver == true {
-		t.Errorf("FAIL Layer 2: navigator.webdriver=true — browser detected as automated (CELL-169)")
+	// navigator.webdriver must be boolean false — the real non-automated
+	// Chrome value. `undefined` (property deleted) reads as tampering:
+	// BrowserScan's Navigator check flags a missing webdriver property
+	// (seen live 2026-09-03).
+	if results.Main.WebdriverType != "boolean" || results.Main.Webdriver == true {
+		t.Errorf("FAIL Layer 2: navigator.webdriver=%v (type=%s), want boolean false — missing/undefined is itself a bot signal",
+			results.Main.Webdriver, results.Main.WebdriverType)
 	} else {
 		t.Logf("PASS Layer 2: navigator.webdriver=%v (type=%s)", results.Main.Webdriver, results.Main.WebdriverType)
 	}
-	if !results.Main.HasChromeRuntime {
-		t.Errorf("FAIL Layer 2: window.chrome.runtime missing (CELL-169 arm64 regression); hasChrome=%v",
-			results.Main.HasChrome)
+	// Real Chrome has NO chrome.runtime on ordinary pages — a fabricated
+	// runtime is CreepJS's hasBadChromeRuntime signal. window.chrome itself
+	// (app/csi/loadTimes) must exist.
+	if !results.Main.HasChrome {
+		t.Errorf("FAIL Layer 2: window.chrome missing entirely")
+	} else if results.Main.HasChromeRuntime {
+		t.Errorf("FAIL Layer 2: window.chrome.runtime fabricated — real Chrome pages have no chrome.runtime (CreepJS hasBadChromeRuntime)")
 	} else {
-		t.Logf("PASS Layer 2: window.chrome.runtime present")
+		t.Logf("PASS Layer 2: window.chrome present, no fabricated chrome.runtime")
 	}
 	if results.Main.HeaArch == "" {
 		t.Errorf("FAIL Layer 2: getHighEntropyValues().architecture empty — main-thread spoof not running (CELL-68). hea_error=%q",

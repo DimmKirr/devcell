@@ -18,7 +18,7 @@ import (
 // readScrapingNix returns the contents of nixhome/modules/scraping/default.nix.
 func readScrapingNix(t *testing.T) string {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("..", "nixhome", "modules", "scraping", "default.nix"))
+	data, err := os.ReadFile(filepath.Join(nixhomeDir(), "modules", "scraping", "default.nix"))
 	if err != nil {
 		t.Fatalf("read scraping/default.nix: %v", err)
 	}
@@ -38,15 +38,81 @@ func TestStealth_ChromeRuntime_DefensiveDefine(t *testing.T) {
 	src := readScrapingNix(t)
 
 	// The stealth init.js is a writeTextFile heredoc. Find the chrome mock region.
-	if !strings.Contains(src, "Ensure chrome.runtime exists") {
-		t.Fatal("scraping/default.nix doesn't contain the stealth-init `Ensure chrome.runtime exists` block — file shape changed")
+	if !strings.Contains(src, "Align window.chrome with real Chrome") {
+		t.Fatal("scraping/default.nix doesn't contain the stealth-init `Align window.chrome with real Chrome` block — file shape changed")
 	}
 
 	// Must use Object.defineProperty on window for the `chrome` slot.
 	// Either `Object.defineProperty(window, 'chrome', ...)` or `defineProperty(window, "chrome", ...)`.
 	re := regexp.MustCompile(`Object\.defineProperty\s*\(\s*window\s*,\s*['"]chrome['"]`)
 	if !re.MatchString(src) {
-		t.Fatal("stealth init.js still uses plain `window.chrome = {...}` for the chrome mock — must use `Object.defineProperty(window, 'chrome', ...)` so late Chromium injection can't overwrite chrome.runtime (CELL-169 arm64 regression)")
+		t.Fatal("stealth init.js still uses plain `window.chrome = {...}` for the chrome mock — must use `Object.defineProperty(window, 'chrome', ...)` so late Chromium injection can't overwrite the shim (CELL-169 arm64 regression)")
+	}
+}
+
+// TestStealth_ChromeShim_NoFakeRuntime asserts the chrome shim does NOT
+// fabricate chrome.runtime. Real Chrome exposes chrome.runtime only to
+// pages that can message an extension; on ordinary pages it is undefined,
+// while chrome.app / chrome.csi / chrome.loadTimes are always present.
+// CreepJS flags a fabricated runtime as `hasBadChromeRuntime` (seen live
+// 2026-09-03: 40% stealth score with this shim active).
+func TestStealth_ChromeShim_NoFakeRuntime(t *testing.T) {
+	src := readScrapingNix(t)
+	if strings.Contains(src, "window.chrome.runtime = {") {
+		t.Fatal("stealth init.js still fabricates window.chrome.runtime — real Chrome has no chrome.runtime on ordinary pages; CreepJS flags it as hasBadChromeRuntime")
+	}
+	if !strings.Contains(src, "window.chrome.app") {
+		t.Fatal("stealth init.js chrome shim missing chrome.app — real Chrome always exposes chrome.app on ordinary pages")
+	}
+}
+
+// TestStealth_WebdriverFalse asserts navigator.webdriver is left NATIVE:
+// no getter override at all. --disable-blink-features=AutomationControlled
+// (asserted below) already yields the real non-automated value `false`;
+// any override is extra lie surface. The old `get: () => undefined` spoof
+// read as a deleted property — real Chrome always has the property, and
+// BrowserScan flagged its absence (seen live 2026-09-03). Verified live
+// same day: flag + no override → webdriver=false, Webdriver tab passes.
+func TestStealth_WebdriverFalse(t *testing.T) {
+	src := readScrapingNix(t)
+	re := regexp.MustCompile(`defineProperty\s*\(\s*Navigator\.prototype\s*,\s*['"]webdriver['"]`)
+	if re.MatchString(src) {
+		t.Fatal("stealth init.js overrides navigator.webdriver — remove it; AutomationControlled flag already yields native `false` with zero lie surface")
+	}
+	if !strings.Contains(src, "--disable-blink-features=AutomationControlled") {
+		t.Fatal("scraping/default.nix missing --disable-blink-features=AutomationControlled — without it navigator.webdriver is natively true")
+	}
+}
+
+// TestStealth_WebGLRendererNotSwiftShader asserts the spoofed
+// UNMASKED_RENDERER_WEBGL string does not contain "SwiftShader" — the
+// software-rasterizer name is a top headless/datacenter signal (CreepJS
+// hasSwiftShader:true, Sannysoft hard FAIL, seen live 2026-09-03).
+func TestStealth_WebGLRendererNotSwiftShader(t *testing.T) {
+	src := readScrapingNix(t)
+	re := regexp.MustCompile(`_wglRenderer = '([^']+)'`)
+	m := re.FindStringSubmatch(src)
+	if m == nil {
+		t.Fatal("stealth init.js missing _wglRenderer assignment — file shape changed")
+	}
+	if strings.Contains(m[1], "SwiftShader") {
+		t.Fatalf("_wglRenderer=%q still advertises SwiftShader — the spoof must present a plausible hardware GPU string", m[1])
+	}
+}
+
+// TestStealth_ToStringWrapperHardened asserts the Function.prototype.toString
+// wrapper is a *named* function expression (name inference does not apply to
+// member assignment, so an anonymous wrapper leaks name === "" where real
+// Chrome reports "toString") and scrubs its own frame from thrown TypeError
+// stacks via Error.captureStackTrace (the wrapper frame carries the init
+// script's source URL — CreepJS hasToStringProxy, seen live 2026-09-03).
+func TestStealth_ToStringWrapperHardened(t *testing.T) {
+	src := readScrapingNix(t)
+	if !strings.Contains(src, "Function.prototype.toString = function toString()") {
+		t.Fatal("toString wrapper must be a named function expression — anonymous wrapper leaks .name === \"\"")
+	}
+	if !strings.Contains(src, "Error.captureStackTrace") {
+		t.Fatal("toString wrapper must scrub its frame from rethrown TypeError stacks via Error.captureStackTrace — the frame exposes the init script source URL")
 	}
 }
 
