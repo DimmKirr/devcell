@@ -40,23 +40,24 @@ func init() {
 func runBuild(cmd *cobra.Command, _ []string) error {
 	applyOutputFlagsWithLog("build")
 
-	telemetry.Track("build", map[string]any{
-		"engine":     scanStringFlag("--engine"),
-		"subcommand": "build",
-		"update":     scanFlag("--update"),
-		"no_cache":   scanFlag("--no-cache"),
-		"force":      scanFlag("--force"),
-	})
-
 	c, err := config.LoadFromOS()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
 
-	engine := scanStringFlag("--engine")
-	if scanFlag("--macos") {
-		engine = "vagrant"
+	cellCfgForEngine := cfg.LoadFromOS(c.ConfigDir, c.BaseDir)
+	engine, err := resolveEngine(scanStringFlag("--engine"), scanStringFlag("--os"), cellCfgForEngine.Cell.Engine, cellCfgForEngine.Cell.OS, scanFlag("--macos"))
+	if err != nil {
+		return err
 	}
+
+	telemetry.Track("build", map[string]any{
+		"engine":     engine,
+		"subcommand": "build",
+		"update":     scanFlag("--update"),
+		"no_cache":   scanFlag("--no-cache"),
+		"force":      scanFlag("--force"),
+	})
 
 	// ── tart engine ──────────────────────────────────────────────────────────
 	if engine == "tart" {
@@ -214,7 +215,7 @@ func runBuildThin(c config.Config, stackOverride, imageOverride string, forceRec
 	// merged TOML modules. home-manager will switch against this overlay's
 	// `devcell-local<arch>` output, not the upstream stack outputs directly,
 	// so [cell].modules takes effect in thin builds (CELL-38 + CELL-61).
-	overlayFlake := scaffold.GenerateFlakeNix(stack, cellCfg.Cell.Modules, version.Version, true, cellCfg.Packages.Nix)
+	overlayFlake := scaffold.GenerateFlakeNixWithMcp(stack, cellCfg.Cell.Modules, version.Version, true, cellCfg.Mcp.Enabled, cellCfg.Packages.Nix)
 	overlayPath := filepath.Join(c.BuildDir, "flake.nix")
 	if err := os.WriteFile(overlayPath, []byte(overlayFlake), 0o644); err != nil {
 		return fmt.Errorf("write overlay flake: %w", err)

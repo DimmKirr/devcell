@@ -75,6 +75,24 @@ func runBuildQemu(cellName, hostHome, baseDir, stack string, force, noCache, dry
 		}
 	}()
 
+	// --- Disk cache probe ---
+	// Pull a cached base-profile image if available, skipping the entire
+	// build pipeline. --no-cache bypasses this probe but still pushes after
+	// a successful build.
+	if _, err := os.Stat(templateDisk); err != nil {
+		ref := diskCacheRefFromEnv(stack, "base-profile", modules)
+		if diskCachePullIfEnabled(ctx, templateDisk, ref, noCache) {
+			if err := os.MkdirAll(templateDir, 0755); err != nil {
+				return fmt.Errorf("creating template dir for cache pull: %w", err)
+			}
+			if err := os.WriteFile(marker, []byte("pulled from disk cache\n"), 0644); err != nil {
+				return fmt.Errorf("stamping provisioned marker: %w", err)
+			}
+			fmt.Printf("  Pulled cached template from %s\n", ref)
+			return nil
+		}
+	}
+
 	runTS := time.Now().UTC().Format("20060102T150405Z")
 	runDir := filepath.Join(baseDir, ".scratch", "debug", runTS)
 	if err := os.MkdirAll(runDir, 0755); err != nil {
@@ -713,6 +731,7 @@ func runBuildQemu(cellName, hostHome, baseDir, stack string, force, noCache, dry
 		}
 		pr.Seal(fmt.Sprintf("qemu template %s built (ssh-able; dev-env finalization skipped)",
 			qemu.TemplateVMName(stack, modules)))
+		diskCachePush(ctx, templateDisk, stack, "ssh-able", modules)
 		return nil
 	}
 
@@ -721,6 +740,8 @@ func runBuildQemu(cellName, hostHome, baseDir, stack string, force, noCache, dry
 		return err
 	}
 
+	dest := qemu.BaseProfileImagePath(hostHome, stack, modules)
+	diskCachePush(ctx, dest, stack, "base-profile", modules)
 	pr.Seal(fmt.Sprintf("qemu template %s built (WSL2 + nix + home-manager)", qemu.TemplateVMName(stack, modules)))
 	return nil
 }
@@ -848,109 +869,26 @@ func runWimBuilder(ctx context.Context, templateDir, windowsISO, virtioISO, runD
 	wimSerialLog := filepath.Join(wimDebugDir, "serial.log")
 	wimProgressLog := filepath.Join(wimDebugDir, "guest-progress.log")
 
-	// 1. Extract boot.wim and EFI boot files from Windows ISO
-	stageDir := filepath.Join(tmpDir, "stage")
-	if err := winpe.ExtractStage(windowsISO, stageDir); err != nil {
-		return "", fmt.Errorf("extracting WinPE stage: %w", err)
-	}
-
-	// 2. Extract vioserial + vioscsi drivers for WinPE injection
-	vioserialDrivers, err := winpe.LoadWinPEVioserialDrivers(virtioISO)
+	// Steps 1-5 (extract, drivers, boot.wim, inject, ISO) delegated to go-winkit.
+	result, err := winpe.Build(winpe.BuildConfig{
+		WindowsISO:   windowsISO,
+		VirtIOISO:    virtioISO,
+		PwshFiles:    pwshFiles,
+		OutputDir:    tmpDir,
+		HyperV:       true,
+		WSL2:         true,
+		OpenSSH:      true,
+		VirtIO:       true,
+		ProgressPort: `\\.\Global\` + qemu.ProgressPortName,
+	})
 	if err != nil {
-		return "", fmt.Errorf("loading vioserial drivers: %w", err)
+		return "", fmt.Errorf("winpe build: %w", err)
 	}
-	vioscsiDrivers, err := winpe.LoadWinPEStorageDrivers(virtioISO)
-	if err != nil {
-		return "", fmt.Errorf("loading vioscsi drivers: %w", err)
-	}
-
-	// 3. Read boot.wim and create the shared FAT volume
-	bootWimPath := filepath.Join(stageDir, "sources", "boot.wim")
-	bootWimData, err := os.ReadFile(bootWimPath)
-	if err != nil {
-		return "", fmt.Errorf("reading boot.wim: %w", err)
-	}
-
-	// Extract BOOTAA64.EFI for the startup.nsh chainload path.
-	// EDK2 pflash can't read ISO9660 on SCSI CDs, so the FAT volume
-	// ships the bootloader and startup.nsh does the chainload.
-	var efiBootLoader []byte
-	if bl, err := winpe.InstallerBootloader(windowsISO); err != nil {
-		ux.Debugf("wim-builder: could not extract BOOTAA64.EFI: %v", err)
-	} else if _, err := winpe.ValidateBootloaderPE(bl); err != nil {
-		ux.Debugf("wim-builder: BOOTAA64.EFI validation failed: %v", err)
-	} else {
-		efiBootLoader = bl
-		ux.Debugf("wim-builder: embedded BOOTAA64.EFI (%d bytes) on shared volume", len(bl))
-	}
-
-	var ops []winpe.WimPrepOp
-	ops = append(ops, winpe.HyperVPrepOps()...)
-	ops = append(ops, winpe.WSL2PrepOps()...)
-	ops = append(ops, winpe.OpenSSHPrepOps()...)
-	ops = append(ops, winpe.VirtIODriverPrepOps()...)
-	cfg := winpe.WimPrepConfig{
-		Ops: ops,
-	}
-	sharedFiles := winpe.SharedVolumeFiles(cfg, efiBootLoader, pwshFiles)
-	sharedFiles["/boot.wim"] = bootWimData
+	winpeISO := result.WinPEISO
 
 	sharedImg := filepath.Join(tmpDir, "shared.qcow2")
-	if err := qemu.CreateFATQcow2(sharedImg, sharedFiles, 20*1024*1024*1024); err != nil {
+	if err := qemu.CreateFATQcow2(sharedImg, result.SharedFiles, 20*1024*1024*1024); err != nil {
 		return "", fmt.Errorf("creating shared volume: %w", err)
-	}
-
-	// 4. Inject agent into boot.wim so it boots into the builder
-	injectDir := filepath.Join(tmpDir, "inject")
-	if err := os.MkdirAll(injectDir, 0755); err != nil {
-		return "", fmt.Errorf("creating inject dir: %w", err)
-	}
-
-	for _, driverSet := range []map[string][]byte{vioserialDrivers, vioscsiDrivers} {
-		for answerPath, data := range driverSet {
-			hostPath := filepath.Join(injectDir, filepath.FromSlash(answerPath))
-			if err := os.MkdirAll(filepath.Dir(hostPath), 0755); err != nil {
-				return "", err
-			}
-			if err := os.WriteFile(hostPath, data, 0644); err != nil {
-				return "", err
-			}
-		}
-	}
-
-	payloadCfg := winpe.PayloadConfig{
-		WPEInit:      true,
-		ProgressPort: `\\.\Global\` + qemu.ProgressPortName,
-		PollSeconds:  5,
-		SyncAgent:    true,
-	}
-	var driverINFs []string
-	if len(vioserialDrivers) > 0 {
-		driverINFs = append(driverINFs, `X:\devcell\drivers\vioserial\vioser.inf`)
-	}
-	if len(vioscsiDrivers) > 0 {
-		driverINFs = append(driverINFs, `X:\devcell\drivers\vioscsi\vioscsi.inf`)
-	}
-	payloadCfg.DriverINFs = driverINFs
-
-	for name, gen := range map[string]func() []byte{
-		"winpeshl.ini":  func() []byte { return winpe.GenerateShellINI_NoSetup() },
-		"bootstrap.ps1": func() []byte { return winpe.GenerateBootstrap(payloadCfg) },
-		"agent.ps1":     func() []byte { return winpe.GenerateAgent(payloadCfg) },
-	} {
-		if err := os.WriteFile(filepath.Join(injectDir, name), gen(), 0644); err != nil {
-			return "", fmt.Errorf("writing %s: %w", name, err)
-		}
-	}
-
-	if err := wim.InjectWinPEPayload(bootWimPath, injectDir); err != nil {
-		return "", fmt.Errorf("injecting WinPE payload: %w", err)
-	}
-
-	// 5. Create WinPE ISO
-	winpeISO := filepath.Join(tmpDir, "winpe-builder.iso")
-	if err := isokit.CreateWindowsISO(winpeISO, stageDir, "WINPE"); err != nil {
-		return "", fmt.Errorf("creating WinPE ISO: %w", err)
 	}
 
 	// 6. Build QEMU command
@@ -1094,9 +1032,9 @@ func runWimBuilder(ctx context.Context, templateDir, windowsISO, virtioISO, runD
 	agentOut := readFATFile(sharedImg, "/"+winpe.AgentResultFile)
 	ux.Debugf("wim-builder output:\n%s", agentOut)
 
-	result := strings.TrimSpace(doneMarker)
-	if result != "SUCCESS" {
-		return "", fmt.Errorf("builder reported %s — DISM offline servicing may not work in WinPE", result)
+	doneResult := strings.TrimSpace(doneMarker)
+	if doneResult != "SUCCESS" {
+		return "", fmt.Errorf("builder reported %s — DISM offline servicing may not work in WinPE", doneResult)
 	}
 
 	// 8. Extract devcell.wim from the shared volume and cache it

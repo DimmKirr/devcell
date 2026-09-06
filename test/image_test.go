@@ -99,7 +99,7 @@ func TestScaffold_BuildPipeline(t *testing.T) {
 
 	configDir := t.TempDir()
 	t.Setenv("DEVCELL_BASE_IMAGE", ultimateImg)
-	nixhomePath, _ := filepath.Abs(filepath.Join("..", "nixhome"))
+	nixhomePath, _ := filepath.Abs(nixhomeDir())
 	if err := scaffold.Scaffold(configDir, "", nixhomePath, false); err != nil {
 		t.Fatalf("scaffold: %v", err)
 	}
@@ -338,7 +338,7 @@ func TestCell_Shell(t *testing.T) {
 	devcellConfigDir := filepath.Join(configDir, "devcell")
 	// Pass repo nixhome so generated flakes use path:./nixhome instead of
 	// a GitHub commit URL that may predate the lib.mkHome export.
-	repoNixhome, _ := filepath.Abs(filepath.Join("..", "nixhome"))
+	repoNixhome, _ := filepath.Abs(nixhomeDir())
 	if err := scaffold.Scaffold(devcellConfigDir, "", repoNixhome, false); err != nil {
 		t.Fatalf("scaffold: %v", err)
 	}

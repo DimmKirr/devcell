@@ -98,7 +98,7 @@ func TestNixLd_ImageNixSetsEnv(t *testing.T) {
 //	gpg:    GLIBC_2.42 not found (libgpg-error-1.59) (libc mismatch)
 //	x11vnc: same
 func TestNixLd_FragmentExportsLdLibraryPath(t *testing.T) {
-	frag, err := os.ReadFile(filepath.Join("..", "nixhome", "modules", "fragments", "06-nix-ldpath.sh"))
+	frag, err := os.ReadFile(filepath.Join(nixhomeDir(), "modules", "fragments", "06-nix-ldpath.sh"))
 	if err != nil {
 		t.Fatalf("read 06-nix-ldpath.sh: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestNixLd_FragmentExportsLdLibraryPath(t *testing.T) {
 // Returns the file content and nil error if readable; otherwise returns
 // an empty string and the underlying error.
 func tryReadNixhomeFile(relPath string) (string, error) {
-	data, err := os.ReadFile(filepath.Join("..", "nixhome", relPath))
+	data, err := os.ReadFile(filepath.Join(nixhomeDir(), relPath))
 	if err != nil {
 		return "", err
 	}

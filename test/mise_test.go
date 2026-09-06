@@ -440,7 +440,7 @@ func TestMise_SharedInstalls_NoUserCopies(t *testing.T) {
 
 func readNixhomeFile(t *testing.T, relPath string) string {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("..", "nixhome", relPath))
+	data, err := os.ReadFile(filepath.Join(nixhomeDir(), relPath))
 	if err != nil {
 		t.Fatalf("read nixhome/%s: %v", relPath, err)
 	}
@@ -452,7 +452,7 @@ func readNixhomeFile(t *testing.T, relPath string) string {
 // declarations and returns the list of tool names.
 func declaredMiseTools(t *testing.T) []string {
 	t.Helper()
-	modulesDir := filepath.Join("..", "nixhome", "modules")
+	modulesDir := filepath.Join(nixhomeDir(), "modules")
 	entries, err := os.ReadDir(modulesDir)
 	if err != nil {
 		t.Fatalf("read nixhome/modules: %v", err)

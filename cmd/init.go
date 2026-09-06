@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/DimmKirr/devcell/internal/cfg"
 	"github.com/DimmKirr/devcell/internal/config"
 	"github.com/DimmKirr/devcell/internal/telemetry"
 	"github.com/DimmKirr/devcell/internal/ux"
@@ -30,13 +31,22 @@ func init() {
 func runInit(cmd *cobra.Command, _ []string) error {
 	applyOutputFlagsWithLog("init")
 
-	engine := scanStringFlag("--engine")
+	// Engine resolution uses the same priority as build/run:
+	// CLI flag > TOML [cell].engine > "docker" default.
+	// init may run before any TOML exists, so LoadFromOS silently
+	// returns zero-value config when there's no file yet.
+	c, err := config.LoadFromOS()
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	cellCfgForEngine := cfg.LoadFromOS(c.ConfigDir, c.BaseDir)
+	engine, err := resolveEngine(scanStringFlag("--engine"), scanStringFlag("--os"), cellCfgForEngine.Cell.Engine, cellCfgForEngine.Cell.OS, scanFlag("--macos"))
+	if err != nil {
+		return err
+	}
 	telemetry.Track("init", map[string]any{"engine": engine, "stack": cmd.Flags().Lookup("stack").Value.String()})
+
 	if engine == "tart" {
-		c, err := config.LoadFromOS()
-		if err != nil {
-			return fmt.Errorf("load config: %w", err)
-		}
 		stack, _ := cmd.Flags().GetString("stack")
 		force, _ := cmd.Flags().GetBool("force")
 		noCache, _ := cmd.Flags().GetBool("no-cache")
@@ -46,17 +56,12 @@ func runInit(cmd *cobra.Command, _ []string) error {
 	if engine == "qemu" || engine == "libvirt" {
 		// libvirt reuses the qemu scaffold: init only creates directories,
 		// an SSH keypair, and VirtIO drivers on the shared mount (CELL-372).
-		c, err := config.LoadFromOS()
-		if err != nil {
-			return fmt.Errorf("load config: %w", err)
-		}
 		stack, _ := cmd.Flags().GetString("stack")
 		force, _ := cmd.Flags().GetBool("force")
 		return runInitQemu(c.CellName, c.HostHome, stack, force)
 	}
 
-	macos, _ := cmd.Flags().GetBool("macos")
-	if macos {
+	if engine == "vagrant" {
 		return runInitMacOS()
 	}
 	yes, _ := cmd.Flags().GetBool("yes")
@@ -70,10 +75,6 @@ func runInit(cmd *cobra.Command, _ []string) error {
 		ux.Debugf("DEVCELL_BASE_IMAGE: %s (env)", bi)
 	}
 
-	c, err := config.LoadFromOS()
-	if err != nil {
-		return fmt.Errorf("load config: %w", err)
-	}
 	ux.Debugf("BaseDir: %s, ConfigDir: %s", c.BaseDir, c.ConfigDir)
 
 	stack, _ := cmd.Flags().GetString("stack")
@@ -84,12 +85,13 @@ func runInit(cmd *cobra.Command, _ []string) error {
 	modules, _ := cmd.Flags().GetStringSlice("modules")
 
 	result, err := RunInitFlow(InitFlowOptions{
-		BaseDir:   c.BaseDir,
-		ConfigDir: c.ConfigDir,
-		Stack:     stack,
-		Modules:   modules,
-		Yes:       yes,
-		Force:     force,
+		BaseDir:    c.BaseDir,
+		ConfigDir:  c.ConfigDir,
+		NixhomeSrc: cellCfgForEngine.Nix.NixhomePath,
+		Stack:      stack,
+		Modules:    modules,
+		Yes:        yes,
+		Force:      force,
 	})
 	if err != nil {
 		return err

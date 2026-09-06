@@ -39,6 +39,7 @@ type CellSection struct {
 	Stack           string            `toml:"stack"`             // nix stack name (e.g. "go", "python"); default: "base" (see ResolvedStack)
 	Modules         []string          `toml:"modules"`           // extra nix modules to compose on top of stack
 	NixhomePath     string            `toml:"nixhome"`           // deprecated: use [nix] nixhome instead
+	OS              string            `toml:"os"`                // guest OS: "linux" (default), "macos", "windows"; derives engine when [cell].engine is unset
 	Engine          string            `toml:"engine"`            // execution engine: "docker" (default) or "vagrant"
 	VagrantProvider string            `toml:"vagrant_provider"`  // vagrant provider: "utm" (default) or "libvirt"
 	VagrantBox      string            `toml:"vagrant_box"`       // vagrant box name override (default: "utm/bookworm")
@@ -65,6 +66,7 @@ type CellSection struct {
 	LibvirtPathMap  map[string]string `toml:"libvirt_path_map"`  // container prefix -> host prefix rewrites for domain XML paths (CELL-375); empty = CLI runs on the host
 	QemuProjectSync string            `toml:"qemu_project_sync"` // project sync for qemu/libvirt engines: "push" (default), "two-way", "off"; env: DEVCELL_QEMU_PROJECT_SYNC (CELL-383)
 	DefaultCommand  string            `toml:"default_command"`   // subcommand to run when `cell` is invoked with no args; env: DEVCELL_DEFAULT_COMMAND
+	Flake           *bool             `toml:"flake"`             // enable project-level flake.nix install; default: false (opt-in); env: DEVCELL_FLAKE
 }
 
 // ResolvedQemuProjectSync returns the effective project sync mode:
@@ -147,6 +149,19 @@ func (c CellSection) ResolvedBackground() bool {
 	}
 	if c.Background != nil {
 		return *c.Background
+	}
+	return false
+}
+
+// FlakeEnabled returns whether project-level flake.nix install is enabled: env > toml > false.
+func (c CellSection) FlakeEnabled() bool {
+	if v := os.Getenv("DEVCELL_FLAKE"); v == "1" {
+		return true
+	} else if v == "0" {
+		return false
+	}
+	if c.Flake != nil {
+		return *c.Flake
 	}
 	return false
 }
@@ -563,6 +578,11 @@ func (o OpSection) ResolvedDocuments() []string {
 	return out
 }
 
+// McpSection holds [mcp] config for per-repo MCP server enablement.
+type McpSection struct {
+	Enabled []string `toml:"enabled"` // MCP server names to enable (e.g. ["aws-api", "terraform"])
+}
+
 // StealthSection holds [stealth] config for browser fingerprint spoofing.
 type StealthSection struct {
 	Arch     string `toml:"arch"`
@@ -784,6 +804,7 @@ type CellConfig struct {
 	Ports     PortsSection   `toml:"ports"`
 	Op        OpSection      `toml:"op"`
 	Aws       AwsSection     `toml:"aws"`
+	Mcp       McpSection     `toml:"mcp"`
 	Stealth   StealthSection `toml:"stealth"`
 	GUI       GUISection     `toml:"gui"`
 	Env       map[string]string
@@ -1024,6 +1045,10 @@ func Merge(global, project CellConfig) CellConfig {
 	if project.Aws.ReadOnly != nil {
 		out.Aws.ReadOnly = project.Aws.ReadOnly
 	}
+
+	// Mcp: enabled list accumulates (union-dedup, sorted) like [cell].modules.
+	out.Mcp.Enabled = unionDedupStrings(global.Mcp.Enabled, project.Mcp.Enabled)
+	sort.Strings(out.Mcp.Enabled)
 
 	// Stealth: project wins when non-empty
 	out.Stealth = global.Stealth

@@ -289,6 +289,43 @@ func TestMerge_MiseAccumulates(t *testing.T) {
 	}
 }
 
+// --- MCP section ---
+
+func TestMerge_McpEnabledAccumulates(t *testing.T) {
+	global := cfg.CellConfig{}
+	global.Mcp.Enabled = []string{"aws-api", "terraform"}
+	project := cfg.CellConfig{}
+	project.Mcp.Enabled = []string{"terraform", "playwright"}
+	merged := cfg.Merge(global, project)
+	want := []string{"aws-api", "playwright", "terraform"}
+	if len(merged.Mcp.Enabled) != len(want) {
+		t.Fatalf("got %v, want %v", merged.Mcp.Enabled, want)
+	}
+	for i, v := range want {
+		if merged.Mcp.Enabled[i] != v {
+			t.Errorf("[%d] got %q, want %q", i, merged.Mcp.Enabled[i], v)
+		}
+	}
+}
+
+func TestLoadFile_McpEnabled(t *testing.T) {
+	dir := t.TempDir()
+	writeTOML(t, dir, "devcell.toml", `
+[mcp]
+enabled = ["aws-api", "terraform"]
+`)
+	c, err := cfg.LoadFile(filepath.Join(dir, "devcell.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Mcp.Enabled) != 2 {
+		t.Fatalf("got %v, want 2 entries", c.Mcp.Enabled)
+	}
+	if c.Mcp.Enabled[0] != "aws-api" || c.Mcp.Enabled[1] != "terraform" {
+		t.Errorf("got %v", c.Mcp.Enabled)
+	}
+}
+
 // --- GUI field ---
 
 func boolPtr(b bool) *bool { return &b }
@@ -3044,5 +3081,47 @@ AllowedIPs = 0.0.0.0/0`,
 	}
 	if err := cfg.ValidateWireguard(c); err != nil {
 		t.Fatalf("PrivateKey should not be required (loaded via PostUp), got: %v", err)
+	}
+}
+
+// --- FlakeEnabled ---
+
+func TestFlakeEnabled_DefaultFalse(t *testing.T) {
+	t.Setenv("DEVCELL_FLAKE", "")
+	c := cfg.CellSection{}
+	if c.FlakeEnabled() {
+		t.Error("FlakeEnabled() should default to false")
+	}
+}
+
+func TestFlakeEnabled_TOMLTrue(t *testing.T) {
+	t.Setenv("DEVCELL_FLAKE", "")
+	c := cfg.CellSection{Flake: boolPtr(true)}
+	if !c.FlakeEnabled() {
+		t.Error("FlakeEnabled() should return true when TOML sets flake=true")
+	}
+}
+
+func TestFlakeEnabled_TOMLFalse(t *testing.T) {
+	t.Setenv("DEVCELL_FLAKE", "")
+	c := cfg.CellSection{Flake: boolPtr(false)}
+	if c.FlakeEnabled() {
+		t.Error("FlakeEnabled() should return false when TOML sets flake=false")
+	}
+}
+
+func TestFlakeEnabled_EnvOverridesToTrue(t *testing.T) {
+	t.Setenv("DEVCELL_FLAKE", "1")
+	c := cfg.CellSection{Flake: boolPtr(false)}
+	if !c.FlakeEnabled() {
+		t.Error("DEVCELL_FLAKE=1 should override TOML flake=false")
+	}
+}
+
+func TestFlakeEnabled_EnvOverridesToFalse(t *testing.T) {
+	t.Setenv("DEVCELL_FLAKE", "0")
+	c := cfg.CellSection{Flake: boolPtr(true)}
+	if c.FlakeEnabled() {
+		t.Error("DEVCELL_FLAKE=0 should override TOML flake=true")
 	}
 }
