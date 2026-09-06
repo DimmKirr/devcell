@@ -425,6 +425,79 @@ func TestSyncNixhome_ErrorOnMissingPath(t *testing.T) {
 	}
 }
 
+// TestSyncNixhome_RejectsSelfReferentialSource — SyncNixhome errors clearly
+// (instead of corrupting configDir/nixhome via a partial recursive copy) when
+// srcPath is the project directory itself, i.e. configDir/nixhome would be
+// nested inside srcPath. Regression test for a real incident: pointing
+// DEVCELL_NIXHOME at a project's own root caused CopyDir to walk into the
+// destination it was writing, die on a dangling entrypoint.sh symlink
+// mid-copy, and leave the project's .devcell/ permanently corrupted for
+// every subsequent build referencing that source.
+func TestSyncNixhome_RejectsSelfReferentialSource(t *testing.T) {
+	projectDir := t.TempDir()
+	configDir := filepath.Join(projectDir, ".devcell")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	// Give the project dir some pre-existing build artifacts, mirroring the
+	// real .devcell/ layout (entrypoint.sh symlinked into nixhome/).
+	if err := os.WriteFile(filepath.Join(configDir, "cell.json"), []byte("{}"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := scaffold.SyncNixhome(projectDir, configDir)
+	if err == nil {
+		t.Fatal("expected SyncNixhome to reject a self-referential source, got nil error")
+	}
+	if !strings.Contains(err.Error(), "own build directory") {
+		t.Errorf("expected a self-reference error, got: %v", err)
+	}
+
+	// Nothing should have been touched — no partial/corrupted nixhome dir.
+	if _, statErr := os.Stat(filepath.Join(configDir, "nixhome")); !os.IsNotExist(statErr) {
+		t.Errorf("expected no nixhome dir to be created on rejection, stat err: %v", statErr)
+	}
+	// The pre-existing artifact must survive untouched.
+	if _, statErr := os.Stat(filepath.Join(configDir, "cell.json")); statErr != nil {
+		t.Errorf("expected pre-existing cell.json to survive, got: %v", statErr)
+	}
+}
+
+// TestCopyDir_SkipsDestinationNestedInSource — even if a caller bypasses the
+// SyncNixhome-level guard and calls CopyDir directly with dst nested inside
+// src, CopyDir must not recurse into (or corrupt) its own output.
+func TestCopyDir_SkipsDestinationNestedInSource(t *testing.T) {
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "flake.nix"), []byte("# nixhome flake"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(src, "build", "nixhome")
+	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+		t.Fatal(err)
+	}
+	// Pre-existing file inside the nested dst tree — CopyDir must not touch it.
+	if err := os.MkdirAll(dst, 0755); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := filepath.Join(dst, "sentinel.txt")
+	if err := os.WriteFile(sentinel, []byte("untouched"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := scaffold.CopyDir(src, dst); err != nil {
+		t.Fatalf("CopyDir failed: %v", err)
+	}
+
+	// The real top-level file must have been copied.
+	if data, err := os.ReadFile(filepath.Join(dst, "flake.nix")); err != nil || string(data) != "# nixhome flake" {
+		t.Errorf("expected flake.nix copied into dst, err=%v data=%q", err, data)
+	}
+	// The nested dst tree must not have been walked into and rewritten.
+	if data, err := os.ReadFile(sentinel); err != nil || string(data) != "untouched" {
+		t.Errorf("expected sentinel inside nested dst untouched, err=%v data=%q", err, data)
+	}
+}
+
 // --- Scaffold with stack ---
 
 func TestScaffold_WithStack_FlakeUsesChosenStack(t *testing.T) {
@@ -684,6 +757,39 @@ func TestGenerateFlakeNix_NixPackagesWithModules(t *testing.T) {
 	}
 	if !strings.Contains(content, "map lib.hiPri (with pkgs; [ cowsay ])") {
 		t.Errorf("expected hiPri stable packages alongside modules:\n%s", content)
+	}
+}
+
+// ── MCP enabled in GenerateFlakeNixWithMcp ──────────────────────────────────
+
+func TestGenerateFlakeNixWithMcp_EnabledServers(t *testing.T) {
+	content := scaffold.GenerateFlakeNixWithMcp("ultimate", nil, "v1.0.0", false, []string{"aws-api", "terraform"})
+	if !strings.Contains(content, `devcell.managedMcp.servers."aws-api".enabled = true;`) {
+		t.Errorf("expected aws-api enabled line:\n%s", content)
+	}
+	if !strings.Contains(content, `devcell.managedMcp.servers."terraform".enabled = true;`) {
+		t.Errorf("expected terraform enabled line:\n%s", content)
+	}
+}
+
+func TestGenerateFlakeNixWithMcp_EmptyNoMcpBlock(t *testing.T) {
+	content := scaffold.GenerateFlakeNixWithMcp("go", nil, "v1.0.0", false, nil)
+	if strings.Contains(content, "managedMcp") {
+		t.Errorf("no MCP block expected when enabled list is nil:\n%s", content)
+	}
+}
+
+func TestGenerateFlakeNixWithMcp_WithModulesAndNixPkgs(t *testing.T) {
+	pkgs := cfg.NixPackages{Stable: []string{"cowsay"}}
+	content := scaffold.GenerateFlakeNixWithMcp("go", []string{"electronics"}, "v1.0.0", false, []string{"aws-api"}, pkgs)
+	if !strings.Contains(content, "devcell.modules.electronics") {
+		t.Errorf("expected modules still present:\n%s", content)
+	}
+	if !strings.Contains(content, "map lib.hiPri") {
+		t.Errorf("expected nix packages still present:\n%s", content)
+	}
+	if !strings.Contains(content, `devcell.managedMcp.servers."aws-api".enabled = true;`) {
+		t.Errorf("expected MCP enabled line:\n%s", content)
 	}
 }
 

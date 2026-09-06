@@ -129,7 +129,19 @@ func generatePyprojectTOML(pkgs map[string]string) []byte {
 // stack is a stack name (e.g. "go"), modules is a list of module names,
 // ver is the version tag, nixhomePath overrides the input URL to path:./nixhome.
 // nixPkgs adds arbitrary nixpkgs packages with lib.hiPri (user override semantics).
+// mcpEnabled lists MCP server names to enable (from [mcp] enabled in .devcell.toml);
+// each emits devcell.managedMcp.servers."<name>".enabled = true; in the flake.
 func GenerateFlakeNix(stack string, modules []string, ver string, withNixhome bool, nixPkgs ...cfg.NixPackages) string {
+	return generateFlakeNixFull(stack, modules, ver, withNixhome, nil, nixPkgs...)
+}
+
+// GenerateFlakeNixWithMcp is like GenerateFlakeNix but also emits MCP server
+// enablement lines from [mcp] enabled in .devcell.toml.
+func GenerateFlakeNixWithMcp(stack string, modules []string, ver string, withNixhome bool, mcpEnabled []string, nixPkgs ...cfg.NixPackages) string {
+	return generateFlakeNixFull(stack, modules, ver, withNixhome, mcpEnabled, nixPkgs...)
+}
+
+func generateFlakeNixFull(stack string, modules []string, ver string, withNixhome bool, mcpEnabled []string, nixPkgs ...cfg.NixPackages) string {
 	if stack == "" {
 		stack = "base"
 	}
@@ -175,6 +187,10 @@ func GenerateFlakeNix(stack string, modules []string, ver string, withNixhome bo
 		}
 		moduleExpr += fmt.Sprintf(" ++ [ { home.packages = %s; } ]", strings.Join(parts, " ++ "))
 	}
+
+	// [mcp] enabled is now resolved at container start via DEVCELL_MCP_ENABLED
+	// env var — no longer baked into the flake overlay. The mcpEnabled parameter
+	// is kept for API compatibility but ignored.
 
 	return fmt.Sprintf(`{
   description = "DevCell user stack — customise and run 'cell build'";
@@ -477,6 +493,18 @@ func syncNixhomeFromLocal(srcPath, configDir, origin string) error {
 		return fmt.Errorf("nixhome source %s: %w", srcPath, err)
 	}
 	dest := filepath.Join(configDir, "nixhome")
+
+	if nested, err := isPathNestedIn(dest, srcPath); err != nil {
+		return fmt.Errorf("resolve nixhome paths: %w", err)
+	} else if nested {
+		return fmt.Errorf(
+			"nixhome source %s contains its own build directory (%s) — "+
+				"DEVCELL_NIXHOME/--nixhome must point at a separate nixhome checkout, "+
+				"not the project's own directory (or an ancestor of it)",
+			srcPath, dest,
+		)
+	}
+
 	if err := os.RemoveAll(dest); err != nil {
 		return fmt.Errorf("remove old nixhome: %w", err)
 	}
@@ -535,11 +563,60 @@ func materializeGithubFlakeRef(ref string) (string, func(), error) {
 	return src, cleanup, nil
 }
 
+// isPathNestedIn reports whether child is inside (or equal to) parent, after
+// resolving symlinks so aliasing can't defeat the check. Tolerates paths
+// that don't exist yet (e.g. dest before its first sync) by falling back to
+// the unresolved absolute path.
+func isPathNestedIn(child, parent string) (bool, error) {
+	absChild, err := filepath.Abs(child)
+	if err != nil {
+		return false, err
+	}
+	absParent, err := filepath.Abs(parent)
+	if err != nil {
+		return false, err
+	}
+	if resolved, err := filepath.EvalSymlinks(absChild); err == nil {
+		absChild = resolved
+	}
+	if resolved, err := filepath.EvalSymlinks(absParent); err == nil {
+		absParent = resolved
+	}
+	rel, err := filepath.Rel(absParent, absChild)
+	if err != nil {
+		return false, nil
+	}
+	if rel == "." {
+		return true, nil
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)), nil
+}
+
 // CopyDir recursively copies src directory to dst.
+//
+// Guards against dst being nested inside src (e.g. a caller accidentally
+// pointing a nixhome sync at a project's own directory): without this, the
+// walk would recurse into paths it is itself writing, corrupting the copy
+// partway through. This is a defensive backstop — callers should also
+// reject that configuration upfront (see isPathNestedIn in
+// syncNixhomeFromLocal) so the failure is a clear error instead of a silent
+// partial copy.
 func CopyDir(src, dst string) error {
+	absDst, err := filepath.Abs(dst)
+	if err != nil {
+		return err
+	}
 	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
+		}
+		if absPath, aerr := filepath.Abs(path); aerr == nil {
+			if absPath == absDst || strings.HasPrefix(absPath, absDst+string(filepath.Separator)) {
+				if info.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
 		}
 		rel, _ := filepath.Rel(src, path)
 		target := filepath.Join(dst, rel)
@@ -657,7 +734,7 @@ func RegenerateBuildContext(configDir string, cellCfg cfg.CellConfig) error {
 	stack := cellCfg.Cell.ResolvedStack()
 
 	// Regenerate flake.nix from stack + modules.
-	flake := GenerateFlakeNix(stack, cellCfg.Cell.Modules, version.Version, withNixhome, cellCfg.Packages.Nix)
+	flake := GenerateFlakeNixWithMcp(stack, cellCfg.Cell.Modules, version.Version, withNixhome, cellCfg.Mcp.Enabled, cellCfg.Packages.Nix)
 	if err := os.WriteFile(filepath.Join(configDir, "flake.nix"), []byte(flake), 0644); err != nil {
 		return fmt.Errorf("write flake.nix: %w", err)
 	}
